@@ -15,19 +15,31 @@ import (
 
 const fightScoreUsage = "usage: forever-agent fight-score [--json] [--mt NAME] [--ot A,B] [--set spell_oracle=S] <combat-fight.json>...\n" +
 	"  scores finished fights the way the dashboard's fight debugger reads them (mt_sunder, ot_taunt) and judges each bot\n" +
-	"  against its KB spec's spell lists; --set spell_oracle=forever judges a Forever run against the Forever spell data,\n" +
-	"  and --set spell_oracle=SECONDS (any other number) still sets the fight seconds a bot must be active to be judged;\n" +
-	"  exit 0 (warnings never fail), 2 on usage"
+	"  against its KB spec's spell lists; --set spell_oracle=forever judges a Forever run against the Forever spell data and\n" +
+	"  is required for the bot module's fight record (it carries tail_spells/boss_phase; a legacy Turtle dump with the option\n" +
+	"  is scored with a warning), and --set spell_oracle=SECONDS (any other number) still sets the fight seconds a bot must\n" +
+	"  be active to be judged; the reading names the oracle that produced it; exit 0 (warnings never fail), 2 on usage"
 
-// foreverOracle is the --set spell_oracle value that selects the Forever spell data instead of a number of seconds.
-const foreverOracle = "forever"
+// The two oracles the reading can name: the Turtle knowledge base (the default) and the Forever spell data.
+const (
+	foreverOracle = "forever"
+	turtleOracle  = "turtle"
+)
 
-// fightJSON is the fight the dashboard stores: the daemon's combat.Fight, or a bare one.
+// moduleFormatKeys mark the bot module's own fight record, whichever wrapper it is stored in: every current emitter writes
+// the per-bot tail_spells and boss_phase/boss_phase_entry (the Turtle-lineage module also writes dropped, the bounded one
+// spells_cut/truncated). The legacy Turtle dump predates all of them, so their absence is what "legacy" means here — no
+// core writes a build, core or source field into a fight record.
+var moduleFormatKeys = []string{"boss_phase", "boss_phase_entry", "dropped", "spells_cut", "truncated"}
+
+// fightJSON is the fight the dashboard stores: the daemon's combat.Fight, or a bare one. moduleFormat is read from the
+// record's keys, never serialized: it is the record's provenance (see moduleFormatKeys).
 type fightJSON struct {
-	ID        string    `json:"id"`
-	Commander string    `json:"commander"`
-	DurMS     int64     `json:"dur_ms"`
-	Bots      []fighter `json:"bots"`
+	ID           string    `json:"id"`
+	Commander    string    `json:"commander"`
+	DurMS        int64     `json:"dur_ms"`
+	Bots         []fighter `json:"bots"`
+	moduleFormat bool
 }
 
 type fighter struct {
@@ -52,17 +64,18 @@ type scoreRow struct {
 }
 
 type fightScore struct {
-	Fight     string             `json:"fight"`
-	Commander string             `json:"commander,omitempty"`
-	DURMS     int64              `json:"dur_ms"`
-	MT        *scoreRow          `json:"mt_sunder,omitempty"`
-	OTs       []scoreRow         `json:"ot_taunt"`
-	Oracle    []kbspells.Finding `json:"oracle"`
+	Fight       string             `json:"fight"`
+	Commander   string             `json:"commander,omitempty"`
+	SpellOracle string             `json:"spell_oracle"` // "turtle" or "forever": the data that produced the reading
+	DURMS       int64              `json:"dur_ms"`
+	MT          *scoreRow          `json:"mt_sunder,omitempty"`
+	OTs         []scoreRow         `json:"ot_taunt"`
+	Oracle      []kbspells.Finding `json:"oracle"`
 }
 
-// fightScoreCmd reads finished fight JSON (the debugger's input: {fight, warnings} or a bare fight) and prints the fight
-// debugger's two tank checks with its exact rules, then one oracle line per bot with a warning. It reads files only and never
-// logs in.
+// fightScoreCmd reads finished fight JSON (the debugger's input: {fight, warnings}, a bare fight, or a COMBAT_FIGHT datagram)
+// and prints the fight debugger's two tank checks with its exact rules, then one oracle line per bot with a warning. It reads
+// files only and never logs in.
 func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("fight-score", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -70,7 +83,7 @@ func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 	mtName := fs.String("mt", "", "main tank name (default: the first tank in the fight)")
 	otNames := fs.String("ot", "", "off-tank names, comma separated (default: the other tanks)")
 	var sets thresholdFlags
-	fs.Var(&sets, "set", "change a threshold: check=value (spell_oracle)")
+	fs.Var(&sets, "set", "change a threshold: check=value (spell_oracle=SECONDS|forever)")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(stderr, fightScoreUsage)
 		return exitUsage
@@ -82,6 +95,7 @@ func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 	cfg := tracecheck.Defaults()
 	cfg.SpellOracleActiveS = 20 // a fight is judged after 20 s of it, not a trace's minute
 	var oracle *kbspells.Oracle
+	oracleName := turtleOracle
 	for _, s := range sets {
 		k, v, ok := strings.Cut(s, "=")
 		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
@@ -96,6 +110,7 @@ func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 				return exitUsage
 			}
 			oracle = o
+			oracleName = foreverOracle
 			continue
 		}
 		n, err := strconv.ParseFloat(v, 64)
@@ -117,7 +132,16 @@ func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "%s: %v\n", path, err)
 			return exitUsage
 		}
-		r := scoreFight(f, *mtName, *otNames, cfg, oracle)
+		// The record's provenance is its format: a module record is a Forever record, so the Turtle data is never
+		// silently read for it. A legacy Turtle dump under the Forever oracle still scores, visibly.
+		if f.moduleFormat && oracleName != foreverOracle {
+			fmt.Fprintf(stderr, "%s: the bot module's fight record (tail_spells/boss_phase) is a Forever record: score it with --set spell_oracle=forever\n", path)
+			return exitUsage
+		}
+		if !f.moduleFormat && oracleName == foreverOracle {
+			fmt.Fprintf(stderr, "warning: %s: legacy Turtle fight record scored with the Forever spell data (spell_oracle=forever); the bot module's record (tail_spells/boss_phase) is the Forever one\n", path)
+		}
+		r := scoreFight(f, *mtName, *otNames, cfg, oracle, oracleName)
 		if *asJSON {
 			_ = json.NewEncoder(stdout).Encode(r)
 			continue
@@ -145,11 +169,36 @@ func readFightFile(path string) (*fightJSON, error) {
 	if f.DurMS <= 0 && len(f.Bots) == 0 {
 		return nil, fmt.Errorf("not a fight: no duration and no bots")
 	}
+	f.moduleFormat = moduleFightRecord(b)
 	return &f, nil
 }
 
-func scoreFight(f *fightJSON, mtName, otNames string, cfg tracecheck.Config, o *kbspells.Oracle) fightScore {
-	r := fightScore{Fight: f.ID, Commander: f.Commander, DURMS: f.DurMS}
+// moduleFightRecord reports whether a fight object is the bot module's own record: it carries one of the module's keys
+// (moduleFormatKeys, or a bot's tail_spells) that the legacy Turtle dump does not. It reads the raw object because the
+// parsed fight cannot tell a missing key from a zero value.
+func moduleFightRecord(fight json.RawMessage) bool {
+	var keys map[string]json.RawMessage
+	if json.Unmarshal(fight, &keys) != nil {
+		return false
+	}
+	for _, k := range moduleFormatKeys {
+		if _, ok := keys[k]; ok {
+			return true
+		}
+	}
+	var bots []map[string]json.RawMessage
+	if raw, ok := keys["bots"]; ok && json.Unmarshal(raw, &bots) == nil {
+		for _, b := range bots {
+			if _, ok := b["tail_spells"]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func scoreFight(f *fightJSON, mtName, otNames string, cfg tracecheck.Config, o *kbspells.Oracle, oracleName string) fightScore {
+	r := fightScore{Fight: f.ID, Commander: f.Commander, SpellOracle: oracleName, DURMS: f.DurMS}
 	mt := mainTank(f, mtName)
 	r.MT = sunderRow(f, mt, o.Common.Limits)
 	for _, b := range offTanks(f, mt, otNames) {
@@ -281,7 +330,7 @@ func tauntRow(b *fighter, taunts []string) scoreRow {
 }
 
 func printFightScore(w io.Writer, f *fightJSON, r fightScore) {
-	fmt.Fprintf(w, "fight %s %s %.0f s, %d bots\n", r.Fight, r.Commander, float64(f.DurMS)/1000, len(f.Bots))
+	fmt.Fprintf(w, "fight %s %s %.0f s, %d bots, spell oracle %s\n", r.Fight, r.Commander, float64(f.DurMS)/1000, len(f.Bots), r.SpellOracle)
 	if r.MT != nil {
 		printScoreRow(w, *r.MT)
 	}

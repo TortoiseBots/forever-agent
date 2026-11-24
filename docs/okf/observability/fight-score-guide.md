@@ -26,7 +26,10 @@ Forever spell data with `--set spell_oracle=forever` (see §5).
 turtle-agent fight-score cmd/turtle-agent/testdata/fights/combat-fight-5-3.json
 ```
 
-The input is `{fight, warnings}` as `GET /api/v1/combat/fight/<key>` returns it, or a bare fight. Output starts `fight <id> <commander> <s> s, <n> bots`, then one row per reading.
+The input is `{fight, warnings}` as `GET /api/v1/combat/fight/<key>` returns it, or a bare fight. Every reading names
+the oracle that produced it: the text header ends `spell oracle turtle` or `spell oracle forever`, and the JSON has
+`"spell_oracle":"turtle"|"forever"`. Output starts `fight <id> <commander> <s> s, <n> bots, spell oracle <name>`, then
+one row per reading.
 
 ## 2. Name the tanks
 
@@ -53,7 +56,8 @@ Every flag and its default:
 
 ## 4. Mind the exit code
 
-Exit 0 whatever the warnings say; 2 on usage. Warnings are readings, not failures.
+Exit 0 whatever the warnings say; 2 on usage — including a fight in the bot module's record format scored without
+`--set spell_oracle=forever` (§5). Warnings are readings, not failures.
 
 ## 5. Score a Forever run's fight
 
@@ -71,5 +75,15 @@ so both may be given:
 ```sh
 forever-agent fight-score --set spell_oracle=forever --set spell_oracle=30 <walk-dir>/combat-fight-1.json
 ```
+
+The record's origin is its format: no core writes a build, core or source field into a fight record, but the bot
+module's record carries keys the legacy Turtle dump does not (a bot's `tail_spells`, and on newer emitters
+`boss_phase`/`boss_phase_entry` and `dropped`). That format is the Forever mark, in all three storage forms:
+
+- A module record scored without the option is refused with exit 2:
+  `<file>: the bot module's fight record (tail_spells/boss_phase) is a Forever record: score it with --set spell_oracle=forever`.
+  No partial reading is printed, so a Forever fight cannot be judged by the Turtle data by omission.
+- A legacy Turtle record (none of those keys) scored with `spell_oracle=forever` still scores, with a `warning:` line on
+  stderr that names the legacy format, and the reading names the oracle.
 
 Without the option the Turtle data is read, as before.

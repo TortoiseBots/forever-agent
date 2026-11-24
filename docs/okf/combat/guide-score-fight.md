@@ -20,7 +20,8 @@ status: draft
 # Score a fight
 
 `fight-score` reads Turtle dashboard recordings by default; a Forever (Classic 1.60) run's fight record is scored
-against the Forever spell data with `--set spell_oracle=forever` (`forever-agent help`).
+against the Forever spell data with `--set spell_oracle=forever` (`forever-agent help`). The bot module's record is
+refused without that option, and the legacy Turtle dump under it scores with a warning.
 
 Two offline commands judge what already happened. `fight-score` reads finished fight JSON and scores each bot against its spec's spell lists; `pulltest` prints one pull-test result or the change between two. Both read files only and never log in. Warnings never fail: `fight-score` exits 0, or 2 on usage.
 
@@ -30,7 +31,7 @@ Two offline commands judge what already happened. `fight-score` reads finished f
 turtle-agent fight-score combat-fight-1.json
 ```
 
-Each fight prints the debugger's two tank checks (`mt_sunder`, `ot_taunt`) and one oracle line per bot with a warning: a missing core spell or a never spell. Fights under the minimum length score `na` instead.
+Each fight prints `fight <id> <commander> <s> s, <n> bots, spell oracle <name>` (the oracle that produced the reading), then the debugger's two tank checks (`mt_sunder`, `ot_taunt`) and one oracle line per bot with a warning: a missing core spell or a never spell. Fights under the minimum length score `na` instead.
 
 ## 2. Name the tanks
 
