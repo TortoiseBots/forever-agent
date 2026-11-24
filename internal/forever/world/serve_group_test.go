@@ -504,9 +504,9 @@ func TestServeGroupCallsNeedAGroup(t *testing.T) {
 }
 
 // TestServeGroupMethodTable is the CLI contract table for the group and raid names: every one is ported (R2 of #108
-// took convert_raid and raid_move off the not-ported list), and a call outside a group still answers by name.
+// took convert_raid and raid_move off the refused list), and a call outside a group still answers by name.
 func TestServeGroupMethodTable(t *testing.T) {
-	ported, notPorted := ServeRPCMethods()
+	ported, refused := ServeRPCMethods()
 	has := func(list []string, name string) bool {
 		for _, n := range list {
 			if n == name {
@@ -519,7 +519,7 @@ func TestServeGroupMethodTable(t *testing.T) {
 		if !has(ported, name) {
 			t.Fatalf("%q is not in the ported set", name)
 		}
-		if has(notPorted, name) {
+		if has(refused, name) {
 			t.Fatalf("%q is in both sets", name)
 		}
 	}

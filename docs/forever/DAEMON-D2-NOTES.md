@@ -41,5 +41,6 @@ through `equipment`; the server's own slot answer is what that run will show.
 
 ## Removed from the not-ported list
 
-`inventory`, `equipment`, `equip`, `use_item` now answer; `trade`, `teleport` and `map_snapshot`
-stay not ported, as `TestServeNotPortedAndUnknown` pins.
+`inventory`, `equipment`, `equip`, `use_item` now answer; `trade`, `teleport` and `map_snapshot` stayed not ported at
+this round (all three answer now: #96, #99, #170). Since #216 no old name answers "not ported" at all: each is
+implemented or answers its documented reason — see [METHOD-TABLE.md](METHOD-TABLE.md).

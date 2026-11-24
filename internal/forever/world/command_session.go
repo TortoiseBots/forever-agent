@@ -112,10 +112,10 @@ func (l *cmdLink) Pump(ctx context.Context, feed func(chat.Line), done func() bo
 	}
 }
 
-// feedCommand hands one chat line to a running command, bounded by the command collector's own line limit. The
-// text is NOT sanitised here: the collector matches the server's exact words (the module's markers, refusals,
-// tokens and order acknowledgements) and makes its own display copy; the chat log gets a separately sanitised
-// copy afterwards. It also watches every self say line: a command text said aloud (now, between runs, or long
+// feedCommand hands one chat line to a running command and to the session's taps, bounded by the command
+// collector's own line limit. The text is NOT sanitised here: the collector matches the server's exact words (the
+// module's markers, refusals, tokens and order acknowledgements) and makes its own display copy; the chat log gets
+// a separately sanitised copy afterwards. It also watches every self say line: a command text said aloud (now, between runs, or long
 // after the probe) means the account's commands fall through as chat, so the guard is reset and every later send
 // is refused.
 func (s *session) feedCommand(line chat.Line) {
@@ -132,11 +132,42 @@ func (s *session) feedCommand(line chat.Line) {
 			s.gmStop = fmt.Errorf("%w (the server said %q as ordinary say chat)", command.ErrNoPermission, chat.Sanitise(line.Text, command.MaxLineBytes))
 		}
 	}
-	if s.cmdFeed == nil {
+	if s.cmdFeed == nil && len(s.cmdTaps) == 0 {
 		return
 	}
 	line.Text = rawBound(line.Text, command.MaxLineBytes)
-	s.cmdFeed(line)
+	if s.cmdFeed != nil {
+		s.cmdFeed(line)
+	}
+	for _, tap := range s.cmdTaps {
+		tap.fn(line)
+	}
+}
+
+// chatTap is one chat-line tap beside the command run's own feed. A tap exists because the session's single
+// cmdFeed belongs to whichever command is running: a TBM exchange in the daemon waits between pump slices (so the
+// queue keeps answering) while other calls run commands, and the module's lines must still reach it. The tap slice
+// and its ids are read only on the session goroutine, by feedCommand and by addChatTap's remover, so no lock is
+// needed.
+type chatTap struct {
+	id uint64
+	fn func(chat.Line)
+}
+
+// addChatTap registers a tap and returns its remover. It runs on the session goroutine and so does the remover it
+// returns: a caller off that goroutine posts them as calls.
+func (s *session) addChatTap(fn func(chat.Line)) (remove func()) {
+	s.tapSeq++
+	id := s.tapSeq
+	s.cmdTaps = append(s.cmdTaps, chatTap{id: id, fn: fn})
+	return func() {
+		for i := range s.cmdTaps {
+			if s.cmdTaps[i].id == id {
+				s.cmdTaps = append(s.cmdTaps[:i], s.cmdTaps[i+1:]...)
+				return
+			}
+		}
+	}
 }
 
 // isSelf reports whether a chat line was sent by this character: the create block's name or GUID when they have

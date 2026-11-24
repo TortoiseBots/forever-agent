@@ -401,6 +401,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 			Token:           token,
 			NavmeshDir:      *navmesh,
 			PlansDir:        *plansDir,
+			Dir:             *dir,
 			Parents:         parents,
 			DisconnectGrace: *grace,
 			AllowGMUnits:    *allowGMUnits,

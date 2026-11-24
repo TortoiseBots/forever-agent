@@ -820,7 +820,7 @@ func TestAuctionUnknownOutcomeBlocksEveryCommand(t *testing.T) {
 }
 
 func TestServeAuctionMethodsAreRegistered(t *testing.T) {
-	ported, notPorted := ServeRPCMethods()
+	ported, refused := ServeRPCMethods()
 	for _, name := range []string{"auction_hello", "auction_browse", "auction_items", "auction_owned", "auction_sell", "auction_bid", "auction_cancel", "auction_quote", "auction_buy"} {
 		found := false
 		for _, n := range ported {
@@ -829,9 +829,9 @@ func TestServeAuctionMethodsAreRegistered(t *testing.T) {
 		if !found {
 			t.Fatalf("%s is not registered", name)
 		}
-		for _, n := range notPorted {
+		for _, n := range refused {
 			if n == name {
-				t.Fatalf("%s is still not ported", name)
+				t.Fatalf("%s is still refused", name)
 			}
 		}
 	}

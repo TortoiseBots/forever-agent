@@ -99,17 +99,6 @@ func runPreflight(ctx context.Context, cmd, kind string, p *preflightFlags, plan
 	return p.only, exitOK
 }
 
-// planLoader adapts a driver route loader to the preflight's plan check.
-func planLoader(load func(string) (*driver.Route, error), path string) func() (string, uint32, error) {
-	return func() (string, uint32, error) {
-		r, err := load(path)
-		if err != nil {
-			return "", 0, err
-		}
-		return r.Name, r.Map, nil
-	}
-}
-
 func foreverPreflightCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("forever preflight", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -159,7 +148,7 @@ func foreverPreflightCmd(ctx context.Context, args []string, stdout, stderr io.W
 		return exitUsage
 	}
 	pf.only = true
-	if _, code := runPreflight(ctx, "forever preflight", *mode, &pf, planLoader(load, *plan), *character, names, stdout, stderr); code != exitOK {
+	if _, code := runPreflight(ctx, "forever preflight", *mode, &pf, fpreflight.PlanLoader(load, *plan), *character, names, stdout, stderr); code != exitOK {
 		return code
 	}
 	return exitOK
