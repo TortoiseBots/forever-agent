@@ -47,7 +47,11 @@ uses the live A3 setup with a nil situation (A4 ports tank_damage).
   warriors only): a spec that wants worn gear returns ok=false with SKIPPED
   needs=bot_items (a required row that is SKIPPED makes the trial SKIPPED,
   never PASS). Consumables still grant then prove exists=yes through typed
-  `ItemScan`.
+  `ItemScan`. On an `extra_bots` hire the SKIPPED kit is noted on
+  `extra_bots_present` and does not fail it (2026-11-24: a level-60 druid's
+  missing kit failed a hire that was logged in, grouped and at the trial
+  level; the main hire's `bot_items` row is a SKIP of its own and a trial
+  that does not list it still runs).
 - `player_visible` proves against a named bot's `.tb state` with a numeric
   `dm` after the `.tb gm off` + `.gm visible on` commands; without a hire
   the row stays failed (UNVERIFIED) and the setup round finalizes it after
