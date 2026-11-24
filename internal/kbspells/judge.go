@@ -19,6 +19,13 @@ type BotCasts struct {
 	Casts     map[string]int `json:"casts,omitempty"`
 	Truncated bool           `json:"truncated,omitempty"`
 	ActiveS   float64        `json:"active_s"`
+	// Expected are spells the caller already knows the bot should have cast, for a reason the spec's own lists do not
+	// model: a talent the bot has that grants an active ability (the bench's player-data rules). They are judged like
+	// the spec's core list, so one never cast is a missing spell; a name the core list already has is kept once.
+	Expected []string `json:"expected,omitempty"`
+	// Spec is the bot's spec when the record states it (a trial's bot block, a bench report). Judge then reads that
+	// spec's lists instead of inferring one from the casts; empty infers, as every trace did before.
+	Spec string `json:"spec,omitempty"`
 }
 
 // Finding is the judgment of one bot. Level is warn (a missing core spell or a never spell), na (not judged: too little active
@@ -143,7 +150,11 @@ func (o *Oracle) Judge(b BotCasts, minActiveS float64) Finding {
 		f.Text = f.SpecHow
 		return f
 	}
-	f.Spec, f.SpecHow = o.InferSpec(b.Class, b.Role, b.Casts)
+	if stated := strings.ToLower(strings.TrimSpace(b.Spec)); stated != "" {
+		f.Spec, f.SpecHow = stated, "record"
+	} else {
+		f.Spec, f.SpecHow = o.InferSpec(b.Class, b.Role, b.Casts)
+	}
 	var core, situational []string
 	switch f.Spec {
 	case "unknown":
@@ -160,6 +171,11 @@ func (o *Oracle) Judge(b BotCasts, minActiveS float64) Finding {
 			return f
 		}
 		core, situational = s.Core, s.Situational
+	}
+	// The caller's own expectations join the core list (never the situational one): a talent the bot has that grants
+	// an active ability is a should-have-cast, judged by the same first-rank and capped-list guards below.
+	if len(b.Expected) > 0 {
+		core = appendExpected(core, b.Expected)
 	}
 
 	// A bot seen for less than the threshold is not judged on its core list: a fight it joined late, or a trace cut short, says
@@ -234,6 +250,26 @@ func (o *Oracle) Judge(b BotCasts, minActiveS float64) Finding {
 	}
 	f.Text = strings.Join(parts, "; ")
 	return f
+}
+
+// appendExpected returns the core list plus the caller's expectations, each name once. Only a name the core list
+// already has is left out: an expectation the spec lists as situational becomes a core judgment, because the caller
+// states the bot should have cast it, not that it might have.
+func appendExpected(core, expected []string) []string {
+	seen := map[string]bool{}
+	for _, name := range core {
+		seen[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	out := append([]string{}, core...)
+	for _, name := range expected {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 // neverOf is the never list of the judged spec, or of every dps spec when the spec is not known.

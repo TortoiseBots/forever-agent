@@ -213,3 +213,52 @@ func TestTrialsCleanupNoSlotsFileFailsLoud(t *testing.T) {
 		t.Fatalf("cleanup stdout = %q, want leftover count", out.String())
 	}
 }
+
+// TestTrialsScorePlayerDataFlag: --player-data adds the two aotc player-data rules to the score and
+// the card's own section; the default score keeps the card unchanged and exits the same way.
+func TestTrialsScorePlayerDataFlag(t *testing.T) {
+	runDir := trialsRunDir(t)
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"trials", "score", runDir}, &out, &errOut); code != exitOK {
+		t.Fatalf("score exit %d, stderr %q", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "player data") {
+		t.Fatalf("the default score counted player data: %q", out.String())
+	}
+	card, err := os.ReadFile(filepath.Join(runDir, "card.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(card), "Player data") {
+		t.Fatalf("the default card carries a player-data section:\n%s", card)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"trials", "score", runDir, "--player-data"}, &out, &errOut); code != exitOK {
+		t.Fatalf("score --player-data exit %d, stderr %q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "player data (aotc.gg): 0 PASS, 0 FAIL, 2 INCONCLUSIVE") {
+		t.Fatalf("score --player-data stdout = %q", out.String())
+	}
+	card, err = os.ReadFile(filepath.Join(runDir, "card.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(card), "## Player data (aotc.gg)") {
+		t.Fatalf("the card has no player-data section:\n%s", card)
+	}
+	if !strings.Contains(string(card), "aotc.gg") {
+		t.Fatalf("the card's section carries no credit:\n%s", card)
+	}
+
+	// The flag before the run dir is still a flag, not the run dir's value.
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"trials", "score", "--player-data", runDir}, &out, &errOut); code != exitOK {
+		t.Fatalf("score --player-data <run> exit %d, stdout %q, stderr %q", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "player data (aotc.gg)") {
+		t.Fatalf("flag-first score stdout = %q", out.String())
+	}
+}
