@@ -155,7 +155,11 @@ const (
 	KindAuctionOutbid   = "auction_outbid"    // SMSG_AUCTION_OUTBID_NOTIFICATION: data.auction_id, item_id, bid
 	KindAuctionOwnerBid = "auction_owner_bid" // SMSG_AUCTION_OWNER_BID_NOTIFICATION: a bid on the player's auction
 	KindAuctionClosed   = "auction_closed"    // SMSG_AUCTION_CLOSED_NOTIFICATION: data.auction_id, item_id, sold
-
+	// The character bank (README "Bank", issue #220): every bank method's outcome, written by the method itself (the
+	// core has no bank window packet). data.command names it (list, deposit, withdraw, buy_slot), data.ok says whether
+	// it stood, data.reason why not (equip_error, refused, no_answer, unconfirmed) and the command's own fields (an
+	// item's entry and place, a tab and its price) ride beside them.
+	KindBank = "bank"
 )
 
 // ChatKinds is what the chat_log method returns.

@@ -157,7 +157,7 @@ func (t *Tracker) Sync(w *objects.World, self wire.GUID, now time.Time) Inventor
 		t.self = self
 	}
 	inv := Snapshot(w, self)
-	t.absorbBags(inv.Bags)
+	t.absorbBags(inv)
 	t.prune(now)
 	t.applyBought(&inv)
 	t.apply(&inv, now)
@@ -493,10 +493,13 @@ func (t *Tracker) ServerBag(at time.Time, bag wire.GUID, deltas map[int]wire.GUI
 	t.bagEvents = append(t.bagEvents, bagEvent{bag: bag, deltas: deltas, at: at})
 }
 
-// absorbBags resolves the pending bag updates against the bags the snapshot holds.
-func (t *Tracker) absorbBags(bags [BagSlots]wire.GUID) {
+// absorbBags resolves the pending bag updates against the bags the snapshot holds: the four carried bag slots, and a
+// bank's tab bags in the player's own slots 63-71 (a deposit's or a withdraw's answer is the bank bag's own slot
+// update, and without it a bank move would never confirm). The bank bag's delta is resolved to its own position, the
+// bag's slot as the container and the index inside the bag as the slot.
+func (t *Tracker) absorbBags(inv Inventory) {
 	for _, ev := range t.bagEvents {
-		for n, bag := range bags {
+		for n, bag := range inv.Bags {
 			if bag != ev.bag {
 				continue
 			}
@@ -505,6 +508,17 @@ func (t *Tracker) absorbBags(bags [BagSlots]wire.GUID) {
 					continue
 				}
 				t.named(ev.at, Pos{Container: FirstBagSlot + uint8(n), Slot: uint8(idx)}, g)
+			}
+		}
+		for _, b := range inv.bank {
+			if b.GUID != ev.bag || b.Container != BackpackContainer {
+				continue
+			}
+			for idx, g := range ev.deltas {
+				if idx < 0 || idx > 255 {
+					continue
+				}
+				t.named(ev.at, Pos{Container: b.Slot, Slot: uint8(idx)}, g)
 			}
 		}
 	}

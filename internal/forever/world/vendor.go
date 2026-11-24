@@ -48,6 +48,8 @@ func (s *session) handleVendor(p worldconn.Packet) error {
 			return nil
 		}
 		s.vendor.inv = &inv
+		// SendListInventory starts the interaction on the vendor (ItemHandler.cpp:626).
+		s.bankInteractionAt(inv.Vendor)
 		if inv.Reason == items.VendorInventoryReasonEmpty {
 			s.opts.logf("world: the vendor list is empty")
 		}

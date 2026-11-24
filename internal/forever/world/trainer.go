@@ -48,6 +48,9 @@ func (s *session) handleTrainer(p worldconn.Packet) error {
 			return nil
 		}
 		s.trainer.list = &l
+		// SendTrainerList starts the interaction on the trainer (NPCHandler.cpp:125); it sends no open result, so
+		// this is the answer that moves the interaction off a bank (bank.go).
+		s.bankInteractionAt(l.Trainer)
 		s.eventTrainerList(l)
 	case wire.SMSGTrainerBuyFail:
 		f, err := npc.ParseTrainerBuyFailed(p.Payload)

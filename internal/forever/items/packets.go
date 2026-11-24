@@ -56,6 +56,18 @@ func BuildAutoStoreBagItem(src Pos, bag uint8) []byte {
 	return b.Bytes()
 }
 
+// BuildAutoStoreBankItem is CMSG_AUTOSTORE_BANK_ITEM (AutoStoreBankItem::Read, BankPackets.cpp:31-36): an empty
+// InvUpdate, then the source bag and the slot inside it. One packet serves both directions: the core reads the source
+// as a bank position (a bank bag slot 63-71, or 255 with slot 63-71) and takes the item into the bags, and reads any
+// other position as a carried item and banks it (HandleAutoStoreBankItemOpcode, BankHandler.cpp:105-141).
+func BuildAutoStoreBankItem(src Pos) []byte {
+	b := wire.NewWriter()
+	writeInvUpdate(b)
+	b.WriteU8(src.Container)
+	b.WriteU8(src.Slot)
+	return b.Bytes()
+}
+
 // BuildSwapInvItem is CMSG_SWAP_INV_ITEM (SwapInvItem::Read, ItemPackets.cpp:201-206): an InvUpdate with both own
 // slots, then Slot2 and Slot1 — the server reads Slot2 first and moves Slot1 to Slot2 (ItemHandler.cpp:89-116), so
 // a source-to-destination call writes the destination first.

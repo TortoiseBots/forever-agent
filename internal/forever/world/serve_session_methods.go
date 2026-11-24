@@ -860,6 +860,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	registerMailMethods(srv, st)
 	registerTradeMethods(srv, st)
 	registerAuctionMethods(srv, st)
+	registerBankMethods(srv, st)
 
 	registerDungeonMethods(srv, st) // #216: dungeon_run/status/stop/pause/resume and plan_check
 	registerBotViewMethods(srv, st) // #216: bot_view
