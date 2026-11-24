@@ -67,6 +67,9 @@ const (
 // one, the agent selects the skull and orders the tank onto it, and the run waits for the pack to turn on the party.
 // A pull no one answers is tried once more from PlayPullStepYd nearer the skull and then stops the run.
 func (p *playRun) pull(ctx context.Context) string {
+	if !p.stranger.IsZero() {
+		return p.pullStranger(ctx)
+	}
 	if p.bossRun {
 		if leg := p.leg(); leg != nil && leg.Boss != nil {
 			return p.pullBoss(ctx, leg.Boss)
@@ -129,6 +132,56 @@ func (p *playRun) pull(ctx context.Context) string {
 			}
 		}
 	}
+	p.stopPullFailed()
+	return ""
+}
+
+// maxStrangerPulls bounds the pulls of one stranger: a unit pulled twice that ends back on the way (an evade) is left
+// behind on the third hold, so a mobile unknown cannot keep the leg from its boss.
+const maxStrangerPulls = 2
+
+// pullStranger pulls the unit the patrol hold gave up waiting on as its own pull: the plan's sight stand, the skull
+// mark, the tank's order and the same two attempts from a step nearer as a pack's pull. It is a pull like any other:
+// the failure rules are the pack's (two unanswered attempts end the run), and a unit gone from the view by now is
+// dropped so the leg walks on.
+func (p *playRun) pullStranger(ctx context.Context) string {
+	guid := p.stranger
+	p.refreshSelf()
+	u, ok := unitByGUID(p.ports.World.Units(), guid)
+	if !ok || u.Dead || u.Friendly {
+		p.rec.Event(p.now(), "patrol_gone", map[string]any{"guid": guid.String()})
+		p.stranger = wire.GUID{}
+		return StateLegWalk
+	}
+	members := []Unit{u}
+	p.rec.PullStart(p.now(), PullRecord{Leg: p.legName(), Group: -1, Entries: []uint32{u.Entry}, Mobs: 1})
+	p.closeToSee(ctx, -1, u)
+	if p.stopReason != "" {
+		return ""
+	}
+	for attempt := range 2 {
+		if attempt > 0 {
+			p.rec.Event(p.now(), "pull_retry", map[string]any{"entry": u.Entry})
+		}
+		skull, ok := unitByGUID(p.ports.World.Units(), guid)
+		if !ok || skull.Dead || skull.Friendly {
+			p.stranger = wire.GUID{}
+			return StateLegWalk
+		}
+		if p.engage(ctx, members, skull, Unit{}) {
+			p.stranger = wire.GUID{}
+			return StateFight
+		}
+		if p.stopReason != "" {
+			return ""
+		}
+		if attempt == 0 {
+			if skull, ok := unitByGUID(p.ports.World.Units(), guid); ok && !p.pullStep(ctx, skull) {
+				return ""
+			}
+		}
+	}
+	p.stranger = wire.GUID{}
 	p.stopPullFailed()
 	return ""
 }
@@ -621,7 +674,7 @@ func (p *playRun) endFight(ctx context.Context, adds int, units []Unit) string {
 		}
 		return StateLoot
 	}
-	if down {
+	if down && p.pack >= 0 {
 		p.pulled[p.pack] = true
 	}
 	p.pack = -1
@@ -679,8 +732,8 @@ func (p *playRun) boss(ctx context.Context) string {
 		if p.stopReason != "" {
 			return ""
 		}
-		if p.pack >= 0 {
-			return StatePull // a pack in the way to the boss is fought first
+		if p.pack >= 0 || !p.stranger.IsZero() {
+			return StatePull // a pack, or a hostile the plan does not know, in the way to the boss is fought first
 		}
 	}
 	deadline := p.now().Add(time.Duration(b.WaitS) * time.Second)

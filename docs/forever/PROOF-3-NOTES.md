@@ -68,12 +68,54 @@ byte is in this change or its tests.
 - The fake gained `StartForeignRun(state)` (a run as another client's start would leave it) and an `OnStatus` hook
   (per status read), so the attach cases do not need a second client.
 
+## Part D (2026-11-24): the patrol hold pulls its unit or goes on
+
+Spec: the lead's decision on the 2026-11-23 milestone recheck (recheck 2, row 1 attempt 2: the RFC player run cleared
+every pull and stopped `patrol` at the oggleflint leg). The run's own trace settles the cause:
+
+- `patrolHold` (play.go) held the walk on a live hostile it treated as a patrol that would walk off: any live hostile
+  within `PlayPatrolYd` (20 yd) whose entry no leg's pack, patrol, boss or boss add names and that no pack claims.
+- The unit it waited on was the same spawn at one point on the ramp up to Oggleflint, 15 yd below the boss, through
+  all 544 frames of the run (17.5 min), at full health, targeting nobody: a static spawn, never a patrol. The trace's
+  `patrol_hold` event carried only the leg, so the run could not name its unit.
+- The hold's budget ran out and `p.stop("patrol")` ended the run before the boss's pull.
+- The RFC plan does not name the boss's two arranged guards (`boss.first` is empty in `dungeons/ragefire_chasm.json`),
+  which is how an unknown hostile came to stand beside the boss's own approach.
+
+`patrolHold` now:
+
+- records the unit it waits on (`patrol_hold` {leg, guid, entry, x, y, z, yd}) and its end (`patrol_left` {guid, moved,
+  seconds});
+- classifies by movement: a unit that has not left a `PlayStillYd` (1 yd) circle in `PlayStillAfter` (20 s) is not a
+  patrol that will walk off, so the hold ends there instead of waiting its 120 s for nothing (a unit that moves but
+  never leaves is still waited for the whole budget);
+- runs only on the plan's map (as `packInWay` does): a hostile met on the walk to the portal is the open world's,
+  not the hold's;
+- ends by `endHold`: a live hostile the navmesh reaches from where the agent stands is pulled as its own pull
+  (`pullStranger`: the plan's sight stand via `closeToSee`, the skull mark, the tank's order, one step nearer and a
+  second order — the pack pull's own bounds, and `pull-failed`/`pull-no-sight` after both), and the leg goes on to its
+  boss; anything else (dead, friendly, unreachable, gone, or pulled `maxStrangerPulls` = 2 times already) is left
+  behind with `patrol_skip` {guid, entry, moved, reason, x, y, z} and the walk continues. Nothing here stops the run
+  but the pull's own failure rules.
+- a stranger pull that ends the fight without the unit confirmed dead does not mark any plan group fought (`pulled`
+  only for a pack id); the run summary/record's pull carries `group: -1`, `boss: false`.
+
 ## Tests
 
 - `internal/forever/driver/play_fight_test.go`: `TestPullWalksToTheStandFirst`, `TestPullWaitsForTheTankAtTheStand`,
   `TestPullRetryStepsCloser`, `TestPullStepNeverInsideMinYd`, `TestPullStandWalkNoNestedPull`.
 - `internal/forever/driver/play_test.go`: `TestPlayLastLegStopsAfterItsBoss`,
   `TestPlayLastLegKeepsLaterLegsKnown`, `TestPlayLastLegUnknownName`, `TestPlayNoLastLegUnchanged`.
+- The patrol hold (Part D), `internal/forever/driver/play_test.go`: `TestPlayPatrolWalksOffTheWay` (a unit that walks
+  off during the hold: no pull, no stop — the old behaviour), `TestPlayStationaryStrangerIsPulled` (a still unit is
+  pulled after `PlayStillAfter` and killed, the skull marked, then the boss; a unit owned outside the party is pulled
+  the same way), `TestPlayUnreachableStrangerIsLeftBehind` (a `RouteNone` path answers `patrol_skip`/unreachable and the
+  boss is pulled), `TestPlayMovingStrangerWaitsTheBudget` (a unit that keeps moving is waited for the whole budget and
+  then pulled), `TestPlayStrangerPulledTwiceIsLeftBehind` (an evading unit is pulled at most twice; the third hold
+  records `pulled-twice` and the boss is pulled), `TestPlayStrangerPullFailureStops` (two orders no one answers end the
+  run as `pull-failed`), `TestPlayStrangerOutsideTheInstanceIsNotHeld` (a hostile beside the portal walk on the open
+  map is neither waited for nor pulled). `TestPlayStrangerStillStops` is gone: its pinned behaviour (a stranger stops
+  the run) is the defect.
 - `cmd/forever-agent/forever_play_test.go`: `TestPlayCmdLastLegChecksTheName` (the exit-2 usage error lists the legs),
   `TestPlayCmdLastLegDry` (a dry run cut at a leg clears).
 - `internal/forever/driver/watch_test.go`: `TestWatchAttachSendsNoStart`, `TestWatchAttachWaitsForRunningRun`,
@@ -94,8 +136,16 @@ byte is in this change or its tests.
 | `--attach` still sends start | TestWatchAttachSendsNoStart | caught |
 | entry still runs on attach (`if false && r.cfg.Attach` in `Watch`) | TestWatchAttachRunsNoEntry | caught |
 | no plan check on attach (the `st.Plan != r.route.Name` block removed) | TestWatchAttachRefusesAnotherPlan | caught |
+| the hold still stops the run at its budget (`p.stop("patrol")`) | TestPlayMovingStrangerWaitsTheBudget | caught |
+| no movement test (the `PlayStillAfter` exit removed) | TestPlayStationaryStrangerIsPulled | caught (the pull's timing moves to the budget) |
+| no reachability check (`case !p.reachable` removed) | TestPlayUnreachableStrangerIsLeftBehind | caught |
+| no pull bound (`case p.strangerPulls >= maxStrangerPulls` removed) | TestPlayStrangerPulledTwiceIsLeftBehind | caught |
+| the stranger is never ordered (the engage loop removed) | TestPlayStationaryStrangerIsPulled | caught |
+| the hold runs outside the instance (the map guard removed) | TestPlayStrangerOutsideTheInstanceIsNotHeld | caught |
+| the hold's deadline still stops (`p.stop("patrol")` at the budget instead of `endHold`) | TestPlayMovingStrangerWaitsTheBudget | caught (the four still/evading cases leave on the 20 s movement test and never reach the deadline, so the moving case is the one that gates it) |
 
 ## Gates
+
 
 - Full suite on the clean committed tree: `vm-test ta ~/wt-proof3` —
   `RESULT: PASS  kind=ta wt=wt-proof3 sha=38290af3 dirty=0 files=2757 runner=yulon-ubuntu2` (rc=0, 834 s; the run
@@ -111,3 +161,16 @@ byte is in this change or its tests.
   recording (`--out DIR --min-active 0`) the same run prints `card: CLEARED` and `verdict: PASS`, and the summary
   carries `"last_leg": "oggleflint"`, `"clear": true`. (A `--dry` run without `--out` has no record, so `playVerdict`
   answers `no-play-record` and the command exits non-zero — its long-standing behaviour, not this change.)
+
+### Part D (round 3)
+
+- Full suite on the clean committed tree 4c0ee21c: `vm-test ta ~/wt-fa-88` with the PR's gate command (`gofmt -l
+  internal cmd`, `go vet ./...`, `staticcheck ./...`, `go test -count=1 -timeout 20m ./...`) —
+  `RESULT: PASS  kind=ta wt=wt-fa-88 sha=4c0ee21c3 dirty=0 files=2894 runner=yulon-ubuntu2` (rc=0, 1168 s). The seven
+  patrol-hold tests with the `internal/forever/bnet` hygiene test on the same tree: `RESULT: PASS ... sha=4c0ee21c3
+  dirty=0 ...` (233 s). CI on the PR: lint, the nine race shards, `test` and the navmesh jobs all SUCCESS. Before the
+  fix the same tests were red: `TestPlayStationaryStrangerIsPulled`, `TestPlayUnreachableStrangerIsLeftBehind` and
+  `TestPlayStrangerPullFailureStops` each stopped `patrol`.
+- Dry smoke: `forever dungeon-play --dry --plan dungeons/ragefire_chasm.json --bots A,B,C,D --character <name>
+  --last-leg oggleflint` ends `play: stop clear, 14 pulls, 0 wipes, 0 deaths, 2.5 min, gm_lines=0, clear=true`, the
+  states end `LEG_WALK BOSS PULL FIGHT LOOT REST LEG_WALK DONE LEAVE STOP`, and the card's verdict is PASS.

@@ -289,6 +289,15 @@ func (f *PlayFake) RemoveUnit(guid wire.GUID) {
 	f.units = out
 }
 
+// MoveUnit moves one scripted unit to pos: a patrol's step, or a unit a test walks off during a hold.
+func (f *PlayFake) MoveUnit(guid wire.GUID, pos Vec3) {
+	for i := range f.units {
+		if f.units[i].GUID == guid {
+			f.units[i].Pos = pos
+		}
+	}
+}
+
 // SetBotPower scripts a bot's power type (0 mana, 1 rage, 2 focus, 3 energy) and its value and maximum.
 func (f *PlayFake) SetBotPower(name string, ptype, power, maxPower int) {
 	f.BotPower[strings.ToLower(name)] = [3]int{ptype, power, maxPower}
