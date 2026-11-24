@@ -871,3 +871,51 @@ func TestPracticeNeverEngagedIsNoBossDeath(t *testing.T) {
 		t.Fatalf("%+v, want the relaunch cap to stop it", d)
 	}
 }
+
+// TestParseAutoTargetsForever pins the `raid-autopilot --forever` lines: the plan is the first argument, --leader is
+// required, and the raid-walk flags the Forever watch lacks (placement, resume, GM instance clear, --until, --sql)
+// are refused at load instead of being dropped, so a person who asked for a placement learns the watch has none.
+func TestParseAutoTargetsForever(t *testing.T) {
+	ts, issues, err := ParseAutoTargetsForever(strings.NewReader("a srv 1 h boss:14515 -- /plans/zg.json --leader Zgroster --layout /l.txt\n"), nil)
+	if err != nil || len(issues) != 0 || len(ts) != 1 {
+		t.Fatalf("a valid forever line: %v %v %v", ts, issues, err)
+	}
+	if got := strings.Join(ts[0].Args, " "); got != "/plans/zg.json --leader Zgroster --layout /l.txt" {
+		t.Fatalf("args %q, want the plan first and the watch's own flags kept", got)
+	}
+	if ts[0].Start != "" || ts[0].BossWipeFresh || ts[0].BossWipeMax != 0 {
+		t.Fatalf("a forever line kept raid-walk's restart state: %+v", ts[0])
+	}
+	for _, line := range []string{
+		"a srv 1 h full -- /plans/zg.json --leader L --place",
+		"a srv 1 h full -- /plans/zg.json --leader L --reuse-instance",
+		"a srv 1 h full -- /plans/zg.json --leader L --gm-instance-data hakkar:1 3",
+		"a srv 1 h full -- /plans/zg.json --leader L --from step 5",
+		"a srv 1 h full -- /plans/zg.json --leader L --sql /zg.sql",
+		"a srv 1 h full -- /plans/zg.json --leader L --until none",
+		"a srv 1 h full -- /plans/zg.json --leader L --server other",
+		"a srv 1 h full -- /plans/zg.json --leader L --account OTHER",
+		"a srv 1 h full -- /plans/zg.json",
+		"a srv 1 h full -- --leader L",
+		"a srv 1 h practice:14515:2 -- /plans/zg.json --leader L",
+	} {
+		if _, _, err := ParseAutoTargetsForever(strings.NewReader(line+"\n"), nil); err == nil {
+			t.Errorf("%q was accepted", line)
+		}
+	}
+	// The Turtle reader is unchanged: --place and --reuse-instance are managed (dropped), --sql is required.
+	turtle, err := ParseAutoTargets(strings.NewReader("a srv 1 h full -- zg --sql /zg.sql --place --reuse-instance\n"))
+	if err != nil || len(turtle) != 1 {
+		t.Fatalf("the turtle reader: %v %v", turtle, err)
+	}
+}
+
+// TestParseAutoTargetsForeverHeldKeepsTheSlotRule: the live re-read of a forever autopilot keeps the one-walk-per-slot
+// check (a new id on a running id's slot is refused).
+func TestParseAutoTargetsForeverHeldKeepsTheSlotRule(t *testing.T) {
+	text := "a srv 1 h full -- /p.json --leader L\nb srv 1 h2 full -- /p.json --leader L\n"
+	ts, issues, err := ParseAutoTargetsForeverHeld(strings.NewReader(text), nil, map[string]string{AutoSlotKey("srv", "1"): "a"})
+	if err != nil || len(ts) != 1 || len(issues) != 1 || issues[0].ID != "b" {
+		t.Fatalf("targets %v issues %v err %v, want b refused and a kept", ts, issues, err)
+	}
+}

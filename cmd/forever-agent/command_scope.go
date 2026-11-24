@@ -42,12 +42,12 @@ var commandScopes = map[string]commandScope{
 	"dashboard-replay": {Turtle: true, Forever: "none: Turtle dashboard recordings"},
 	"rotation":         {Turtle: true, Forever: "none: Turtle brain"},
 	"raid-walk":        {Turtle: true, Forever: "none yet (#108)"},
-	"raid-autopilot":   {Turtle: true, Forever: "none yet (#108)"},
 	"raid-suite":       {Turtle: true, Forever: "none yet (#108)"},
 	"walk-preflight":   {Turtle: true, Forever: "none yet (#108)"},
 	"decisions":        {Turtle: true, Forever: "none"},
 
-	// Both stacks.
+	// Both stacks. raid-autopilot is one of them since #108 R4: --forever supervises `forever raid-watch` runs.
+	"raid-autopilot":  {},
 	"fleet":           {},
 	"dashboard":       {},
 	"minimap-extract": {},

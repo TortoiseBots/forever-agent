@@ -197,6 +197,7 @@ const usageText = `usage:
   forever-agent plan-diff <old> <new> [--plan NAME] [--json] [--out DIR] [--svg FILE] [--minimaps DIR] [--picture worldmap|minimap|navmesh|none] [--fail-on-change]
   forever-agent plan-list [--dir dungeons] [--json]
   forever-agent raid-autopilot [--foreground] [--binary PATH] [--poll D] [--stall D] [--settle D] [--status-every D] [--instance-cap-per-account N] [--dry-run] <walk-dir>
+  forever-agent raid-autopilot --forever [--slots FILE] [--dry-run] <walk-dir>
   forever-agent raid-suite (--suite FILE | --dir DIR) --history DIR [--server m910q] [--slot N] [--only p1,p2] [--speed X] [--gap 60s] [--out DIR] [--dash-url URL] [--dash-user U] [--dash-pass-file PATH] [--dash-insecure-http] [--mmaps DIR] [--slots FILE] [--binary PATH] [--compare-only] [--dry-run] [--json]
   forever-agent trash-check [--dir dungeons] [--sql FILE [--plan NAME]] [--spawns DIR] [--patrols FILE]... [--mmaps DIR] [--level N] [--spread YD] [--aggro-rate R] [--assist-yd 10] [--json] [--out DIR] [--dash-out FILE] [--fail-on danger|patrol|any] [<plan>|<path.json>] | forever-agent trash-check --forever --sql FILE [--plan NAME] --spawns FILE [--patrols FILE]... [--mmaps DIR] [--level N] [--json] [--out DIR] [--fail-on danger|patrol|any]
   forever-agent stage-check [--dir dungeons] --mmaps DIR [--cleared-through LEG] [--server-steps N] [--json] <plan> <leg> | forever-agent stage-check --forever --mmaps DIR --sql FILE [--plan NAME] [--cleared-through LEG] [--json] <plan> <leg>

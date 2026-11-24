@@ -202,6 +202,36 @@ func ParseAutoTargetsLenient(r io.Reader, claim func(id string) AutoSlotClaim) (
 // nothing (a new line may take a finished id's slot). claim is asked once per id; nil: every id is new. A file with no
 // valid line left is an error (a half-written file is not a stop order).
 func ParseAutoTargetsHeld(r io.Reader, claim func(id string) AutoSlotClaim, held map[string]string) ([]AutoTarget, []AutoTargetIssue, error) {
+	return parseAutoTargetsHeld(r, claim, held, false)
+}
+
+// ParseAutoTargetsForever is the targets file of `raid-autopilot --forever`: the same header and the same
+// one-walk-per-slot check, but the arguments are a `forever raid-watch` command line, so the flags that watch lacks
+// are refused at load instead of being dropped (a person who wrote --place into a Forever line asked for a
+// behaviour the watch does not have):
+//
+//   - the first argument is the plan file (the watch's --plan, as raid-walk takes its plan positionally), and
+//     --leader is required: the watch starts the module's run as that bot.
+//   - --place, --reuse-instance, --gm-instance-data, --from, --boss-wipe-max, --boss-wipe-fresh, --wipe-end and
+//     --sql are raid-walk's placement and resume machinery and are refused.
+//   - --until, --server, --slot, --holder, --account and --out are managed (the goal, the lease, the slot's account
+//     and the attempt's folder: the module's own run decides where the raid stops, and the watch has no --until).
+//   - a practice goal is refused: the watch has no mechanic practice loop (its --practice is the wipe rescue).
+//
+// Nothing here knows the slots file or the lease: the command layer resolves the connection flags, the account and
+// the slot dir from it before it launches.
+func ParseAutoTargetsForever(r io.Reader, claim func(id string) AutoSlotClaim) ([]AutoTarget, []AutoTargetIssue, error) {
+	return ParseAutoTargetsForeverHeld(r, claim, nil)
+}
+
+// ParseAutoTargetsForeverHeld is ParseAutoTargetsForever with the slots the caller's live states hold now (the
+// running autopilot's re-read): see ParseAutoTargetsHeld.
+func ParseAutoTargetsForeverHeld(r io.Reader, claim func(id string) AutoSlotClaim, held map[string]string) ([]AutoTarget, []AutoTargetIssue, error) {
+	return parseAutoTargetsHeld(r, claim, held, true)
+}
+
+// parseAutoTargetsHeld is the one read both modes share; forever selects the raid-watch argument rules.
+func parseAutoTargetsHeld(r io.Reader, claim func(id string) AutoSlotClaim, held map[string]string, forever bool) ([]AutoTarget, []AutoTargetIssue, error) {
 	var parsed []AutoTarget
 	var issues []AutoTargetIssue
 	bad := map[string]bool{}
@@ -212,7 +242,7 @@ func ParseAutoTargetsHeld(r io.Reader, claim func(id string) AutoSlotClaim, held
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		t, err := parseAutoTargetLine(n, line)
+		t, err := parseAutoTargetLine(n, line, forever)
 		if err != nil {
 			id := strings.Fields(line)[0]
 			issues = append(issues, AutoTargetIssue{Line: n, ID: id, Err: err})
@@ -288,8 +318,9 @@ func ParseAutoTargetsHeld(r io.Reader, claim func(id string) AutoSlotClaim, held
 	return out, issues, nil
 }
 
-// parseAutoTargetLine parses one non-blank, non-comment line (n is its 1-based number).
-func parseAutoTargetLine(n int, line string) (AutoTarget, error) {
+// parseAutoTargetLine parses one non-blank, non-comment line (n is its 1-based number); forever selects the
+// forever raid-watch argument rules (ParseAutoTargetsForever).
+func parseAutoTargetLine(n int, line string, forever bool) (AutoTarget, error) {
 	fields := strings.Fields(line)
 	sep := -1
 	for i, f := range fields {
@@ -323,13 +354,27 @@ func parseAutoTargetLine(n int, line string) (AutoTarget, error) {
 	if err != nil {
 		return AutoTarget{}, fmt.Errorf("line %d: %v", n, err)
 	}
+	if forever && goal.Kind == "practice" {
+		return AutoTarget{}, fmt.Errorf("line %d: goal practice:%d:%d: the forever raid-watch has no mechanic practice loop (its --practice is the wipe rescue); use full, leg:<L> or boss:<ENTRY>", n, goal.Boss, goal.Cycles)
+	}
 	t := AutoTarget{ID: id, Server: server, Slot: slot, Holder: holder, Goal: goal, Line: n}
-	a, err := parseAutoArgs(fields[sep+1:])
+	a, err := parseAutoArgs(fields[sep+1:], forever)
 	if err != nil {
 		return AutoTarget{}, fmt.Errorf("line %d: %v", n, err)
 	}
 	if len(a.Args) == 0 || strings.HasPrefix(a.Args[0], "-") {
-		return AutoTarget{}, fmt.Errorf("line %d: the raid-walk args must start with the plan name", n)
+		what := "raid-walk"
+		if forever {
+			what = "forever raid-watch"
+		}
+		return AutoTarget{}, fmt.Errorf("line %d: the %s args must start with the plan file", n, what)
+	}
+	if forever {
+		if !hasAutoFlag(a.Args, "--leader") {
+			return AutoTarget{}, fmt.Errorf("line %d: forever raid-watch needs --leader NAME in its args: the bot that leads the module's run", n)
+		}
+		t.Args = a.Args
+		return t, nil
 	}
 	if !hasAutoFlag(a.Args, "--sql") {
 		return AutoTarget{}, fmt.Errorf("line %d: --sql FILE is required: every goal may be re-placed, and raid-walk refuses --place without --sql", n)
@@ -351,13 +396,23 @@ type autoArgs struct {
 }
 
 // parseAutoArgs drops the flags the autopilot manages: it returns the raid-walk arguments left, the target's --from
-// and its boss-wipe budget.
-func parseAutoArgs(in []string) (autoArgs, error) {
+// and its boss-wipe budget. forever refuses the raid-walk flags the Forever watch has no counterpart for instead of
+// dropping them: a line that asked for a placement is not silently run without one (ParseAutoTargetsForever).
+func parseAutoArgs(in []string, forever bool) (autoArgs, error) {
 	var out autoArgs
 	args, start := &out.Args, &out.Start
 	for i := 0; i < len(in); i++ {
 		a := in[i]
 		name, _, hasEq := strings.Cut(a, "=")
+		if forever {
+			switch name {
+			case "--place", "--reuse-instance", "--gm-instance-data", "--from", "--boss-wipe-max", "--boss-wipe-fresh",
+				"--wipe-end", "--sql", "--until", "--account", "--plan":
+				return autoArgs{}, fmt.Errorf("%s is raid-walk's; the forever raid-watch has no such step (no placement, resume, GM instance clear or --until; the plan is the first argument, the account is the slot's)", name)
+			case "--server", "--slot", "--holder", "--out":
+				return autoArgs{}, fmt.Errorf("%s is managed by the autopilot and cannot be set on a forever raid-watch line", name)
+			}
+		}
 		switch name {
 		case "--instance-cap-unsafe":
 			return autoArgs{}, fmt.Errorf("--instance-cap-unsafe is never used by the autopilot")
