@@ -18,6 +18,9 @@ sources:
 
 `fight-score` reads a finished fight the way the dashboard's fight debugger does and prints the same two tank checks, plus one oracle line per bot with a warning. It is the quick offline look at a single fight: did the main tank keep Sunder Armor up, did the off-tank taunt at all, and did anyone miss a core spell. It reads files only and never logs in.
 
+`forever-agent help` marks it `[Turtle only; Forever: none]`: its input is a TortoiseBots dashboard fight JSON. It
+reads files only, so it refuses no server; it is outside the Forever run workflow.
+
 # Synopsis
 
 ```
