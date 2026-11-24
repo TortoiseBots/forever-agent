@@ -571,3 +571,26 @@ func TestServeLeaseFixtureSanity(t *testing.T) {
 		t.Fatalf("lease file: %v", err)
 	}
 }
+
+// TestServeCheckDirToleratesACrashsLeftovers: a serve that died between the dir lock and the first
+// manifest (or between the token and the manifest) leaves serve.lock, agent.pid or an rpc token in
+// the dir. A later serve must take that dir as fresh instead of calling it foreign; any other file
+// still makes it foreign.
+func TestServeCheckDirToleratesACrashsLeftovers(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{serveLockName, "agent.pid", "rpc-28771.token"} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte("leftover\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep, err := serveCheckDir(dir, "TESTACC", "Gbmage", 28771)
+	if err != nil || keep {
+		t.Fatalf("a dir with only a dead serve's leftovers: keep=%v err=%v, want a fresh dir", keep, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("mine\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := serveCheckDir(dir, "TESTACC", "Gbmage", 28771); err == nil {
+		t.Fatal("a foreign file in the dir was accepted")
+	}
+}
