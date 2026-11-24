@@ -12,6 +12,13 @@
 // retried, and the third failed tick escalates the slot in EVENTS.txt/status.txt and leaves it alone (no relaunch, no
 // YIELD-DONE). One supervisor per walk dir, by an flock on autopilot.lock.
 //
+// With --forever the targets are Forever raid plans: every attempt is `forever raid-watch` instead of raid-walk, its
+// slot comes from the slots file's `forever` server (the account and character from its slot, the connection flags
+// from the block), each attempt takes the lease and builds `<out>/slot` with `slot setup --forever`, and the teardown
+// releases it as for a Turtle walk. The target lines name the plan first and need --leader; the placement, resume,
+// GM-instance-clear and practice machinery of raid-walk is refused at load (the watch has none), the module's own run
+// decides where the raid stops, and the watch's watchdog and budget replace the autopilot's no-progress rule.
+//
 // Every transition is written to autopilot-state.json (tmp+rename), and a start reconciles it with the attempt
 // summaries and the slots' leases: a goal met before a crash is not walked again, and a walk that survived a crashed
 // supervisor is adopted, not relaunched beside. A slot whose lease or live walk is not ours refuses its id with an
@@ -44,10 +51,15 @@ import (
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/raidwalk"
 	"github.com/pjerra/forever-agent/internal/slots"
+	"github.com/pjerra/forever-agent/internal/trials/live"
 )
 
+// raidAutopilotUsage is the command's help; the --forever line runs `forever raid-watch` on Forever targets, with
+// the connection flags from the slots file's `forever` block and the slot's lease and dir from `slot setup
+// --forever`.
 const raidAutopilotUsage = `usage: forever-agent raid-autopilot [--foreground] [--binary PATH] [--poll D] [--stall D]
-    [--settle D] [--status-every D] [--instance-cap-per-account N] [--dry-run] <walk-dir>`
+    [--settle D] [--status-every D] [--instance-cap-per-account N] [--dry-run] <walk-dir>
+       forever-agent raid-autopilot --forever [--slots FILE] [--dry-run] <walk-dir>`
 
 // autoChildEnv marks the re-exec'd detached process.
 const autoChildEnv = "TURTLE_RAID_AUTOPILOT_CHILD"
@@ -96,6 +108,11 @@ const (
 	autoDetachWait = 10 * time.Second
 	// autoLeaseTimeout bounds the `lease list` read the startup reconciliation and the teardown verification make.
 	autoLeaseTimeout = 15 * time.Second
+	// autoForeverLeaseTTL is the lease a `--forever` attempt holds on its Forever slot: the supervisor is the
+	// lease's holder process (a dead supervisor frees the slot at once), and a live run renews it every
+	// autoForeverLeaseRenew.
+	autoForeverLeaseTTL   = 30 * time.Minute
+	autoForeverLeaseRenew = 5 * time.Minute
 )
 
 type autoOptions struct {
@@ -112,6 +129,15 @@ type autoOptions struct {
 	instanceCapPerAccount int
 	instanceCapSet        bool
 	dryRun                bool
+	// forever says the targets are Forever raid plans: each attempt is `forever raid-watch` on the slots file's
+	// `forever` server (its connection flags and the slot's account), never `raid-walk`, and the slot dir is the
+	// one `slot setup --forever` builds for it.
+	forever bool
+	// slotsPath is the slots table --forever reads the Forever servers and their slots from (the standard file
+	// when the flag is absent).
+	slotsPath string
+	// fworld resolves a target's server and slot against that table and holds the leases (nil without --forever).
+	fworld *autoForeverWorld
 }
 
 // autoGoalState is one of an id's goal lines.
@@ -185,6 +211,9 @@ type autoRun struct {
 	tornDown      bool
 	teardownFails int
 	escalated     bool
+	// lease is the Forever slot this attempt holds (zero on a Turtle target); leaseAt is its last renewal.
+	lease   autoForeverSlot
+	leaseAt time.Time
 }
 
 // autoState is one raid id and its place in its goal lines.
@@ -272,28 +301,174 @@ type autoRows struct {
 	ok   bool
 }
 
+// autoForeverSlot is one Forever target resolved against the slots file: the lease it takes, the slot dir's account
+// and character, and the server's connection flags (the `forever` block). No secret: the password stays in the
+// environment the child inherits.
+type autoForeverSlot struct {
+	server, slot, holder string
+	account, character   string
+	rest, rpc, ca, build string
+}
+
+// autoForeverWorld is the slots table a `--forever` autopilot resolves its targets against and holds its leases in.
+// The supervisor is the lease's holder process (slots.Store.HolderPID), so a supervisor that dies frees its slots at
+// once instead of leaving them to the TTL.
+type autoForeverWorld struct {
+	slotsPath string
+	cfg       *slots.Config
+	store     *slots.Store
+	ext       map[string]live.ServerExt
+}
+
+// newAutoForeverWorld loads the slots table (the standard one when path is empty): its `forever` blocks are the
+// servers and connection flags, its `servers` entries the slots (and the `servers` list supplies the lease store).
+func newAutoForeverWorld(path string) (*autoForeverWorld, error) {
+	if path == "" {
+		path = slots.DefaultPath()
+	}
+	sf, err := live.LoadSlotsFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("the slots file: %v", err)
+	}
+	cfg, err := slots.Load(path)
+	if err != nil {
+		return nil, fmt.Errorf("the slots file: %v", err)
+	}
+	store := slots.NewStore(cfg, path)
+	store.HolderPID = os.Getpid()
+	return &autoForeverWorld{slotsPath: path, cfg: cfg, store: store, ext: sf.Forever}, nil
+}
+
+// resolve names a target's Forever slot: the server's `forever` block must be complete, the slot must exist and not
+// be reserved, and the character is the target's --character or the slot's. Every refusal carries the line number.
+func (w *autoForeverWorld) resolve(t raidwalk.AutoTarget) (autoForeverSlot, error) {
+	ext, ok := w.ext[t.Server]
+	if !ok {
+		return autoForeverSlot{}, fmt.Errorf("line %d: server %q has no `forever` block in %s: raid-autopilot --forever runs Forever servers only", t.Line, t.Server, w.slotsPath)
+	}
+	if ext.Rest == "" || ext.RPC == "" || ext.CA == "" {
+		return autoForeverSlot{}, fmt.Errorf("line %d: server %q has no complete `forever` block (rest, rpc, ca) in %s", t.Line, t.Server, w.slotsPath)
+	}
+	_, slot, err := w.cfg.Find(t.Server, t.Slot)
+	if err != nil {
+		return autoForeverSlot{}, fmt.Errorf("line %d: %v", t.Line, err)
+	}
+	if slot.Reserved != "" {
+		return autoForeverSlot{}, fmt.Errorf("line %d: %s/%s is reserved (%s)", t.Line, t.Server, t.Slot, slot.Reserved)
+	}
+	character := slot.Character
+	if c := autoFlag(t.Args, "--character"); c != "" {
+		character = c
+	}
+	if character == "" {
+		return autoForeverSlot{}, fmt.Errorf("line %d: %s/%s names no character: the watch enters the account's character", t.Line, t.Server, t.Slot)
+	}
+	return autoForeverSlot{
+		server: t.Server, slot: t.Slot, holder: t.Holder,
+		account: slot.Account, character: character,
+		rest: ext.Rest, rpc: ext.RPC, ca: ext.CA, build: ext.Build,
+	}, nil
+}
+
+// checkForever resolves every target once, at target load: a target the slots file cannot serve is refused before
+// any pid file, dry run or launch.
+func (w *autoForeverWorld) checkForever(targets []raidwalk.AutoTarget) error {
+	for _, t := range targets {
+		if _, err := w.resolve(t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// hold takes the target's lease for an attempt, or extends it when the same holder still has one (the store refuses
+// a second acquire by the same holder; an earlier attempt's lease survives a launch that failed before its
+// teardown). A slot held by another holder is an error naming it, so the launch backoff and the escalation apply.
+func (w *autoForeverWorld) hold(f autoForeverSlot) error {
+	cur, err := w.store.Get(f.server, f.slot)
+	if err != nil {
+		return err
+	}
+	if cur != nil && cur.Holder == f.holder && !w.store.IsStale(cur) {
+		if _, err := w.store.Renew(f.server, f.slot, f.holder, cur.LeaseID, autoForeverLeaseTTL); err != nil {
+			return err
+		}
+		return nil
+	}
+	if _, err := w.store.Acquire(f.server, f.slot, false, f.holder, autoForeverLeaseTTL); err != nil {
+		var r *slots.Refusal
+		if errors.As(err, &r) {
+			return errors.New(r.Msg)
+		}
+		return err
+	}
+	return nil
+}
+
+// renewHeld extends a live attempt's lease. The store's record names the lease id, so an adopted attempt (whose
+// supervisor never saw the acquire) renews the same lease. A lease gone or held by another holder is an error the
+// caller logs: the run's own end and teardown follow.
+func (w *autoForeverWorld) renewHeld(f autoForeverSlot) error {
+	cur, err := w.store.Get(f.server, f.slot)
+	if err != nil {
+		return err
+	}
+	if cur == nil {
+		return errors.New("the lease is gone (released by a teardown?)")
+	}
+	if cur.Holder != f.holder {
+		return fmt.Errorf("the lease is held by %s", cur.Holder)
+	}
+	_, err = w.store.Renew(f.server, f.slot, f.holder, cur.LeaseID, autoForeverLeaseTTL)
+	return err
+}
+
+// autoLastLine is the last non-empty line of a command's output, for an event or a launch error.
+func autoLastLine(s string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			return line
+		}
+	}
+	return ""
+}
+
 func raidAutopilotCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	o, code := parseAutoArgs(args, stderr)
 	if code != exitOK {
 		return code
 	}
-	targets, err := readAutoTargets(o.walkDir)
+	targets, err := readAutoTargets(o.walkDir, o.forever)
 	if err != nil {
 		fmt.Fprintf(stderr, "raid-autopilot: %v\n", err)
 		return exitUsage
 	}
-	// Every target's walk launches raid-walk --server <header server>: a
-	// Forever one is not this (Turtle) autopilot's, before the dry run or any
-	// pid file.
-	for _, t := range targets {
-		if refused, code := refuseTurtleOnly("raid-autopilot", t.Server, "", scopeForever("raid-autopilot"), stderr); refused {
-			return code
+	if o.forever {
+		// Every target's server and slot are resolved against the slots file's `forever` blocks before the dry
+		// run, any pid file or a launch: a Forever autopilot runs Forever servers only.
+		if err := o.fworld.checkForever(targets); err != nil {
+			fmt.Fprintf(stderr, "raid-autopilot: %v\n", err)
+			return exitUsage
+		}
+	} else {
+		// Every target's walk launches raid-walk --server <header server>: a Forever one is the --forever mode's,
+		// and the fix is the flag, before the dry run, any pid file or a launch.
+		for _, t := range targets {
+			if refused, code := refusePassForever("raid-autopilot", t.Server, "", stderr); refused {
+				return code
+			}
 		}
 	}
 	if o.dryRun {
 		for _, t := range targets {
 			out := filepath.Join(o.walkDir, fmt.Sprintf("%s-1", t.ID))
-			fmt.Fprintf(stdout, "%s %s slot %s goal %s: %s\n", t.ID, t.Server, t.Slot, t.Goal, strings.Join(autoCommandArgs(o.binary, t, out, t.Start, false, o.forwardInstanceCap()), " "))
+			args, err := o.commandArgs(t, out, t.Start, false)
+			if err != nil {
+				fmt.Fprintf(stderr, "raid-autopilot: %v\n", err)
+				return exitUsage
+			}
+			fmt.Fprintf(stdout, "%s %s slot %s goal %s: %s\n", t.ID, t.Server, t.Slot, t.Goal, strings.Join(args, " "))
 		}
 		return exitOK
 	}
@@ -362,6 +537,8 @@ func parseAutoArgs(args []string, stderr io.Writer) (autoOptions, int) {
 	fs.DurationVar(&o.statusEvery, "status-every", autoDefaultStatusEvery, "how often status.txt is written")
 	fs.IntVar(&o.instanceCapPerAccount, "instance-cap-per-account", raidwalk.InstanceCapPerAccount, "the core's limit of fresh instance ids one account may enter in an hour, passed to every raid-walk (stock 5; without the flag each walk uses the server's entry in instance-cap-per-account.json)")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "validate the targets and print the first command, launch nothing")
+	fs.BoolVar(&o.forever, "forever", false, "the targets are Forever raid plans: each attempt is `forever raid-watch` on the slots file's `forever` server (lease and slot dir as today, no --place/--reuse-instance/GM instance clear)")
+	fs.StringVar(&o.slotsPath, "slots", "", "slots file holding the Forever servers and their slots (--forever only; default: the standard slots file)")
 	if err := fs.Parse(args); err != nil {
 		return o, exitUsage
 	}
@@ -391,6 +568,18 @@ func parseAutoArgs(args []string, stderr io.Writer) (autoOptions, int) {
 		}
 		o.binary = exe
 	}
+	if o.forever {
+		w, err := newAutoForeverWorld(o.slotsPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "raid-autopilot: %v\n", err)
+			return o, exitUsage
+		}
+		o.fworld = w
+		o.slotsPath = w.slotsPath
+	} else if o.slotsPath != "" {
+		fmt.Fprintln(stderr, "raid-autopilot: --slots is for --forever (a Turtle target names its own --slots in its args)")
+		return o, exitUsage
+	}
 	return o, exitOK
 }
 
@@ -401,13 +590,16 @@ func parseAutoArgs(args []string, stderr io.Writer) (autoOptions, int) {
 // slot before a new line does. An escalated id whose checkpoint's child still answers keeps its slot: the escalation
 // left that run in place, and a new line on the slot would launch beside a live walk. An id whose goal lines changed
 // since the checkpoint is not restored (reconcile starts it fresh), so it is a new id here.
-func readAutoTargets(dir string) ([]raidwalk.AutoTarget, error) {
+func readAutoTargets(dir string, forever bool) ([]raidwalk.AutoTarget, error) {
 	read := func(claim func(string) raidwalk.AutoSlotClaim) ([]raidwalk.AutoTarget, []raidwalk.AutoTargetIssue, error) {
 		f, err := os.Open(filepath.Join(dir, autoTargetsFile))
 		if err != nil {
 			return nil, nil, err
 		}
 		defer f.Close()
+		if forever {
+			return raidwalk.ParseAutoTargetsForever(f, claim)
+		}
 		return raidwalk.ParseAutoTargetsLenient(f, claim)
 	}
 	saved, _ := autoLoadCheckpoint(dir) // an unreadable checkpoint is reconcile's refusal, not this read's
@@ -504,7 +696,8 @@ func (o autoOptions) forwardInstanceCap() int {
 	return 0
 }
 
-// autoCommandArgs is the raid-walk command for one attempt. from is the start the attempt asks for (the furthest step
+// autoCommandArgs is the raid-walk command for one attempt (the Turtle half of commandArgs; --forever builds
+// autoForeverCommandArgs instead). from is the start the attempt asks for (the furthest step
 // a run reached, or the target's own --from); reuse asks for the same instance first. H1: --reuse-instance is never
 // sent without --place/--from, because raid-walk refuses it there. instanceCap > 0 is passed on as
 // --instance-cap-per-account.
@@ -540,6 +733,59 @@ func autoCommandArgs(binary string, t raidwalk.AutoTarget, out, from string, reu
 		args = append(args, "--instance-cap-per-account", strconv.Itoa(instanceCap))
 	}
 	return args
+}
+
+// commandArgs is one attempt's command: raid-walk on a Turtle target, `forever raid-watch` on a Forever one.
+func (o autoOptions) commandArgs(t raidwalk.AutoTarget, out, from string, reuse bool) ([]string, error) {
+	if !o.forever {
+		return autoCommandArgs(o.binary, t, out, from, reuse, o.forwardInstanceCap()), nil
+	}
+	f, err := o.fworld.resolve(t)
+	if err != nil {
+		return nil, err
+	}
+	return autoForeverCommandArgs(t, f, filepath.Join(out, "slot"), out), nil
+}
+
+// autoForeverCommandArgs is the `forever raid-watch` command for one attempt: the target's plan (its first argument,
+// as raid-walk takes it positionally) and flags, then the ones the autopilot manages — the slots file's connection
+// flags, the slot's account and character, the slot dir `slot setup --forever` built, and the attempt's folder. It
+// carries no --until, --from, --place or --reuse-instance: the module's own run decides where the raid ends, and the
+// watch has no resume (the target loader refused those flags).
+func autoForeverCommandArgs(t raidwalk.AutoTarget, f autoForeverSlot, serveDir, out string) []string {
+	args := []string{"forever", "raid-watch", "--plan", t.Args[0]}
+	args = append(args, t.Args[1:]...)
+	args = append(args,
+		"--rest", f.rest,
+		"--rpc", f.rpc,
+		"--ca", f.ca,
+		"--account", f.account,
+		"--serve-dir", serveDir,
+		"--out", out,
+	)
+	if autoFlag(t.Args, "--character") == "" {
+		args = append(args, "--character", f.character)
+	}
+	if f.build != "" && f.build != "0" {
+		args = append(args, "--build", f.build)
+	}
+	return args
+}
+
+// prepareForeverAttempt takes the target's slot lease and builds its slot dir with `slot setup --forever` (the dir
+// the watch's preflight checks and the teardown releases). It runs before the watch starts: a refused lease or a
+// failed setup is a failed launch, retried with the launch backoff and escalated after three.
+func (s *autoSupervisor) prepareForeverAttempt(f autoForeverSlot, out string) error {
+	if err := s.o.fworld.hold(f); err != nil {
+		return fmt.Errorf("lease %s/%s: %v", f.server, f.slot, err)
+	}
+	var buf bytes.Buffer
+	args := []string{"--forever", f.server, f.slot, "--holder", f.holder, "--dir", filepath.Join(out, "slot"),
+		"--binary", s.o.binary, "--slots", s.o.fworld.slotsPath, "--character", f.character}
+	if code := slotSetupCmd(args, &buf, &buf); code != exitOK {
+		return fmt.Errorf("slot setup %s/%s: %s", f.server, f.slot, autoLastLine(buf.String()))
+	}
+	return nil
 }
 
 // autoHasGMInstanceData says the target line carries --gm-instance-data: the goals that re-apply the boss
@@ -1122,7 +1368,11 @@ func (s *autoSupervisor) reloadTargets() {
 	// onto a running id's slot; an edited active id moving onto an occupied slot won by file order), and keeps only
 	// the slot its state holds now (held), and the file is read again.
 	read := func() ([]raidwalk.AutoTarget, []raidwalk.AutoTargetIssue, error) {
-		return raidwalk.ParseAutoTargetsHeld(bytes.NewReader(raw), func(id string) raidwalk.AutoSlotClaim { return claims[id] }, held)
+		claim := func(id string) raidwalk.AutoSlotClaim { return claims[id] }
+		if s.o.forever {
+			return raidwalk.ParseAutoTargetsForeverHeld(bytes.NewReader(raw), claim, held)
+		}
+		return raidwalk.ParseAutoTargetsHeld(bytes.NewReader(raw), claim, held)
 	}
 	targets, issues, err := read()
 	if err == nil {
@@ -1383,9 +1633,39 @@ func (s *autoSupervisor) tick(ctx context.Context) {
 	for _, st := range s.stateList() {
 		s.tickState(st)
 	}
+	s.renewForeverLeases()
 	s.dropRemoved()
 	s.adoptPending()
 	s.saveState()
+}
+
+// renewForeverLeases extends the leases of live Forever attempts when their renewal is due: the store I/O runs
+// outside the state mutexes, one event line names a renewal that fails (the run's own end and teardown follow; the
+// slot is not relaunched while the lease's state is unknown).
+func (s *autoSupervisor) renewForeverLeases() {
+	if s.o.fworld == nil {
+		return
+	}
+	now := time.Now()
+	for _, st := range s.stateList() {
+		st.mu.Lock()
+		r := st.run
+		if r == nil || r.exited || r.leaseAt.IsZero() || now.Sub(r.leaseAt) < autoForeverLeaseRenew {
+			st.mu.Unlock()
+			continue
+		}
+		fslot := r.lease
+		st.mu.Unlock()
+		if err := s.o.fworld.renewHeld(fslot); err != nil {
+			s.event(st.id, "lease", fmt.Sprintf("renew %s/%s: %v", fslot.server, fslot.slot, err))
+			continue
+		}
+		st.mu.Lock()
+		if st.run == r {
+			r.leaseAt = now
+		}
+		st.mu.Unlock()
+	}
 }
 
 // checkStopFiles handles the per-raid stop files: <walk-dir>/STOP-<id> stops just that raid (its run stopped, its
@@ -1938,6 +2218,11 @@ func (s *autoSupervisor) launch(st *autoState) {
 		step = 0
 		s.event(st.id, "resume", fmt.Sprintf("fresh instance after a boss wipe: from the goal's start %q", from))
 	}
+	if s.o.forever {
+		// No resume on a Forever target: the watch has no --from/--place, so every attempt starts the goal's run
+		// again and the summary's step only measures progress for the decision rule.
+		from, reuse = "", false
+	}
 	resumeFrom := ""
 	if from != "" {
 		// A step raid-walk refuses as a start (the boss row a wipe died on) is not a reason to escalate: resume
@@ -1973,7 +2258,24 @@ func (s *autoSupervisor) launch(st *autoState) {
 	attempt := g.attempt
 	st.mu.Unlock()
 
-	args := autoCommandArgs(s.o.binary, argsTarget, out, from, reuse, s.o.forwardInstanceCap())
+	args, err := s.o.commandArgs(argsTarget, out, from, reuse)
+	if err != nil {
+		s.failLaunch(st, err)
+		return
+	}
+	var fslot autoForeverSlot
+	if s.o.forever {
+		// The slot's lease and dir go first: the watch's preflight checks the dir, and a refused lease must fail the
+		// attempt before a process is started (the launch backoff and the three-strike escalation apply).
+		if fslot, err = s.o.fworld.resolve(argsTarget); err != nil {
+			s.failLaunch(st, err)
+			return
+		}
+		if err := s.prepareForeverAttempt(fslot, out); err != nil {
+			s.failLaunch(st, err)
+			return
+		}
+	}
 	f, err := os.OpenFile(out+".out", os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		s.failLaunch(st, err)
@@ -1994,6 +2296,9 @@ func (s *autoSupervisor) launch(st *autoState) {
 	run := &autoRun{
 		seq: seq, out: out, slot: target.Slot, reuse: reuse, goal: target.Goal, cmd: cmd,
 		pidN: cmd.Process.Pid, started: time.Now(), lastProgress: time.Now(),
+	}
+	if s.o.forever {
+		run.lease, run.leaseAt = fslot, time.Now()
 	}
 	go func() {
 		_ = cmd.Wait()
@@ -2076,6 +2381,12 @@ func (s *autoSupervisor) observe(st *autoState) raidwalk.AutoObservation {
 		o.StepsReached = r.lastStep
 		o.EndReason = autoLastReason(filepath.Join(r.out, "run.log"))
 		o.StallAfter = autoCapFreeTime(filepath.Join(r.out, "run.log"))
+		if s.o.forever {
+			// A Forever watch keeps its progress in the module's own run; it writes no run.log or frames the
+			// autopilot reads, and its watchdog and time budget end a stuck run by themselves. The autopilot's
+			// no-progress rule would only tear down a healthy fight, so an alive watch is progress.
+			o.LastProgress = time.Now()
+		}
 		return o
 	}
 	sum, err := autoReadSummary(filepath.Join(r.out, "summary.json"))
@@ -2558,6 +2869,9 @@ func (s *autoSupervisor) reapLeases(targets []raidwalk.AutoTarget) {
 			dirs[slots.LeasesDir(slots.ExpandTilde(p))] = true
 		}
 	}
+	if s.o.forever && s.o.fworld != nil {
+		dirs[slots.LeasesDir(s.o.fworld.slotsPath)] = true
+	}
 	names := make([]string, 0, len(dirs))
 	for d := range dirs {
 		names = append(names, d)
@@ -2904,6 +3218,11 @@ func (s *autoSupervisor) reconcileSlot(st *autoState, sv *autoSavedID) {
 			slotsPath = m.SlotsPath
 		}
 	}
+	if slotsPath == "" && s.o.forever && s.o.fworld != nil {
+		// Before its first attempt a Forever id has no slot dir to read the table from: the file the leases live in
+		// is the one --forever loaded.
+		slotsPath = s.o.fworld.slotsPath
+	}
 	holder, held, err := s.slotLease(t.Server, t.Slot, slotsPath)
 	if err != nil {
 		if stopping {
@@ -2915,6 +3234,11 @@ func (s *autoSupervisor) reconcileSlot(st *autoState, sv *autoSavedID) {
 	pid := 0
 	if out != "" {
 		pid = autoReadPID(filepath.Join(out, walkPIDFile))
+	}
+	if pid == 0 && sv != nil && s.o.forever {
+		// A Forever watch writes no walk.pid: its checkpoint's child pid is the live-run evidence (the child runs in
+		// its own process group, so a stop or a teardown still reaches it).
+		pid = sv.ChildPID
 	}
 	live := pid > 0 && processAlive(pid)
 	if !held && !live {
@@ -2932,6 +3256,13 @@ func (s *autoSupervisor) reconcileSlot(st *autoState, sv *autoSavedID) {
 		r := &autoRun{
 			seq: st.seq, out: out, slot: t.Slot, reuse: reuse, goal: t.Goal, pidN: pid, adopted: true,
 			started: time.Now(), lastProgress: time.Now(), lastStep: sv.LastStep,
+		}
+		if s.o.forever && s.o.fworld != nil {
+			// An adopted Forever watch keeps its lease renewed: the dead supervisor's pid made it stale, and
+			// renewHeld reads the store's record for the lease id.
+			if fslot, err := s.o.fworld.resolve(t); err == nil {
+				r.lease, r.leaseAt = fslot, time.Now()
+			}
 		}
 		st.run = r
 		st.last = nil

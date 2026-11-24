@@ -42,6 +42,20 @@ lease)
   if [ -f "$AUTO_LEASE_JSON" ]; then cat "$AUTO_LEASE_JSON"; else echo '[]'; fi
   exit 0
   ;;
+forever)
+  # forever raid-watch: the same attempt staging as raid-walk, without the slot dir (slot setup --forever made it
+  # before the launch) and without a walk.pid (the checkpoint's child pid is the live-run evidence).
+  out=""; prev=""
+  for a in "$@"; do if [ "$prev" = "--out" ]; then out=$a; fi; prev=$a; done
+  base=$(basename "$out")
+  printf '%s\n' "$*" >> "$AUTO_ARGS_LOG"
+  if [ -f "$AUTO_SPEC_DIR/$base.runlog" ]; then cp "$AUTO_SPEC_DIR/$base.runlog" "$out/run.log"; fi
+  if [ -f "$AUTO_SPEC_DIR/$base.summary" ]; then cp "$AUTO_SPEC_DIR/$base.summary" "$out/summary.json"; fi
+  if [ -f "$AUTO_SPEC_DIR/$base.sleep" ]; then sleep "$(cat "$AUTO_SPEC_DIR/$base.sleep")"; fi
+  code=0
+  if [ -f "$AUTO_SPEC_DIR/$base.exit" ]; then code=$(cat "$AUTO_SPEC_DIR/$base.exit"); fi
+  exit "$code"
+  ;;
 raid-walk)
   out=""; prev=""
   for a in "$@"; do if [ "$prev" = "--out" ]; then out=$a; fi; prev=$a; done
@@ -186,6 +200,36 @@ func (f *autoFixture) running(base string, seconds int) {
 	f.writeSpec(base+".exit", "0")
 }
 
+// watchAttempt plans one Forever watch attempt: its summary and exit code only (a watch writes no run.log; its
+// progress is the module's run, read from summary.json once it ends).
+func (f *autoFixture) watchAttempt(base string, exit, steps int, endReason string) {
+	f.t.Helper()
+	f.writeSpec(base+".exit", strconv.Itoa(exit))
+	sum := map[string]any{
+		"exit_code": exit, "steps_reached": steps, "steps_total": 761, "end_reason": endReason,
+	}
+	if entry, ok := bossKillOf(endReason); ok {
+		sum["boss_kills"] = []map[string]any{{"entry": entry, "killed": true}}
+	}
+	raw, err := json.Marshal(sum)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.writeSpec(base+".summary", string(raw))
+}
+
+// foreverSlots writes the fixture's slots file: one server with one slot (account, character, port, settings_from as
+// the slots table requires) and the server's complete `forever` block, the connection flags --forever launches with.
+func (f *autoFixture) foreverSlots() {
+	f.t.Helper()
+	body := `{"version":1,"servers":[{"name":"srv","realmd":"127.0.0.1:3724","slots":[` +
+		`{"id":"1","account":"ACC","character":"Gbmage","port":28771,"settings_from":"/tmp/settings.json"}]}],` +
+		`"forever":{"srv":{"rest":"127.0.0.1:80","rpc":"127.0.0.1:81","ca":"ca.pem","build":"70959"}}}`
+	if err := os.WriteFile(f.slotsPath, []byte(body), 0o600); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
 func (f *autoFixture) writeSpec(name, body string) {
 	f.t.Helper()
 	if err := os.WriteFile(filepath.Join(f.specDir, name), []byte(body), 0o600); err != nil {
@@ -238,7 +282,7 @@ func (f *autoFixture) events() string {
 }
 
 func (f *autoFixture) opts(extra ...string) autoOptions {
-	o, code := parseAutoArgs(append([]string{"--foreground", "--binary", f.stub, "--poll", "5ms", "--settle", "0", "--status-every", "1h", f.walk}, extra...), io.Discard)
+	o, code := parseAutoArgs(append(append([]string{"--foreground", "--binary", f.stub, "--poll", "5ms", "--settle", "0", "--status-every", "1h"}, extra...), f.walk), io.Discard)
 	if code != exitOK {
 		f.t.Fatalf("parseAutoArgs = %d", code)
 	}
@@ -255,7 +299,7 @@ func (f *autoFixture) supervisor(extra ...string) *autoSupervisor {
 // supervisorOpts is supervisor with the options chosen by the test (a broken --binary, for one).
 func (f *autoFixture) supervisorOpts(o autoOptions) *autoSupervisor {
 	f.t.Helper()
-	targets, err := readAutoTargets(f.walk)
+	targets, err := readAutoTargets(f.walk, o.forever)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -292,7 +336,7 @@ func (f *autoFixture) run(extra ...string) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	var out, errOut bytes.Buffer
-	args := append([]string{"--foreground", "--binary", f.stub, "--poll", "5ms", "--settle", "0", "--status-every", "1h", f.walk}, extra...)
+	args := append(append([]string{"--foreground", "--binary", f.stub, "--poll", "5ms", "--settle", "0", "--status-every", "1h"}, extra...), f.walk)
 	done := make(chan int, 1)
 	go func() { done <- raidAutopilotCmd(ctx, args, &out, &errOut) }()
 	select {
@@ -3008,14 +3052,14 @@ func TestAutoStartEscalatedIDWithALiveChildHoldsItsSlot(t *testing.T) {
 	}
 	defer func() { _ = live.Process.Kill(); _ = live.Wait() }()
 	f.checkpoint(autoSavedID{ID: "a", Goal: 0, Attempt: 1, Escalated: true, ChildPID: live.Process.Pid})
-	if _, err := readAutoTargets(f.walk); err == nil || !strings.Contains(err.Error(), "line 2") || !strings.Contains(err.Error(), "already a's") {
+	if _, err := readAutoTargets(f.walk, false); err == nil || !strings.Contains(err.Error(), "line 2") || !strings.Contains(err.Error(), "already a's") {
 		t.Fatalf("err %v, want b's line 2 refused as a's slot: a's escalated walk is still alive", err)
 	}
 	if err := live.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
 	_ = live.Wait()
-	targets, err := readAutoTargets(f.walk)
+	targets, err := readAutoTargets(f.walk, false)
 	if err != nil || len(targets) != 2 {
 		t.Fatalf("targets %v err %v, want a and b accepted once a's walk is gone", targets, err)
 	}
@@ -3028,7 +3072,7 @@ func TestAutoStartBossDeadLastGoalIsInactive(t *testing.T) {
 	f.target("a srv 1 zg-a boss:14515 -- zul_gurub --sql /zg.sql")
 	f.target("b srv 1 zg-b full -- zul_gurub --sql /zg.sql")
 	f.checkpoint(autoSavedID{ID: "a", Goal: 0, BossDead: true})
-	targets, err := readAutoTargets(f.walk)
+	targets, err := readAutoTargets(f.walk, false)
 	if err != nil || len(targets) != 2 {
 		t.Fatalf("targets %v err %v, want a and b accepted", targets, err)
 	}
@@ -3040,7 +3084,7 @@ func TestAutoStartChangedDoneIDOnATakenSlotRefuses(t *testing.T) {
 	f.target("a srv 1 zg-a boss:14516 -- zul_gurub --sql /zg.sql")
 	f.target("b srv 1 zg-b full -- zul_gurub --sql /zg.sql")
 	f.checkpoint(autoSavedID{ID: "a", Done: true, Fingerprint: "old-lines"}, autoSavedID{ID: "b", Attempt: 1})
-	if _, err := readAutoTargets(f.walk); err == nil || !strings.Contains(err.Error(), "line 1") || !strings.Contains(err.Error(), "already b's") {
+	if _, err := readAutoTargets(f.walk, false); err == nil || !strings.Contains(err.Error(), "line 1") || !strings.Contains(err.Error(), "already b's") {
 		t.Fatalf("err %v, want a refusal naming a's line 1 and b", err)
 	}
 }
@@ -3052,7 +3096,7 @@ func TestAutoStartActiveIDBelowANewLineWinsItsSlot(t *testing.T) {
 	f.target("n srv 1 zg-n full -- zul_gurub --sql /zg.sql")
 	f.target("b srv 1 zg-b full -- zul_gurub --sql /zg.sql")
 	f.checkpoint(autoSavedID{ID: "b", Attempt: 1})
-	if _, err := readAutoTargets(f.walk); err == nil || !strings.Contains(err.Error(), "line 1") || !strings.Contains(err.Error(), "already b's") {
+	if _, err := readAutoTargets(f.walk, false); err == nil || !strings.Contains(err.Error(), "line 1") || !strings.Contains(err.Error(), "already b's") {
 		t.Fatalf("err %v, want a refusal naming n's line 1 and b", err)
 	}
 }
@@ -3950,4 +3994,102 @@ func TestAutoPracticeNeverEngagedRelaunches(t *testing.T) {
 		t.Fatalf("the event does not name the never-engaged relaunch:\n%s", f.events())
 	}
 	finishAttempt(t, s)
+}
+
+// TestAutopilotForeverLaunchesRaidWatch is R4's acceptance: a `--forever` target takes its lease and slot dir from
+// the slots file's `forever` server (slot setup --forever builds `--out/slot`, no settings file) and launches
+// `forever raid-watch` with the plan, the leader, the slot's account and character and the block's connection
+// flags. It carries no --until, --place, --reuse-instance or --from.
+func TestAutopilotForeverLaunchesRaidWatch(t *testing.T) {
+	f := newAutoFixture(t)
+	f.foreverSlots()
+	f.target("a srv 1 zg-a boss:14515 -- /plans/zg.json --leader Zgroster")
+	f.watchAttempt("a-1", 0, 40, "boss 14515 down")
+	if code := f.run("--forever", "--slots", f.slotsPath); code != exitOK {
+		t.Fatalf("exit %d, want 0; events:\n%s", code, f.events())
+	}
+	args := f.args()
+	if len(args) != 1 {
+		t.Fatalf("%d launches, want 1:\n%s", len(args), strings.Join(args, "\n"))
+	}
+	for _, want := range []string{
+		"forever raid-watch", "--plan /plans/zg.json", "--leader Zgroster", "--account ACC", "--character Gbmage",
+		"--serve-dir " + filepath.Join(f.walk, "a-1", "slot"), "--out " + filepath.Join(f.walk, "a-1"),
+		"--build 70959", "--rest 127.0.0.1:80", "--rpc 127.0.0.1:81", "--ca ca.pem",
+	} {
+		if !strings.Contains(args[0], want) {
+			t.Fatalf("the launch lacks %q:\n%s", want, args[0])
+		}
+	}
+	for _, no := range []string{"raid-walk ", "--until", "--place", "--reuse-instance", "--from "} {
+		if strings.Contains(args[0], no) {
+			t.Fatalf("the launch carries %q (a raid-walk flag):\n%s", no, args[0])
+		}
+	}
+	slotDir := filepath.Join(f.walk, "a-1", "slot")
+	raw, err := os.ReadFile(filepath.Join(slotDir, "slot.json"))
+	if err != nil {
+		t.Fatalf("no slot dir built by slot setup --forever: %v", err)
+	}
+	var m teardownSlotManifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("slot.json: %v", err)
+	}
+	if m.Server != "srv" || m.Slot != "1" || m.Holder != "zg-a" || m.LeaseID == "" {
+		t.Fatalf("the slot dir is not the leased Forever slot: %+v", m)
+	}
+	if _, err := os.Stat(filepath.Join(slotDir, "settings.json")); !os.IsNotExist(err) {
+		t.Fatalf("a forever slot setup wrote settings.json (it keeps a secret the serve never reads)")
+	}
+	if !strings.Contains(f.events(), "launch") || !strings.Contains(f.events(), "teardown") {
+		t.Fatalf("the attempt's launch/teardown is not logged:\n%s", f.events())
+	}
+}
+
+// TestAutopilotForeverRefusesPlace: the Forever watch has no placement, resume or GM instance clear, so a target
+// line that asks for one is refused at load instead of being run without it. --forever needs its slots file.
+func TestAutopilotForeverRefusesPlace(t *testing.T) {
+	for _, extra := range []string{
+		"--place",
+		"--reuse-instance",
+		"--gm-instance-data hakkar:1 3",
+		"--from step 5",
+		"--sql /zg.sql",
+	} {
+		f := newAutoFixture(t)
+		f.target("a srv 1 zg-a full -- /plans/zg.json --leader Zgroster " + extra)
+		if _, err := readAutoTargets(f.walk, true); err == nil {
+			t.Fatalf("%q was accepted on a forever target", extra)
+		}
+	}
+	f := newAutoFixture(t)
+	if _, code := parseAutoArgs([]string{"--foreground", "--slots", f.slotsPath, f.walk}, io.Discard); code == exitOK {
+		t.Fatal("--slots without --forever was accepted")
+	}
+}
+
+// TestAutopilotTurtleUnchanged: without --forever the autopilot is the raid-walk supervisor it was: the command keeps
+// its --until, the restart flags and the plan first, and a line with --place/--reuse-instance still parses (the
+// autopilot manages them). Only --forever changes either.
+func TestAutopilotTurtleUnchanged(t *testing.T) {
+	target := raidwalk.AutoTarget{
+		ID: "a", Server: "tortoise-test2", Slot: "1", Holder: "zg-a",
+		Goal: raidwalk.AutoGoal{Kind: "boss", Boss: 14515},
+		Args: []string{"zul_gurub", "--dir", "/plans", "--sql", "/zg.sql"},
+	}
+	args, err := autoOptions{binary: "/bin/ta"}.commandArgs(target, "/walk/a-1", "step 405", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := strings.Join(args, " ")
+	want := "raid-walk zul_gurub --dir /plans --sql /zg.sql --server tortoise-test2 --slot 1 --holder zg-a --until boss-done --out /walk/a-1 --from step 405 --place --reuse-instance"
+	if got != want {
+		t.Fatalf("turtle args:\n%s\nwant:\n%s", got, want)
+	}
+	if _, err := raidwalk.ParseAutoTargets(strings.NewReader("a srv 1 h full -- zg --sql /zg.sql --place --reuse-instance\n")); err != nil {
+		t.Fatalf("the turtle reader refused --place/--reuse-instance: %v", err)
+	}
+	if _, err := readAutoTargets(t.TempDir(), false); err == nil {
+		t.Fatal("a walk dir with no targets.txt was accepted")
+	}
 }

@@ -265,7 +265,7 @@ func TestTurtleOnlyRefusesForeverServer(t *testing.T) {
 			run: func(t *testing.T) (int, string, string) {
 				return runCLI("raid-autopilot", "--dry-run", autoWalkDir(t, "fs1"))
 			},
-			suffix:   "this command is Turtle only (Forever: none yet (#108))",
+			suffix:   "pass --forever",
 			noStdout: true,
 		},
 	}
