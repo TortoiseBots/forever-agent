@@ -99,7 +99,7 @@ works unchanged; without it the token file is `rpc-<port>.token` in the working 
 session that never registers an add-on prefix, so it never speaks TBM or a bot module and the server sees it as a
 player without the add-on (`status.addon` says `off`; any add-on command, `bot` included, is refused with
 `world: add-on is off for this session`). `status`,
-`inv`, `item_info`, `inventory`, `equipment`, `equip`, `use_item`, `vendor_list`, `buy`, `sell`, `gossip_hello`, `gossip_select`, the trade methods (`trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_set_gold`, `trade_accept`, `trade_cancel`, `trade_status`, and `cast` with `trade_slot`: [docs/forever/DAEMON-TRADE-NOTES.md](docs/forever/DAEMON-TRADE-NOTES.md)), `trainer_list`, `train`, the mail methods `mail_list`, `mail_read`, `mail_take_item`, `mail_take_money`, `mail_delete`, `mail_return`, `mail_send` and `mail_status` (parameters, answers and refusals in [docs/forever/WORLDLIFE-106-NOTES.md](docs/forever/WORLDLIFE-106-NOTES.md)), `quest_hello`, `quest_query`, `quest_accept`, `quest_complete`, `quest_reward`, `quest_abandon`, `quest_log`, `loot`, `loot_take`, `loot_close`, `open_object`, `use_object`, `gameobjects`, `roll`, `taxi`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
+`inv`, `item_info`, `inventory`, `equipment`, `equip`, `use_item`, `vendor_list`, `buy`, `sell`, `gossip_hello`, `gossip_select`, the trade methods (`trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_set_gold`, `trade_accept`, `trade_cancel`, `trade_status`, and `cast` with `trade_slot`: [docs/forever/DAEMON-TRADE-NOTES.md](docs/forever/DAEMON-TRADE-NOTES.md)), `trainer_list`, `train`, the mail methods `mail_list`, `mail_read`, `mail_take_item`, `mail_take_money`, `mail_delete`, `mail_return`, `mail_send` and `mail_status` (parameters, answers and refusals in [docs/forever/WORLDLIFE-106-NOTES.md](docs/forever/WORLDLIFE-106-NOTES.md)), the bank methods `bank_list`, `bank_deposit`, `bank_withdraw` and `bank_buy_slot` (a banker must be open first; parameters, answers and refusals in [docs/forever/WORLDLIFE-220-BANK-NOTES.md](docs/forever/WORLDLIFE-220-BANK-NOTES.md)), `quest_hello`, `quest_query`, `quest_accept`, `quest_complete`, `quest_reward`, `quest_abandon`, `quest_log`, `loot`, `loot_take`, `loot_close`, `open_object`, `use_object`, `gameobjects`, `roll`, `taxi`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
 `gm_aura`, `trial_units`, `bot`, `commander`, `invite`, `accept_invite`, `leave_group`, `accept_guild_invite`,
 `decline_guild_invite`, `guild_leave`, `convert_raid`, `raid_move`
 (with `guid`/`name` and `subgroup` 1-8, `swap_with` for a full subgroup; see
@@ -125,6 +125,14 @@ what is hostile to the character and `false` only what is not. A `unit` row also
 `owner` GUID that keeps only the units whose owner is that one, which is how a party's hunter pets are listed.
 
 The auction house is served by `auction_hello`, `auction_browse`, `auction_items`, `auction_owned`, `auction_sell`, `auction_bid`, `auction_cancel`, `auction_quote` and `auction_buy` (parameters, answers and refusals in [docs/forever/WORLDLIFE-106-AH-NOTES.md](docs/forever/WORLDLIFE-106-AH-NOTES.md)).
+
+The character bank is served by `bank_list` (opens the banker with `CMSG_BANKER_ACTIVATE` and answers the tab bags in
+the player's slots 63-71 and what is inside them), `bank_deposit` and `bank_withdraw` (one item, by bag and slot or by
+entry, with its new place read back from the inventory model) and `bank_buy_slot` (the character tab's price from the
+`BankTab.db2` character rows, refused before any packet when the purse is short). A banker must be open — `bank_list`
+— before the other three work: the core drops a bank command whose interaction is not open. Details, the price table
+and the one limit (the tab count is not read back, so `bank_buy_slot` takes `tab`) are in
+[docs/forever/WORLDLIFE-220-BANK-NOTES.md](docs/forever/WORLDLIFE-220-BANK-NOTES.md).
 
 A dropped world socket is logged in again with a fresh Battle.net login (the first login's join ticket is spent when
 the link drops), and every login attempt (the first login, each build the automatic selection probes, each reconnect's) waits for its turn in the same login rate the other

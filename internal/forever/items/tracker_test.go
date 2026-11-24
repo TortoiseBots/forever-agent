@@ -235,6 +235,47 @@ func TestTrackerBagToBagStoreShowsTheNewSlotOnly(t *testing.T) {
 	}
 }
 
+// TestTrackerBankBagStoreConfirms proves a bank move confirms from the bank bag's own update: the bag in slot 63 is
+// not one of the four carried bags, and without the bank bags resolved a deposit or a withdraw would stay unconfirmed
+// for the rest of the session (the bank layer's answer reads them, issue #220).
+func TestTrackerBankBagStoreConfirms(t *testing.T) {
+	w := objects.NewWorld(0)
+	bankBag := wire.GUID{Low: 0x6300, High: 0x4000000000000000}
+	apply(t, w,
+		selfCreate(map[int]wire.GUID{35: potionGUID, 63: bankBag}, 0),
+		bagCreate(bankBag, 242709, selfGUID, selfGUID, nil),
+		itemCreate(potionGUID, 118, 5, 0, 0, selfGUID, selfGUID),
+	)
+	tr := NewTracker()
+	start := time.Unix(7200, 0)
+	if inv := tr.Sync(w, selfGUID, start); len(inv.Bank()) != 1 || inv.Bank()[0].GUID != bankBag {
+		t.Fatalf("the bank bag is not in the snapshot: %+v", inv.Bank())
+	}
+	seq, err := tr.Begin(start, Req{Asked: []wire.GUID{potionGUID}, Touch: []wire.GUID{potionGUID}, Slots: []Pos{{Container: BackpackContainer, Slot: 35}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The deposit: the backpack slot emptied, the bank bag's own update names the potion, and the item names the bag.
+	apply(t, w,
+		selfCreate(map[int]wire.GUID{63: bankBag}, 0),
+		bagCreate(bankBag, 242709, selfGUID, selfGUID, map[int]wire.GUID{0: potionGUID}),
+		itemCreate(potionGUID, 118, 5, 0, 0, selfGUID, bankBag),
+	)
+	tr.ServerSlots(start.Add(10*time.Millisecond), map[int]wire.GUID{35: {}})
+	tr.ServerBag(start.Add(10*time.Millisecond), bankBag, map[int]wire.GUID{0: potionGUID})
+	inv := tr.Sync(w, selfGUID, start.Add(20*time.Millisecond))
+	bank := inv.Bank()
+	if len(bank) != 2 || bank[1].GUID != potionGUID || bank[1].Container != 63 || bank[1].Slot != 0 || bank[1].Unconfirmed {
+		t.Fatalf("the deposited potion is %+v", bank)
+	}
+	if st, _ := tr.State(seq, start.Add(20*time.Millisecond)); st != MoveConfirmed {
+		t.Fatalf("the deposit is %v, want confirmed", st)
+	}
+	if rows := inv.Find(118); len(rows) != 0 {
+		t.Fatalf("the deposited potion is still carried: %+v", rows)
+	}
+}
+
 // TestTrackerUndecodedUpdatesAreNeverSilent covers finding 4 at the tracker: slots lost to an undecoded update mark
 // the inventory stale; an update behind an equipment change is explained by a live own move and is stale without one.
 func TestTrackerUndecodedUpdatesAreNeverSilent(t *testing.T) {

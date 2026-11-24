@@ -718,6 +718,8 @@ type session struct {
 	mail mailWatch
 	// Issue #106 part 2: the auction house's answers (auction.go).
 	auction auctionWatch
+	// Issue #220: the banker interaction the session opened (bank.go); the bank methods need it open.
+	bank bankWatch
 
 	// Round R6: the character's own UNIT_FLAG_ON_TAXI, recorded packet by packet (taxi.go), and the accepted flight
 	// whose landing has not been seen yet: the movement guard reads them.

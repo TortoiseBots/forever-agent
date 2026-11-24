@@ -58,6 +58,9 @@ func (s *session) handleNPC(p worldconn.Packet) error {
 		// Round R3: the vendor flow waits on it (vendor_act.go); it is the only answer the first
 		// CMSG_LIST_INVENTORY gets (F2).
 		s.vendor.open = &r
+		// Issue #220: a banker interaction is the bank's open (bank.go): bank_list sends CMSG_BANKER_ACTIVATE and the
+		// bank commands are refused until its answer opened the window.
+		s.recordBankOpen(r)
 	}
 	return nil
 }
