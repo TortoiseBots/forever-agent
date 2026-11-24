@@ -279,3 +279,9 @@ expression in a `run:` script):
 ```sh
 python3 -m unittest tools/test_label_issue.py tools/test_sync_labels.py tools/test_workflows.py
 ```
+
+That test parses both workflows structurally, with a small strict parser for the YAML subset they use (block mappings
+and lists, plain scalars, `|` blocks and `[a, b]` lists). A construct outside the subset — a quoted key or scalar, a
+flow mapping, an anchor or alias, a folded block, a second document, a tab indent — fails the test instead of being
+skipped, so a pinned action or an event expression cannot hide behind a syntax the scan does not model. Extend the
+parser deliberately when a workflow needs a new construct.
