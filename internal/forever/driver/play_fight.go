@@ -149,14 +149,30 @@ func (p *playRun) pull(ctx context.Context) string {
 
 // cannotAttackCode says whether the module's refusal code of an attack order means the unit cannot be attacked or is
 // no longer there to be attacked: the codes the pull flow's refusal handling knows (dungeon.classify's dead,
-// no-target and unreachable kinds, and the core's own not-attackable). Waiting or retrying does not change them.
+// no-target and unreachable kinds, and the core's own not-attackable). Waiting or retrying does not change them. An
+// evade is not one of them: the unit is attackable again in a second or two (evadeCode).
 func cannotAttackCode(code string) bool {
 	switch strings.ToLower(code) {
-	case "not-attackable", "no-target", "dead-target", "dead", "unreachable", "evading", "evade":
+	case "not-attackable", "no-target", "dead-target", "dead", "unreachable":
 		return true
 	}
 	return false
 }
+
+// evadeCode says whether the module's refusal code says the unit is evading: it is resetting to its path after a
+// leash, which lasts a second or two, so the order is sent again (engage, within the pull's own window) or the unit
+// is left alone for PlayEvadeWait and pulled again (a stranger: giveBackEvader).
+func evadeCode(code string) bool {
+	switch strings.ToLower(code) {
+	case "evading", "evade":
+		return true
+	}
+	return false
+}
+
+// PlayEvadeWait is how long a patrol candidate that answered `evading` is left alone before the hold may pull it
+// again, and how long the pull's own window waits between attack orders the module refused as evading.
+const PlayEvadeWait = 5 * time.Second
 
 // maxStrangerPulls bounds the pulls of one stranger: a unit pulled twice that ends back on the way (an evade) is left
 // behind on the third hold, so a mobile unknown cannot keep the leg from its boss.
@@ -200,6 +216,9 @@ func (p *playRun) pullStranger(ctx context.Context) string {
 		if p.stopReason != "" {
 			return ""
 		}
+		if evadeCode(p.orderCode) {
+			return p.giveBackEvader(u)
+		}
 		if cannotAttackCode(p.orderCode) {
 			reason = "order-refused:" + p.orderCode
 			break
@@ -228,6 +247,20 @@ func (p *playRun) giveUpStranger(u Unit, reason string) string {
 		"x": u.Pos[0], "y": u.Pos[1], "z": u.Pos[2],
 	})
 	p.strangerGaveUp[u.GUID] = true
+	p.stranger = wire.GUID{}
+	return StateLegWalk
+}
+
+// giveBackEvader lets an evading patrol candidate be for now: it is not given up (an evade lasts a second or two,
+// the unit is attackable again), only left alone for PlayEvadeWait so the same hold does not restart on it at once.
+// The next waypoint inside its circle holds it again; maxStrangerPulls bounds the pulls, and endHold remembers the
+// unit once they are spent.
+func (p *playRun) giveBackEvader(u Unit) string {
+	p.rec.Event(p.now(), "patrol_evade", map[string]any{
+		"guid": u.GUID.String(), "entry": u.Entry, "pulls": p.strangerPulls[u.GUID],
+		"retry_seconds": PlayEvadeWait.Seconds(),
+	})
+	p.strangerRetry[u.GUID] = p.now().Add(PlayEvadeWait)
 	p.stranger = wire.GUID{}
 	return StateLegWalk
 }
@@ -585,6 +618,12 @@ func (p *playRun) engage(ctx context.Context, members []Unit, skull, cross Unit)
 		// The held unit may not be attacked: waiting out the pull window would not change the module's answer.
 		return false
 	}
+	// An evade is not that answer: the unit is attackable again in a second or two, so the order goes again a
+	// PlayEvadeWait later while the pull's window lasts (bounded orders, not a stop and not a give-up).
+	orderAgain := time.Time{}
+	if evadeCode(p.orderCode) {
+		orderAgain = p.now().Add(PlayEvadeWait)
+	}
 	deadline := p.now().Add(p.lim.Pull)
 	for {
 		units := p.ports.World.Units()
@@ -595,6 +634,16 @@ func (p *playRun) engage(ctx context.Context, members []Unit, skull, cross Unit)
 		}
 		if p.aggro() {
 			return true
+		}
+		if !orderAgain.IsZero() && !p.now().Before(orderAgain) {
+			p.rec.Event(p.now(), "order_again", map[string]any{"target": skull.GUID.String(), "code": p.orderCode})
+			if !p.order(ctx, p.cfg.Bots[0], skull.GUID) {
+				return false
+			}
+			orderAgain = time.Time{}
+			if evadeCode(p.orderCode) {
+				orderAgain = p.now().Add(PlayEvadeWait)
+			}
 		}
 		// The module's whisper is its verdict: the tank found no rti target. Waiting out the window would not change
 		// it (the tank stands still), so the caller reacts now.
@@ -1032,7 +1081,10 @@ func (p *playRun) boss(ctx context.Context) string {
 	deadline := p.now().Add(wait)
 	for {
 		if _, ok := p.bossUnit(b.Entry); ok {
+			// The pull begins here: the encounter starts the boss fight opens are this boss's (drainEncounters).
 			p.bossRun = true
+			p.bossSince = p.now()
+			clear(p.bossEnc)
 			return StatePull
 		}
 		if !p.now().Before(deadline) {
@@ -1051,14 +1103,32 @@ func (p *playRun) boss(ctx context.Context) string {
 
 // --- the fight's small helpers ---
 
-// liveMembers is the pack's living units in view, as MatchPacks claims them.
+// liveMembers is the pack's living units in view: MatchPacks' claim, plus the group's live patrol members within
+// PlayPullYd of the agent. A patrol walks out of the pack's claim (and its spawn leaves the pack's radius), so a group
+// met only by its patrol would otherwise be marked pulled without a fight.
 func (p *playRun) liveMembers(g Group) []Unit {
 	units := p.ports.World.Units()
 	claim := p.claim(units)
 	var out []Unit
+	seen := map[wire.GUID]bool{}
+	add := func(u Unit) {
+		if u.Dead || u.Friendly || seen[u.GUID] {
+			return
+		}
+		seen[u.GUID] = true
+		out = append(out, u)
+	}
 	for _, ui := range claim.Members(g.ID) {
-		if u := units[ui]; !u.Dead && !u.Friendly {
-			out = append(out, u)
+		add(units[ui])
+	}
+	if g.Patrol != nil {
+		for _, u := range units {
+			if !slices.Contains(g.Patrol.Entries, u.Entry) {
+				continue
+			}
+			if dist3(u.Pos, p.self) <= PlayPullYd {
+				add(u)
+			}
 		}
 	}
 	return out
@@ -1251,9 +1321,20 @@ func (p *playRun) bossUnit(entry uint32) (Unit, bool) {
 }
 
 // drainEncounters reads the instance's encounter events: an end with success and a boss's kill credit both kill the
-// leg's boss, so the clear is judged from the fight and not only from the last view (§3.9).
+// leg's boss, so the clear is judged from the fight and not only from the last view (§3.9). A start names the
+// encounter the boss fight opened (bossEnc, from the pull's own time on), and a kill's id is compared with those: a
+// kill of another encounter (another fight of the instance, an earlier leg's) is not this leg's boss.
 func (p *playRun) drainEncounters() {
 	for _, ev := range p.ports.World.Encounters() {
+		if ev.Kind == "start" {
+			if ev.EncounterID != 0 {
+				p.encStarted[ev.EncounterID] = true
+				if p.bossRun && !ev.At.Before(p.bossSince) {
+					p.bossEnc[ev.EncounterID] = true
+				}
+			}
+			continue
+		}
 		if (ev.Kind != "end" || !ev.Success) && ev.Kind != "boss_kill" {
 			continue
 		}
@@ -1264,9 +1345,26 @@ func (p *playRun) drainEncounters() {
 		if p.bossKilled[leg.Boss.Entry] {
 			continue
 		}
+		if !p.killIsThisBoss(ev) {
+			p.rec.Event(p.now(), "boss_kill_other", map[string]any{"encounter": ev.EncounterID, "kind": ev.Kind})
+			continue
+		}
 		p.bossKilled[leg.Boss.Entry] = true
 		p.rec.Event(p.now(), "boss_kill", map[string]any{"entry": leg.Boss.Entry, "encounter": ev.EncounterID, "kind": ev.Kind})
 	}
+}
+
+// killIsThisBoss says whether an encounter end or kill credit is the current leg's boss fight's: the id it carries is
+// one this boss's pull started (bossEnc). An event with no id, or a run that saw no encounter start at all (the
+// credit is its only evidence), is this boss's: there is nothing to compare it with.
+func (p *playRun) killIsThisBoss(ev EncounterEvent) bool {
+	if ev.EncounterID == 0 {
+		return true
+	}
+	if len(p.bossEnc) > 0 {
+		return p.bossEnc[ev.EncounterID]
+	}
+	return len(p.encStarted) == 0
 }
 
 // bossDone says whether a plan boss is dead: an encounter's end, a kill credit, or its unit's dead flag. A unit seen
@@ -1323,6 +1421,7 @@ func (p *playRun) order(ctx context.Context, bot string, target wire.GUID) bool 
 	if target.IsZero() {
 		return true
 	}
+	p.orderCode = ""
 	if err := p.ports.Player.Select(target); err != nil {
 		if errors.Is(err, ErrLinkLost) {
 			p.linkLost()

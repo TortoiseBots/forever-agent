@@ -308,16 +308,25 @@ type playRun struct {
 	stranger wire.GUID
 	// strangerPulls counts the pulls of each stranger, so one that evades is not pulled forever.
 	strangerPulls map[wire.GUID]int
-	// strangerGaveUp is the strangers the run found not pullable (the tank's `not-attackable`, an order no one answered):
-	// they are no patrol candidates any more, so one that stays on the way cannot hold the walk again.
+	// strangerGaveUp is the strangers the run found not pullable (the tank's `not-attackable`, an order no one answered,
+	// a unit the navmesh cannot reach or one pulled its maxStrangerPulls times): they are no patrol candidates any more,
+	// so one that stays on the way cannot hold the walk again.
 	strangerGaveUp map[wire.GUID]bool
+	// strangerRetry is when a stranger that answered `evading` may be held again: an evade lasts a second or two, so
+	// the unit is left alone that long and then retried (bounded by maxStrangerPulls in endHold).
+	strangerRetry map[wire.GUID]time.Time
 	// reaction caches the hostility verdict per faction template for the patrol hold (known answers only).
 	reaction map[int32]bool
 	// orderCode is the code of the module's refusal of the last attack order, empty when it was not refused.
 	orderCode string
-	// pulled are the groups fought and bossKilled the bosses the instance's encounters counted dead.
+	// pulled are the groups fought and bossKilled the bosses the instance's encounters counted dead. encStarted is
+	// every encounter whose start the run drained and bossEnc the ones started after the current boss pull began
+	// (bossSince): a kill's id is compared with those, so another fight's kill is not this leg's boss.
 	pulled     map[int]bool
 	bossKilled map[uint32]bool
+	encStarted map[uint32]bool
+	bossEnc    map[uint32]bool
+	bossSince  time.Time
 	// pullSet is every unit the pull brought and skull the one its marks and orders point at; pullGone is the pull's
 	// units the fight dropped as out of combat (a member that never aggroed): alive and unconfirmed.
 	pullSet  []wire.GUID
@@ -370,7 +379,8 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 		cfg: cfg, route: route, ports: ports, lim: cfg.Limits.withDefaults(),
 		farSince: map[string]time.Time{}, farStopAt: map[string]time.Time{}, farStage: map[string]int{},
 		farSummon: newSummonWaiter(), bosses: map[string]bool{},
-		pack: -1, pulled: map[int]bool{}, bossKilled: map[uint32]bool{}, strangerPulls: map[wire.GUID]int{}, strangerGaveUp: map[wire.GUID]bool{}, reaction: map[int32]bool{},
+		pack: -1, pulled: map[int]bool{}, bossKilled: map[uint32]bool{}, encStarted: map[uint32]bool{}, bossEnc: map[uint32]bool{},
+		strangerPulls: map[wire.GUID]int{}, strangerGaveUp: map[wire.GUID]bool{}, strangerRetry: map[wire.GUID]time.Time{}, reaction: map[int32]bool{},
 		maxWipes: playMaxWipes(cfg.MaxWipes), deathSeen: map[string]bool{}, looted: map[wire.GUID]bool{},
 	}
 	if p.ports.Clock == nil {
@@ -1313,6 +1323,9 @@ func (p *playRun) endHold(u Unit, moved bool) walkEnd {
 		return walkStopped
 	}
 	if why != "" {
+		// The unit is given up for the run: the next waypoints inside its circle must not start the hold on it again
+		// (an unreachable unit would otherwise cost PlayStillAfter at every waypoint of the leg).
+		p.strangerGaveUp[u.GUID] = true
 		p.rec.Event(p.now(), "patrol_skip", map[string]any{
 			"guid": u.GUID.String(), "entry": u.Entry, "moved": moved, "reason": why,
 			"x": u.Pos[0], "y": u.Pos[1], "z": u.Pos[2],
@@ -1341,24 +1354,32 @@ func (p *playRun) reachable(to Vec3) bool {
 	return route.Kind == navmesh.RouteComplete
 }
 
-// strangerNear is the nearest live hostile within yd of the agent that no pack of the plan claims and that the plan
-// does not name (a boss and a boss's adds are named; the run goes to them itself). A party member's pet is not a
-// stranger: it stands by the party and fights for it. Nor is a unit the party cannot or must not fight, which the
-// hold never starts on: one a leg's skip list names (the plan says it is no pull: a quest giver, an escort, a rare),
-// one whose faction is not hostile to the character, one whose unit flags make it unattackable, and one the run
-// already found not pullable.
+// strangerNear is the nearest live hostile within yd of the agent that no uncleared pack of the plan claims and that
+// the plan does not name (a boss, a boss's adds and an uncleared group's units are named; the run goes to them
+// itself). A cleared group no longer names its entries: its live patrol member, met after the pack was fought, is a
+// stranger the hold pulls. A party member's pet is not a stranger: it stands by the party and fights for it. Nor is a
+// unit the party cannot or must not fight, which the hold never starts on: one the active leg's skip list names (the
+// plan says it is no pull: a quest giver, an escort, a rare), one whose faction is not hostile to the character, one
+// whose unit flags make it unattackable, and one the run already found not pullable or is leaving alone after an
+// evade.
 func (p *playRun) strangerNear(yd float64) (Unit, bool) {
 	units := p.ports.World.Units()
 	groups := p.route.AllGroups()
 	claim := MatchPacks(units, groups, len(groups))
-	known := p.knownEntries()
+	now := p.now()
 	var best Unit
 	bestD := math.Inf(1)
 	for ui, u := range units {
-		if u.Dead || u.Friendly || known[u.Entry] || p.partyOwned(u) || p.strangerGaveUp[u.GUID] {
+		if u.Dead || u.Friendly || p.partyOwned(u) || p.strangerGaveUp[u.GUID] {
 			continue
 		}
-		if _, ok := claim.GroupOf(ui); ok {
+		if until, ok := p.strangerRetry[u.GUID]; ok && now.Before(until) {
+			continue
+		}
+		if g, ok := claim.GroupOf(ui); ok && !p.pulled[g] {
+			continue
+		}
+		if p.planNames(u.Entry) {
 			continue
 		}
 		d := dist3(u.Pos, p.self)
@@ -1373,20 +1394,21 @@ func (p *playRun) strangerNear(yd float64) (Unit, bool) {
 	return best, bestD < math.Inf(1)
 }
 
-// skipListed says whether any leg's skip list names the entry: the plan itself says it is no pull.
+// skipListed says whether the active leg's skip list names the entry: the plan itself says the unit is no pull on
+// this leg. Another leg's skip entry is that leg's (an entry skipped there can be a hostile patrol here).
 func (p *playRun) skipListed(entry uint32) bool {
-	for i := range p.route.Legs {
-		if p.route.Legs[i].Skip[entry] {
-			return true
-		}
-	}
-	return false
+	leg := p.leg()
+	return leg != nil && leg.Skip[entry]
 }
 
 // notHostile says whether the unit's faction is friendly or neutral to the character, by the World's Reactions port
-// (the core's own faction relation). A port that is absent or does not know leaves the unit a candidate: the pull's
-// own refusal then lets it go (pullStranger).
+// (the core's own faction relation). An unknown answer is never friendly: no port, a template the server does not
+// hold, or a unit whose data has not arrived (faction 0) leaves the unit a candidate, and the pull's own refusal then
+// lets it go (pullStranger).
 func (p *playRun) notHostile(u Unit) bool {
+	if u.Faction <= 0 {
+		return false
+	}
 	if hostile, ok := p.reaction[u.Faction]; ok {
 		return !hostile
 	}
@@ -1417,32 +1439,32 @@ func (p *playRun) partyOwned(u Unit) bool {
 	return false
 }
 
-// knownEntries is every entry the plan names: its packs', its patrols', its bosses' and a boss's adds.
-func (p *playRun) knownEntries() map[uint32]bool {
-	out := map[uint32]bool{}
+// planNames says whether the plan's own business claims the entry right now: a boss's or a boss's add's (the run goes
+// to them itself), or an uncleared group's pack or patrol entry. A group the run has cleared no longer names its
+// entries: its live patrol member, met after the pack was fought, is a stranger the hold may pull.
+func (p *playRun) planNames(entry uint32) bool {
 	for i := range p.route.Legs {
 		leg := &p.route.Legs[i]
 		for j := range leg.Groups {
 			g := &leg.Groups[j]
-			for _, e := range g.Entries {
-				out[e] = true
-			}
-			if g.Patrol == nil {
+			if p.pulled[g.ID] {
 				continue
 			}
-			for _, e := range g.Patrol.Entries {
-				out[e] = true
+			if slices.Contains(g.Entries, entry) {
+				return true
+			}
+			if g.Patrol != nil && slices.Contains(g.Patrol.Entries, entry) {
+				return true
 			}
 		}
 		if leg.Boss == nil {
 			continue
 		}
-		out[leg.Boss.Entry] = true
-		for _, e := range leg.Boss.First {
-			out[e] = true
+		if leg.Boss.Entry == entry || slices.Contains(leg.Boss.First, entry) {
+			return true
 		}
 	}
-	return out
+	return false
 }
 
 // done is the end of the run: every plan boss dead is the clear. A boss counts dead from its unit's dead flag or from
