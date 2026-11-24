@@ -31,7 +31,7 @@ The character starts alive, outside the dungeon, within 300 yd of the plan's por
 | Flag | Meaning |
 |---|---|
 | `--plan FILE` | The dungeon plan. A plan the player route refuses (a raid, a hold, an optional leg) stops the command before any login. |
-| `--bots A,B,C,D` | The four bots, in order: tank, healer, two damage dealers. |
+| `--bots A,B,C,D` | The four bots, in order: tank, healer, two damage dealers. The healer must use mana: the pre-boss rest gate reads its mana pool, and a healer whose power is not mana stops the run `boss-not-ready`. |
 | `--character NAME` | The player character. |
 | `--max-minutes N` | The time budget. 0 takes the plan's: Ragefire Chasm 90, Wailing Caverns 150, else 120. |
 | `--max-wipes N` | The wipe budget, 1-20 or -1 for none. Default 2: the third wipe ends the run. |

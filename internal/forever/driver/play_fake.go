@@ -67,6 +67,9 @@ type PlayFake struct {
 	// NoAnswer names the bots (by lower-cased name, like Moved) that do not answer the corpse-run whisper: they stay
 	// ghosts, and a recovery that needs them cannot finish (§3.10's wipe-unrecovered).
 	NoAnswer map[string]bool
+	// RosterOffline names the bots (by lower-cased name) whose party row stays while the roster pushes it offline: the
+	// row is there, the member is not. The owner table still has the bot; only the roster's last push disagrees.
+	RosterOffline map[string]bool
 	// Graveyard is where a released ghost stands, on the plan's portal map: the plan's portal, 40 yd out, unless a test
 	// scripts another point.
 	Graveyard Vec3
@@ -211,7 +214,7 @@ func NewPlayFake(route *Route, clock *VClock, self string, bots ...string) *Play
 	f := &PlayFake{
 		GoldenOwner: owner, Route: route, SelfName: self, SelfPhase: PhaseAlive,
 		BotPos: map[string]Vec3{}, BotHP: map[string][2]int{}, Moved: map[string]bool{}, Stuck: map[string]bool{},
-		NoAnswer: map[string]bool{}, Rolls: map[wire.GUID][]string{}, NoLoot: map[wire.GUID]bool{},
+		NoAnswer: map[string]bool{}, RosterOffline: map[string]bool{}, Rolls: map[wire.GUID][]string{}, NoLoot: map[wire.GUID]bool{},
 		NoAggro: map[wire.GUID]int{}, UseNoChange: map[uint32]bool{},
 		BotPower: map[string][3]int{}, BotRegen: map[string]int{}, powerAt: map[string]time.Time{},
 		selfHP: [2]int{1000, 1000},
@@ -611,10 +614,11 @@ func (f *PlayFake) rosterLive() []PartyMember {
 		Ghost: f.SelfPhase == PhaseGhost, HP: f.selfHP[0], MaxHP: f.selfHP[1], Pos: f.SelfPos, Map: f.SelfMap,
 	}}
 	for _, b := range f.GoldenOwner.Bots {
-		if !b.Online || !b.InParty {
+		key := strings.ToLower(b.Name)
+		off := f.RosterOffline[key]
+		if !b.InParty || (!b.Online && !off) {
 			continue
 		}
-		key := strings.ToLower(b.Name)
 		hp, maxHP := 900, 900
 		if v, ok := f.BotHP[key]; ok {
 			hp, maxHP = v[0], v[1]
@@ -632,7 +636,7 @@ func (f *PlayFake) rosterLive() []PartyMember {
 			}
 		}
 		out = append(out, PartyMember{
-			Name: b.Name, GUID: f.botGUID(b.Name), Online: true, Dead: b.Dead, Ghost: b.Ghost,
+			Name: b.Name, GUID: f.botGUID(b.Name), Online: b.Online && !off, Dead: b.Dead, Ghost: b.Ghost,
 			HP: hp, MaxHP: maxHP, PowerType: p[0], Power: p[1], MaxPower: p[2],
 			Pos: f.botPos(b), Map: b.Map,
 		})

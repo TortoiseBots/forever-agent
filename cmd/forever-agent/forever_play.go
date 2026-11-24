@@ -39,7 +39,7 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 	var pf preflightFlags
 	pf.register(fs, true)
 	plan := fs.String("plan", "", "dungeon plan file (version 1)")
-	bots := fs.String("bots", "", "the four bots the account owns: the tank, the healer and two damage dealers, in that order")
+	bots := fs.String("bots", "", "the four bots the account owns: the tank, the healer and two damage dealers, in that order; the healer must use mana, because the pre-boss rest gate reads its mana pool (a healer without mana stops the run boss-not-ready)")
 	maxMinutes := fs.Int("max-minutes", 0, "the run's budget in minutes; 0 takes the plan's (Ragefire Chasm 90, Wailing Caverns 150, else 120)")
 	maxWipes := fs.Int("max-wipes", playMilestoneWipes, "the run's wipe budget: the (n+1)th wipe ends it; -1 is no budget, 1-20 otherwise")
 	lastLeg := fs.String("last-leg", "", "end the run after this leg's boss: plans are walked whole, and a run cut by hand counted later legs' units as strangers (the route keeps every leg)")

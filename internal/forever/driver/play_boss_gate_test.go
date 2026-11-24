@@ -485,3 +485,98 @@ func TestPlayBossGateRecoversAndPulls(t *testing.T) {
 		t.Fatalf("boss_not_ready events = %d; want none: the party recovered", n)
 	}
 }
+
+// TestPlayBossGateLaggedTankBarPulls: the tank's roster row carries no maximum health for its first 3 s at the gate (a
+// summon or a zone-in the party state has not caught up with) and is readable afterwards. The window polls on and the
+// boss is pulled then, with no boss-not-ready: the review of 2026-11-24 (HIGH) found ready() skipping the unreadable
+// row, the window leaving on its first read and the gate stopping before a stats reply could arrive.
+func TestPlayBossGateLaggedTankBarPulls(t *testing.T) {
+	rig := playBossGateRig(t, func(f *PlayFake) {
+		f.SetBotHP("Botone", 900, 0)
+		f.Clock.After(3*time.Second, func() { f.SetBotHP("Botone", 900, 900) })
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: the tank's bar came back inside the window", res.Stop, res.Clear)
+	}
+	if n := len(playTraceEvents(t, res, "boss_not_ready")); n != 0 {
+		t.Fatalf("boss_not_ready events = %d; want none: an unreadable bar is waited for, not a stop", n)
+	}
+	if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n == 0 {
+		t.Fatal("the tank was never ordered; want the pull once its bar was readable")
+	}
+	if n := len(playTraceEvents(t, res, "boss_rest_timeout")); n != 0 {
+		t.Fatalf("boss_rest_timeout events = %d; want none: the window pulled", n)
+	}
+}
+
+// TestPlayBossGateLaggingRosterPulls: the healer's roster row is gone for 2 s at the gate (a re-invite the party state
+// has not pushed yet) and is back inside the window: the window polls on and the boss is pulled, no boss-not-ready.
+func TestPlayBossGateLaggingRosterPulls(t *testing.T) {
+	rig := playBossGateRig(t, func(f *PlayFake) {
+		f.GoldenOwner.Bots[1].InParty = false
+		f.Clock.After(2*time.Second, func() { f.GoldenOwner.Bots[1].InParty = true })
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: the roster row came back inside the window", res.Stop, res.Clear)
+	}
+	if n := len(playTraceEvents(t, res, "boss_not_ready")); n != 0 {
+		t.Fatalf("boss_not_ready events = %d; want none: a lagging roster row is waited for", n)
+	}
+	if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n == 0 {
+		t.Fatal("the tank was never ordered; want the pull once the roster had the healer")
+	}
+}
+
+// TestPlayBossGateOfflineRoleStops: the roster holds the healer's row and says it is offline for the whole gate. No rest
+// mends that, so both windows run their course and the stop names the offline role (the `!m.Online` row had no test).
+func TestPlayBossGateOfflineRoleStops(t *testing.T) {
+	rig := playBossGateRig(t, func(f *PlayFake) {
+		f.RosterOffline["bottwo"] = true
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "boss-not-ready" || res.Clear {
+		t.Fatalf("stop = %q clear = %v; want boss-not-ready and no clear", res.Stop, res.Clear)
+	}
+	if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n != 0 {
+		t.Fatalf("the tank was ordered %d times; want none: an offline healer was pulled", n)
+	}
+	if n := len(playTraceEvents(t, res, "boss_rest_timeout")); n != 2 {
+		t.Fatalf("boss_rest_timeout events = %d; want 2 (both windows polled to their deadline)", n)
+	}
+	events := playTraceEvents(t, res, "boss_not_ready")
+	if len(events) != 1 {
+		t.Fatalf("boss_not_ready events = %d; want 1", len(events))
+	}
+	row := playGateRow(t, events[0], "heal", "mana")
+	if row["why"] != "offline" {
+		t.Fatalf("gate row = %v; want the healer named offline", row)
+	}
+}
+
+// TestPlayBossGateLaggedBarSecondWindowPulls: the tank's bar stays unreadable past the first window's deadline and is
+// readable in the second: the first window times out as it did before, the gate rests the party again, and the second
+// window pulls the boss.
+func TestPlayBossGateLaggedBarSecondWindowPulls(t *testing.T) {
+	rig := playBossGateRig(t, func(f *PlayFake) {
+		f.SetBotHP("Botone", 900, 0)
+		f.Clock.After(12*time.Second, func() { f.SetBotHP("Botone", 900, 900) })
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear after the second window", res.Stop, res.Clear)
+	}
+	if n := len(playTraceEvents(t, res, "boss_rest_timeout")); n != 1 {
+		t.Fatalf("boss_rest_timeout events = %d; want 1 (the first window's deadline)", n)
+	}
+	if n := len(playTraceEvents(t, res, "boss_rest_again")); n != 1 {
+		t.Fatalf("boss_rest_again events = %d; want 1 (the gate's second window)", n)
+	}
+	if n := len(playTraceEvents(t, res, "boss_not_ready")); n != 0 {
+		t.Fatalf("boss_not_ready events = %d; want none: the second window passed the gate", n)
+	}
+	if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n == 0 {
+		t.Fatal("the tank was never ordered; want the pull from the second window")
+	}
+}

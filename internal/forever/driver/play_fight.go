@@ -1072,8 +1072,10 @@ func (p *playRun) rest(ctx context.Context) string {
 // gate's floors (the healer at BossHealMana of its mana and the tank at BossTankHP of its health). Anything else is a
 // NAMED deficiency and the run stops `boss-not-ready` (the Codex review of 2026-11-24: the gate failed open when a row
 // was missing, the member was dead or a ghost, a bar had no maximum, or the healer's power was not mana). A downed role
-// is no short bar: it goes to the recovery a death before a pull gets (gateRecover), and the gate runs again. It
-// reports false only when the run itself ended or stopped at the gate.
+// is no short bar: it goes to the recovery a death before a pull gets (gateRecover), and the gate runs again. A row the
+// roster cannot read YET (missing, offline, a bar with no maximum) is no stop either: it keeps the window polling to its
+// deadline, so a summon, a zone-in or a re-invite that pushes the row late still passes (the review of 2026-11-24, HIGH).
+// It reports false only when the run itself ended or stopped at the gate.
 func (p *playRun) restWait(ctx context.Context) bool {
 	short := []map[string]any(nil)
 	recovered := false
@@ -1102,21 +1104,24 @@ func (p *playRun) restWait(ctx context.Context) bool {
 					if !p.gateStats(ctx) {
 						return false
 					}
-					statsAt = now.Add(recoverRefreshEvery)
+					statsAt = now.Add(gateStatsEvery)
 				}
 				deficient := p.bossGateShort()
-				if p.ready() {
-					if len(deficient) == 0 {
-						p.rec.Event(p.now(), "boss_rest_end", map[string]any{"seconds": p.now().Sub(started).Seconds(), "window": window + 1})
-						return true
-					}
-					// Rested, but a role the gate needs is down or unusable: no further window mends that.
-					stopResting = true
-					break
-				}
+				// Only two deficiencies end the window: a downed role (the recovery's) and a healer whose power is not
+				// mana (permanent). A row the gate cannot read YET (missing, offline, a bar with no maximum) keeps the
+				// window polling to its deadline: a summon, a zone-in or a re-invite may still push it (the review of
+				// 2026-11-24, HIGH: ready() skipped such a row and the gate stopped on its first read).
 				if p.gateDown(deficient) {
 					stopResting = true // a corpse is no bar rest can mend: the recovery, then the gate again
 					break
+				}
+				if p.gatePermanent(deficient) {
+					stopResting = true
+					break
+				}
+				if len(deficient) == 0 && p.ready() {
+					p.rec.Event(p.now(), "boss_rest_end", map[string]any{"seconds": p.now().Sub(started).Seconds(), "window": window + 1})
+					return true
 				}
 				if p.timeUp() {
 					p.stop("time")
@@ -1199,6 +1204,22 @@ func (p *playRun) gateDown(def []map[string]any) bool {
 	}
 	return false
 }
+
+// gatePermanent says whether the gate's deficiencies include one no rest can mend: the healer's power is not mana, so
+// the pool the gate reads will never fill by sitting. A missing row, an offline role and a bar with no maximum are not
+// permanent: their state arrives with a later push, and the rest window waits for it.
+func (p *playRun) gatePermanent(def []map[string]any) bool {
+	for _, row := range def {
+		if why, _ := row["why"].(string); strings.HasPrefix(why, "power is not mana") {
+			return true
+		}
+	}
+	return false
+}
+
+// gateStatsEvery spaces the rest window's member stats requests: the gate judges fresh party state at most once a
+// second while it polls, so a row that arrives between polls is read on the next one.
+const gateStatsEvery = time.Second
 
 // gateStats asks for the gate's roles' fresh party state: a roster row is only as fresh as the server's last push. A
 // failed request is recorded once and the gate judges the roster it holds (a missing or unknown row fails closed); a
@@ -1660,8 +1681,13 @@ func (p *playRun) tankPos() (Vec3, bool) {
 }
 
 // ready says whether the party is rested: every member's health at PlayRestHP per cent, and every mana user's pool at
-// PlayRestMana (§3.8).
+// PlayRestMana (§3.8). A configured tank or healer whose row the roster lacks or cannot read is no rested party: the
+// gate judges those same rows, and a rest that ended on a row the roster has not caught up with would leave the gate
+// nothing to judge (the review of 2026-11-24, HIGH).
 func (p *playRun) ready() bool {
+	if !p.gateRowsReadable() {
+		return false
+	}
 	for _, m := range p.roster() {
 		if m.Dead || m.Ghost {
 			continue // a corpse's bars say nothing about whether the party may go on
@@ -1670,6 +1696,30 @@ func (p *playRun) ready() bool {
 			return false
 		}
 		if m.PowerType == 0 && m.MaxPower > 0 && m.Power*100 < m.MaxPower*PlayRestMana {
+			return false
+		}
+	}
+	return true
+}
+
+// gateRowsReadable says whether each configured gate role's row is in the roster, online, and carries the bar the gate
+// judges (the tank's health, the healer's mana pool). A missing row, an offline role and a bar with no maximum are
+// states a rest may outlast, not a rested party: only a downed role and a healer whose power is not mana are permanent.
+// A dead or ghost row is readable: whether it ends the rest is the caller's gate (gateDown).
+func (p *playRun) gateRowsReadable() bool {
+	for i := 0; i < 2 && i < len(p.cfg.Bots); i++ {
+		name := p.cfg.Bots[i]
+		if name == "" {
+			continue // no role configured: the gate names that itself, and no rest can fill it
+		}
+		m, ok := p.member(name)
+		if !ok || !m.Online {
+			return false
+		}
+		if i == 0 && m.MaxHP <= 0 {
+			return false
+		}
+		if i == 1 && m.PowerType == 0 && m.MaxPower <= 0 {
 			return false
 		}
 	}
