@@ -1056,9 +1056,9 @@ func foreverScoutPackPlanFile(t *testing.T, dir, name string) {
 	t.Helper()
 	group := dungeon.PullGroup{
 		Entries:   []uint32{4100},
-		Positions: []dungeon.Point{{X: 0}},
+		Positions: []dungeon.Point{{X: 3}},
 		Radius:    5,
-		Approach:  []dungeon.Point{{X: -10}},
+		Approach:  []dungeon.Point{{X: -7}},
 		StandPull: true,
 	}
 	leg := dungeon.Leg{Name: "one", To: dungeon.Point{X: 40}, PullGroups: []dungeon.PullGroup{group}}
@@ -1130,7 +1130,7 @@ func TestScoutForeverRecordsServerSightBesideTheRay(t *testing.T) {
 		if !strings.HasSuffix(q, "|0x00000000000000000000000000000064") && !strings.HasSuffix(q, "|0x00000000000000000000000000000065") {
 			t.Fatalf("a los query names %q, not a pack guid", q)
 		}
-		if !strings.HasPrefix(q, "-10,0,0|") {
+		if !strings.HasPrefix(q, "-7,0,0|") {
 			t.Fatalf("a los query asks from %q, not the pull's stand", q)
 		}
 	}
