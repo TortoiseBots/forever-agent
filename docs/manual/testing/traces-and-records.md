@@ -4,7 +4,7 @@ title: Traces and records
 description: What a run writes (trace, summary, combat log, run record, trials and scenario folders) and how trace-score re-reads a trace.
 tags: [testing, traces, records, formatting]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:15Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:15Z }
 sources:
   - id: trace-pkg
     resource: internal/trace/trace.go

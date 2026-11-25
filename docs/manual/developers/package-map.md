@@ -4,7 +4,7 @@ title: Package map
 description: Every Go package in forever-agent with one line saying what it is for.
 tags: [developers, packages, reference, internals]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:38:33Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:38:33Z }
 sources:
   - id: gomod
     resource: go.mod

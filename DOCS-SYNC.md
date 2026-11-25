@@ -37,19 +37,21 @@ line saying what changed and when.
 - Copy names, flags, defaults and error texts from the code you opened. Never invent a flag or a message.
 - Placeholders only: no hosts, accounts, character names or private paths. `--host example.invalid` and
   `--password <password>` are the forms the checker accepts.
-- Keep the page's frontmatter: `type`, `title`, `description`, and `generated` (who and when). `sources` lists
-  the files the page's facts come from. Do not add `verified` unless a person verified the page.
+- Keep the page's frontmatter: `type`, `title`, `description`, and `generated` (when the page was last
+  written). `generated.by` is always `forever-agent docs`: it names the project, never the tool, model or
+  person that wrote the page. `sources` lists the files the page's facts come from. Do not add `verified`
+  unless a person verified the page.
 - Add one line to `docs/manual/log.md` under today's date.
 
 ## How it is checked
 
 - `make docs-check` runs the manual's checker (`tools/verify_okf.py`) and its tests. It fails on a broken page,
-  a CRLF file, a link or `#anchor` that does not resolve, a `sources[].resource` that does not exist, an index
-  entry whose description differs from the page's own description, a secret, e-mail address, home path or unknown
-  host name, a registered command that no page documents as a command, a daemon method missing from
-  `daemon/method-index.md`, and a method or command in the manual that the code no longer registers. A command or
-  method left out on purpose goes in `docs/manual/.undocumented-commands` or
-  `docs/manual/.undocumented-methods` with a reason.
+  a CRLF file, a link or `#anchor` that does not resolve, a `sources[].resource` that does not exist, a
+  `generated.by` other than `forever-agent docs`, an index entry whose description differs from the page's
+  own description, a secret, e-mail address, home path or unknown host name, a registered command that no
+  page documents as a command, a daemon method missing from `daemon/method-index.md`, and a method or command
+  in the manual that the code no longer registers. A command or method left out on purpose goes in
+  `docs/manual/.undocumented-commands` or `docs/manual/.undocumented-methods` with a reason.
 - A command is documented as a command: a line in a code block (`forever-agent <word>`, or
   `forever-agent forever <word>` for a subcommand), a heading naming it, or a table row naming it. A bare
   backticked word in prose does not count.

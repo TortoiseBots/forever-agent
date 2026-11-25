@@ -4,7 +4,7 @@ title: How placement works
 description: "What --place does inside the instance: the staged start, the corridor clear, the quiet check and the four tries."
 tags: [turtle, raids, placement]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:45:00Z }
 sources:
   - id: place
     resource: internal/raidwalk/place.go

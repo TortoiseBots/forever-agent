@@ -599,7 +599,7 @@ case10() {
   ok "case10 exit-19 x2 at step 41 with no wipe (and with no summary): 3 runs, no no-progress stop"
 }
 
-# case16 (Codex 1): a cmd file with a shell operator, expansion, backslash, quote other than double, glob, or a second
+# case16 (finding 1): a cmd file with a shell operator, expansion, backslash, quote other than double, glob, or a second
 # line is refused before anything runs: exit 2, no walk started, the injected command never runs (its marker file is
 # not created). MARK in each tail becomes the marker path.
 case16() {
@@ -632,7 +632,7 @@ case16() {
   ok "case16 ${n} cmd files with ; & | > < \$() backtick, backslash, quote, glob, second line: exit 2, nothing runs"
 }
 
-# case17 (Codex 2): no exit status (the wrapper died before writing its rc file, or wrote a non-number) is exit 70,
+# case17 (finding 2): no exit status (the wrapper died before writing its rc file, or wrote a non-number) is exit 70,
 # logged "status unknown", and stops with no restart: a crash, not a pause. The leg is one a restart would rebuild,
 # so only the missing status decides.
 case17() {
@@ -653,7 +653,7 @@ case17() {
   ok "case17 no exit status (missing file and malformed file): exit 70, status unknown logged, no restart"
 }
 
-# case18 (Codex 1, the real shape): a walk-28 style cmd file (double-quoted "leg ..." and "boss-done" words, a
+# case18 (finding 1, the real shape): a walk-28 style cmd file (double-quoted "leg ..." and "boss-done" words, a
 # comma-free slot, a name=value-free holder) gives the same argv as the literal list below and as the old eval parse.
 case18() {
   local d="$T/c18" rc line golden want

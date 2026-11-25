@@ -4,7 +4,7 @@ title: Combat RPC
 description: Every combat RPC method, its params, defaults and an example.
 tags: [turtle, combat, rpc, reference]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:55:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:55:00Z }
 sources:
   - id: brain-methods
     resource: cmd/forever-agent/brain_methods.go

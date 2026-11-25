@@ -4,7 +4,7 @@ title: Walk your first raid
 description: Run one trash walk on a test server from the first command to the summary.
 tags: [turtle, raids, raid-walk, tutorial]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:35:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:35:00Z }
 sources:
   - id: walk-cmd
     resource: cmd/forever-agent/raid_walk_cmd.go

@@ -4,7 +4,7 @@ title: Find a group
 description: Queue for dungeons through Turtle's group finder with the lfg calls.
 tags: [turtle, dungeon, lft, guide]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:45:00Z }
 sources:
   - id: lfg-methods
     resource: cmd/forever-agent/lfg_methods.go

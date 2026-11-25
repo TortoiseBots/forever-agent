@@ -150,7 +150,7 @@ lists it; README documents it.
 
 ## Fix round after the two reviews
 
-Eleven findings (Claude cold review and Codex), each with a test named `TestFindingN...` in
+Eleven findings (the cold review and the adversarial review), each with a test named `TestFindingN...` in
 `internal/bughunt/fixes_b3_test.go` (11 pins the sparse-frame holes of rules 1, 2 and 11; the command's bad-log case is
 `TestBughuntCommandRefusesMalformedCombatLog`). Decisions: (1) gone needs a complete rule; (2) coverage as above, with the
 truncation marker kind `truncated` and the `seq` jumps as the proof of dropped rows; (3) out of view is unknown;

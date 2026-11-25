@@ -4,7 +4,7 @@ title: Dungeon plans
 description: What a dungeon plan file is, every field it can carry, and what its status and forever_status mean.
 tags: [dungeons, plans, reference, format]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T06:48:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T06:48:00Z }
 sources:
   - id: plan-go
     resource: internal/dungeon/plan.go

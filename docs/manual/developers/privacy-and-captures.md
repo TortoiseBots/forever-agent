@@ -4,7 +4,7 @@ title: Privacy and captures
 description: What must never be committed or shared from a run, what the packet captures contain, and how to check and scrub one.
 tags: [developers, privacy, captures, fixtures]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:38:33Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:38:33Z }
 sources:
   - id: capture
     resource: internal/capture/capture.go

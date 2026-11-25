@@ -159,7 +159,7 @@ func TestNewWorldAdvancesTeleportSeq(t *testing.T) {
 }
 
 // A far teleport publishes the new map, position and TeleportSeq only once the worldport ack has
-// gone out (Codex HIGH): a status read while that write is still held shows the old map, position
+// gone out: a status read while that write is still held shows the old map, position
 // and sequence. Otherwise raid-walk's reviveLanded could take the map change for a landing and
 // send a `.summon` before the server has placed the player.
 func TestNewWorldPublishesAfterWorldportAck(t *testing.T) {

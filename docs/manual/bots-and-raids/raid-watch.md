@@ -4,7 +4,7 @@ title: forever raid-watch
 description: Watch a raid the server's own bot module leads, from outside, with budgets and a raid summary at the end.
 tags: [bots-and-raids, raid, watch, bots]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T23:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T23:40:00Z }
 sources:
   - id: watch-cmd
     resource: cmd/forever-agent/forever_watch.go

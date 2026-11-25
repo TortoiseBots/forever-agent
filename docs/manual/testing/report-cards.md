@@ -4,7 +4,7 @@ title: Report cards
 description: "Read the two report cards: the trials card for a behaviour run and the dungeon-run card with its verdict, legs and flags."
 tags: [testing, report-cards, trials, dungeon]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:15Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:15Z }
 sources:
   - id: trials-report
     resource: internal/trials/report/report.go

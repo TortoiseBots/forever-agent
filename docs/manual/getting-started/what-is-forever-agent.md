@@ -4,7 +4,7 @@ title: What forever-agent is
 description: What the agent does, which server it speaks to, and which parts have been run against a live server.
 tags: [getting-started, overview, client, forevercore]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:31:22Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:31:22Z }
 sources:
   - id: readme
     resource: README.md

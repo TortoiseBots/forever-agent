@@ -1077,7 +1077,7 @@ type walk struct {
 	// "not revived"; nil otherwise.
 	reviveRefusal *raidwalk.ReviveRefusal
 	// wipeAt is when the last wipe (or near-wipe stop) was seen: the anchor of a self-regroup's D-C cap (review round
-	// 1, Opus M2).
+	// 1, M2).
 	wipeAt time.Time
 	// regroupAt is when the walk read TB's "regrouping by itself" line of the self-regroup wipe that is being recovered
 	// (zero otherwise): TB releases the party then, and no `.revive` goes out until selfRegroupReviveWait after it.
@@ -1290,7 +1290,7 @@ type walk struct {
 	// pausedBossResume is the boss ROW (step) the walk's own `.bot run resume` went out for: a boss that
 	// engages while the run is paused on its own boss row resumes the run instead of stopping it (walk 41 tj-8).
 	// One resume per row, and the ACK alone is no handoff: the walk trusts it only once a FRESH RunRunning status
-	// of the row arrives within pausedBossResumeWait (Codex HIGH); anything else routes through handleBoss.
+	// of the row arrives within pausedBossResumeWait; anything else routes through handleBoss.
 	pausedBossResume string
 	wipeResumes      int // wipes and near-wipe stops recovered so far (--wipe-resume bounds them)
 	// --revive-at-raid bookkeeping (raid_walk_reviveraid.go): the point the commander stood at for the last revive, and

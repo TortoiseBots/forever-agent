@@ -4,7 +4,7 @@ title: Score a fight
 description: Judge finished fights against the spell oracle, and compare two pull tests.
 tags: [turtle, combat, oracle, testing]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:45:00Z }
 sources:
   - id: fight-score
     resource: cmd/forever-agent/fight_score_cmd.go

@@ -4,7 +4,7 @@ title: Method index
 description: Every method a forever serve daemon registers, with its parameters, what it does and the page that explains it.
 tags: [daemon, methods, reference, rpc]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:07Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:07Z }
 sources:
   - id: method-table
     resource: internal/forever/world/serve_session_methods.go

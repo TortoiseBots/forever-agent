@@ -4,7 +4,7 @@ title: Hire the party and enter
 description: Bring bots online, hire a fresh party, get it into the dungeon, and pass the kit check.
 tags: [turtle, dungeon, commander, hire, prepare, enter]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:35:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:35:00Z }
 sources:
   - id: prepare
     resource: internal/dungeon/prepare.go

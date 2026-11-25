@@ -207,7 +207,7 @@ func (r selRig) hot(on bool) {
 	r.s.selSetHotLocked(on)
 }
 
-// Codex's case: X confirmed, G pending, the player in combat, the core rewrites the field to G. That echo confirms nothing, nor does any
+// The combat-rewrite case: X confirmed, G pending, the player in combat, the core rewrites the field to G. That echo confirms nothing, nor does any
 // echo while the player is hot or settling; after it cooled down, G needs a neutral selection (its old send was fenced off) and a fresh
 // echo of a new send.
 func TestSelectionLogCombatRewriteToThePendingUnitConfirmsNothing(t *testing.T) {

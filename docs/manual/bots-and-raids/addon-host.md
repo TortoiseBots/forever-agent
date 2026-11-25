@@ -4,7 +4,7 @@ title: Run an add-on headless
 description: Run a real add-on's Lua on a forever serve daemon with addon_start, read what it did with addon_state, tick a manual clock with addon_tick, and stop it with addon_stop.
 tags: [bots-and-raids, addon, daemon, untrusted]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T01:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T01:45:00Z }
 sources:
   - id: addon-host
     resource: internal/forever/addonhost/host.go

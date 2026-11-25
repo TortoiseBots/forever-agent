@@ -2742,7 +2742,7 @@ func resumePlacedRun(f *fixture) {
 	}
 }
 
-// walk 25, hardened by Codex HIGH (forever-agent#360): D-A lets an idle unit
+// walk 25, hardened (forever-agent#360): D-A lets an idle unit
 // beyond the placement's 25 yd landing reach through only at its proven home
 // (a plan spawn within 3 yd). A still, calm mob standing 8 yd from its spawn
 // is a paused patrol or a wanderer, so the wipe ends at 19; at its own spawn
@@ -2844,7 +2844,7 @@ func TestRaidWalkReviveWaitsForBlockerToLeave(t *testing.T) {
 	}
 }
 
-// Codex round 2: the commander is moved off the revive point's map during the D-C wait (a teleport, a graveyard
+// Round 2: the commander is moved off the revive point's map during the D-C wait (a teleport, a graveyard
 // transfer): a read from there sees nothing, but it judges surroundings the revive will not have, so no summon goes out.
 func TestRaidWalkReviveQuietNeedsCommanderOnTheMap(t *testing.T) {
 	f, _ := newPlaceFixture(t)
@@ -3251,7 +3251,7 @@ func TestRaidWalkWipeEndFastSkipsResetAndReviveAtABoss(t *testing.T) {
 	}
 }
 
-// Codex round 2 MEDIUM: the fast wipe revive stopped at the first failed line, leaving the rest of the party dead in
+// Round 2 (MEDIUM): the fast wipe revive stopped at the first failed line, leaving the rest of the party dead in
 // the copy (and for the party view of the next launch). Every dead hire now gets its line, a failed one is retried
 // once inside the window, and the ones still dead are named in one `wipe-end: revive incomplete` note.
 func TestReviveDeadHiresKeepsGoingPastAFailure(t *testing.T) {
@@ -3938,7 +3938,7 @@ func TestRaidWalkWipeResumeBossDeadFrameKills(t *testing.T) {
 // enabled. The frames latch the boss engaged (90 % with a party target)
 // until 140 s, then show after(elapsed) rows; the wipe at 240 s leaves the
 // latch 100 s old, inside the 120 s window. The run resumes when the
-// recovery completes. Codex HIGH: the frame verdict must never skip the
+// recovery completes. The frame verdict must never skip the
 // dashboard's live-boss gate.
 func dashLatchWipeFixture(t *testing.T, after func(elapsed time.Duration) []tbm.HostileRec) (*fixture, int, int) {
 	t.Helper()
@@ -3996,7 +3996,7 @@ func revivesBeforeFirstStop(gm []string) int {
 	return revives
 }
 
-// TestRaidWalkWipeResumeFrameKillLiveDashboardBlocks (Codex HIGH): the frames
+// TestRaidWalkWipeResumeFrameKillLiveDashboardBlocks: the frames
 // show the boss killed (0 % corpse, the latch kill) while the dashboard's
 // freshest fights list holds a live boss fight row. The dashboard gate runs
 // first, so nothing is revived into that fight: exit 19, wipe_resumes 0, the
@@ -8412,7 +8412,7 @@ func TestRaidWalkBossNotFoundToolkitCorpseNeedsConfirmation(t *testing.T) {
 // point_far. The walk moves the commander to the boss row once (with the revive's own GM sequence), re-reads the
 // same entry once, and finds the corpse: exactly one `.go xyz` to the boss spot between the two reads, one
 // `.bot run skip`, and the move note. Today: no move, latched, no skip.
-// Codex round 1: a .go to the boss row that fails is not a move: no move note, no second read, and the reads latch
+// Round 1: a .go to the boss row that fails is not a move: no move note, no second read, and the reads latch
 // off with the real error.
 func TestRaidWalkBossNotFoundCorpseReadPointFarGoFails(t *testing.T) {
 	f := zgThekalFixture(t, "zul_gurub")
@@ -8455,7 +8455,7 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarGoFails(t *testing.T) {
 	}
 }
 
-// Walk 25 point_far round 4 (Codex MEDIUM): the status read before the boss-row move fails. The failure latches
+// Walk 25 point_far round 4: the status read before the boss-row move fails. The failure latches
 // the reads off with the real error: the walk waits out the pause with exactly one toolkit read in total, instead
 // of repeating the corpse read and the failing status RPC on every pause tick.
 func TestRaidWalkBossNotFoundCorpseReadPointFarStatusFails(t *testing.T) {
@@ -8497,7 +8497,7 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarStatusFails(t *testing.T) {
 	}
 }
 
-// Walk 25 point_far round 4 (Codex MEDIUM): the `.gm visible off` before the boss-row move fails. The failure
+// Walk 25 point_far round 4: the `.gm visible off` before the boss-row move fails. The failure
 // latches the reads off with the real error: the walk waits out the pause with exactly one toolkit read in total,
 // instead of repeating the corpse read and the failing GM RPC on every pause tick.
 func TestRaidWalkBossNotFoundCorpseReadPointFarVisibleOffFails(t *testing.T) {
@@ -8541,7 +8541,7 @@ func TestRaidWalkBossNotFoundCorpseReadPointFarVisibleOffFails(t *testing.T) {
 	}
 }
 
-// Walk 25 point_far round 4 (Codex MEDIUM): a cancelled context is no toolkit failure. The status read inside the
+// Walk 25 point_far round 4: a cancelled context is no toolkit failure. The status read inside the
 // point_far branch answers while the walk itself is interrupted (the fake cancels the context on that read), so
 // bossCorpse returns without latching, like today's code. M2 round 5: the old shape cancelled before bossCorpse ran
 // and never reached the status-cancel guard.
@@ -9062,7 +9062,7 @@ func TestRaidWalkBossNotFoundToolkitFailureStillPauses(t *testing.T) {
 	}
 }
 
-// The toolkit read runs into its own deadline: that is a failure, latched once (Codex, round 3).
+// The toolkit read runs into its own deadline: that is a failure, latched once (round 3).
 func TestRaidWalkBossNotFoundToolkitTimeoutLatchesOnce(t *testing.T) {
 	f, next, total := bossDoneFixture(t)
 	boss := next - 1
@@ -9159,7 +9159,7 @@ func TestRaidWalkBossNotFoundLateEvidenceSkips(t *testing.T) {
 	}
 }
 
-// Review round 3 (Codex HIGH, r7): a live row after the death voids the frame corpse. The boss fights
+// Review round 3 (HIGH, r7): a live row after the death voids the frame corpse. The boss fights
 // (a live 60 % row: this walk's attempt start), dies (a 0 % row of the same guid), the encounter resets
 // (the family seen alive at 100 % afterwards) and the party loses sight of him, so when the run leader
 // pauses with "boss 12118 not found" the family corpse is voided by the newer live row: no dead row
@@ -9206,7 +9206,7 @@ func TestRaidWalkBossNotFoundRespawnedBossStillPauses(t *testing.T) {
 	}
 }
 
-// Review round 3 (Codex HIGH, r7): the attempt bound itself. A 0 % row the frames saw before the CURRENT attempt's
+// Review round 3 (HIGH, r7): the attempt bound itself. A 0 % row the frames saw before the CURRENT attempt's
 // engagement is another attempt's corpse (the frames are never pruned, so a wipe recovery leaves it in
 // w.hostiles), and a 0 % row inside the attempt of a guid seen alive there is evidence. Without the bound
 // the stale row alone would be a kill; without the link a corpse the frames never saw alive would be one.
@@ -9283,7 +9283,7 @@ func setBossCorpseMaps(w *walk) {
 	w.bossCorpseSeen = map[string]time.Time{}
 }
 
-// Codex HIGH (r6): a toolkit corpse whose guid the frames never showed alive in this attempt is a
+// HIGH (r6): a toolkit corpse whose guid the frames never showed alive in this attempt is a
 // stale or foreign corpse, not kill evidence: no skip, even when the read repeats 16 s later.
 func TestBossKilledToolkitCorpseNeedsAttemptAliveGUID(t *testing.T) {
 	now := time.Date(2026, 10, 29, 20, 0, 0, 0, time.Local)
@@ -9299,7 +9299,7 @@ func TestBossKilledToolkitCorpseNeedsAttemptAliveGUID(t *testing.T) {
 	}
 }
 
-// Codex HIGH (r6): the boss is seen alive, the toolkit reports his corpse, then the SAME guid is
+// HIGH (r6): the boss is seen alive, the toolkit reports his corpse, then the SAME guid is
 // alive again within 15 s (a fake death: Thekal phase 1 dies and is raised again). The
 // resurrection voids the corpse wait: no skip once the alive row goes stale either.
 func TestBossKilledToolkitCorpseFakeDeathStillPauses(t *testing.T) {
@@ -9322,7 +9322,7 @@ func TestBossKilledToolkitCorpseFakeDeathStillPauses(t *testing.T) {
 	}
 }
 
-// Codex HIGH (r6): seen alive, toolkit corpse, still dead 16 s later with no alive frame for that
+// HIGH (r6): seen alive, toolkit corpse, still dead 16 s later with no alive frame for that
 // guid in between: the kill is proven, skip.
 func TestBossKilledToolkitCorpseConfirmedSkips(t *testing.T) {
 	now := time.Date(2026, 10, 29, 20, 0, 0, 0, time.Local)
@@ -9372,7 +9372,7 @@ func bossTestFrame(hostiles ...tbm.HostileRec) *tbm.ViewFrame {
 	}
 }
 
-// Codex HIGH (r7): a dead row never starts the attempt. The first sighting of a pre-existing
+// HIGH (r7): a dead row never starts the attempt. The first sighting of a pre-existing
 // corpse (0 %, even holding a party target) records no attempt start and no live sighting, so
 // bossKilled finds no evidence and the pause stays: no skip.
 func TestBossAttemptCorpseFirstStartsNoAttempt(t *testing.T) {
@@ -9392,7 +9392,7 @@ func TestBossAttemptCorpseFirstStartsNoAttempt(t *testing.T) {
 	}
 }
 
-// Codex HIGH (r7): a live sighting from an earlier attempt vouches for nothing. The frames show 12118
+// HIGH (r7): a live sighting from an earlier attempt vouches for nothing. The frames show 12118
 // standing at full hp before any attempt began (no target, no latch), then the pull (a live 60 % row of
 // another guid starts the attempt) and a 0 % row of the first guid. That corpse predates the attempt's
 // live link, so it is no evidence and the empty toolkit proves nothing: no skip.
@@ -9419,7 +9419,7 @@ func TestBossAttemptEarlierSightingVoidsCorpse(t *testing.T) {
 	}
 }
 
-// Codex HIGH (r7): the attempt starts on a live engaged row, and the 0 % row of that same guid is
+// HIGH (r7): the attempt starts on a live engaged row, and the 0 % row of that same guid is
 // the kill: seen alive before its death, inside the attempt. Skip.
 func TestBossAttemptLiveThenDeathKills(t *testing.T) {
 	now := time.Date(2026, 10, 29, 20, 0, 0, 0, time.Local)
@@ -9437,7 +9437,7 @@ func TestBossAttemptLiveThenDeathKills(t *testing.T) {
 	}
 }
 
-// Codex HIGH (r7): a fake death voids the kill. Live, dead, then the same guid alive again (raised):
+// HIGH (r7): a fake death voids the kill. Live, dead, then the same guid alive again (raised):
 // the newest frame row is a stale live one, so no dead row is evidence and the empty toolkit proves
 // nothing: no skip, the pause stays.
 func TestBossAttemptFakeDeathStillPauses(t *testing.T) {

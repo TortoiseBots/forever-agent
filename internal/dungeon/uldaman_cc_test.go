@@ -104,7 +104,7 @@ func TestUldamanPackCCPicksTheCasterAndNeverTheElemental(t *testing.T) {
 }
 
 // No boss.first entry of any leg is cc_always: a cc_always entry gets pack and reactive CC below big_pack too, and the encounter kills its
-// `first` adds in the plan's order (Codex review of feat/uldaman-cc: Grimlok's Geomancer 4853).
+// `first` adds in the plan's order (feat/uldaman-cc: Grimlok's Geomancer 4853).
 func TestUldamanNoBossFirstAddIsCCAlways(t *testing.T) {
 	p := loadUldaman(t)
 	n := 0

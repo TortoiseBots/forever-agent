@@ -4,7 +4,7 @@ title: Running dungeons with the agent
 description: Drive a party through a plan with dungeon_run, stage it, tune it live, and clean up with teardown.
 tags: [turtle, agent, dungeon, commander, teardown, lfg]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T21:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T21:45:00Z }
 sources:
   - id: dungeon-methods-go
     resource: cmd/forever-agent/dungeon_methods.go

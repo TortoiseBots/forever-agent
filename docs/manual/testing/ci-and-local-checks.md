@@ -4,7 +4,7 @@ title: CI and local checks
 description: What runs on every push and nightly, and how to run the same checks, shards, capture scrub and gates locally.
 tags: [testing, ci, make, checks, captures]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:15Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:15Z }
 sources:
   - id: ci-md
     resource: docs/CI.md

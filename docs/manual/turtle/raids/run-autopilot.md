@@ -4,7 +4,7 @@ title: Supervise raids with the autopilot
 description: Write targets.txt, run the supervisor, and stop one raid or all of them.
 tags: [turtle, raids, autopilot]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:40:00Z }
 sources:
   - id: auto-cmd
     resource: cmd/forever-agent/raid_autopilot_cmd.go

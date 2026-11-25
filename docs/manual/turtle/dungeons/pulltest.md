@@ -4,7 +4,7 @@ title: Score one pack
 description: Run a pull test on one pull group, read its table, and compare two results.
 tags: [turtle, dungeon, pulltest, guide]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:40:00Z }
 sources:
   - id: pulltest
     resource: internal/dungeon/pulltest.go

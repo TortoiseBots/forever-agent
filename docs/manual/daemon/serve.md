@@ -4,7 +4,7 @@ title: forever serve
 description: Run the agent as a session daemon so other programs can drive one logged-in character over a local JSON-RPC socket.
 tags: [daemon, serve, session, rpc, login]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T02:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T02:45:00Z }
 sources:
   - id: serve-cmd
     resource: cmd/forever-agent/forever_serve.go

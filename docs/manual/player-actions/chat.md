@@ -4,7 +4,7 @@ title: Chat and channels
 description: Send say, yell, party, raid, guild and whisper lines, join and leave custom channels, and read the chat log.
 tags: [player-actions, chat, channels, messages]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:00Z }
 sources:
   - id: serve-session
     resource: internal/forever/world/serve_session.go

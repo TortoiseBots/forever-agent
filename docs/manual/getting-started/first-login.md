@@ -4,7 +4,7 @@ title: Your first login
 description: Prove that the agent can reach a ForeverCore server with login-check and world-check, create or delete a character, then start a session.
 tags: [getting-started, login, world-check, serve]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
 sources:
   - id: forever-login
     resource: cmd/forever-agent/forever_login.go

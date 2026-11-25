@@ -4,7 +4,7 @@ title: Settings, slots and leases
 description: The files that tell the agent which server and account to use, how slot directories are laid out, and how leases keep one worker per slot.
 tags: [getting-started, settings, slots, leases, configuration]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T02:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T02:45:00Z }
 sources:
   - id: config
     resource: internal/config/config.go

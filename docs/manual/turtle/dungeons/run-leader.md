@@ -4,7 +4,7 @@ title: Play in the party
 description: Run in leader mode, where your own character leads the party and fights with the bot brain.
 tags: [turtle, dungeon, leader, brain, guide]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:40:00Z }
 sources:
   - id: dungeon-modes
     resource: cmd/forever-agent/dungeon_modes.go

@@ -4,7 +4,7 @@ title: Adding a daemon method
 description: How to add a method to the forever serve daemon, from the registration line to the test and the JSON-RPC call that reaches it.
 tags: [developers, rpc, daemon, guide]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:38:33Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:38:33Z }
 sources:
   - id: reg
     resource: internal/forever/world/serve_session_methods.go

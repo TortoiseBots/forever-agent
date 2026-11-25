@@ -4,7 +4,7 @@ title: login
 description: Every login flag with its default, an example, and the login exit codes.
 tags: [turtle, getting-started, reference, login, flags]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:25:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:25:00Z }
 sources:
   - id: login
     resource: cmd/forever-agent/login.go

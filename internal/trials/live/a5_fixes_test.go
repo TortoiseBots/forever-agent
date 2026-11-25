@@ -208,7 +208,7 @@ func TestTrialResultPassNeedsNoOpenRule(t *testing.T) {
 	}
 }
 
-// Codex: a teardown that cannot be proven is reported, not only logged, so a
+// A teardown that cannot be proven is reported, not only logged, so a
 // sweep stops before the next trial starts on a dirty slot.
 func TestTrialTeardownReportsWhatItCouldNotProve(t *testing.T) {
 	prov, s, _ := bagProv(t)
@@ -329,7 +329,7 @@ func dcProbe(t *testing.T, fake *fakeServe) (*LiveDataProbe, *Ledger) {
 	return probe, ledger
 }
 
-// Findings 2 and codex critical: a creature of the same entry that was
+// Findings 2 and the critical one: a creature of the same entry that was
 // already standing at the tester is never claimed or killed when the add
 // produces nothing.
 func TestSpawnNeverClaimsAnExistingUnit(t *testing.T) {

@@ -233,10 +233,10 @@ func TestReleaseRules(t *testing.T) {
 	}
 }
 
-// Item 3 (R2, Codex ABA): every acquisition gets an unguessable lease ID;
+// Item 3 (R2, ABA): every acquisition gets an unguessable lease ID;
 // release with a wrong ID is refused and the lease stays. Renewal is only
 // through Renew: a second explicit acquire by the same holder is refused
-// atomically and keeps the first lease ID (Codex trials-a2-r2: the old
+// atomically and keeps the first lease ID (trials-a2-r2: the old
 // renew-on-acquire path minted a new ID before refusing, breaking the first
 // run's renewals and release).
 func TestReleaseWithOldIDAfterReacquire(t *testing.T) {

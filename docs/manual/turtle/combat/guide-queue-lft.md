@@ -4,7 +4,7 @@ title: Queue through LFT
 description: Join the Turtle group finder, answer the role check and the offer, and leave.
 tags: [turtle, combat, lft, rpc]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:45:00Z }
 sources:
   - id: lfg-methods
     resource: cmd/forever-agent/lfg_methods.go

@@ -97,13 +97,13 @@ type Summary struct {
 type ReviveRefusal struct {
 	WipeStep int `json:"wipe_step"`
 	// StartStep is the step of the revive point the walk actually used: the placement's staged start with --place,
-	// else the first positioned row of the plan (review round 1, Opus L3: a plain --from walk revives at the plan's
+	// else the first positioned row of the plan (review round 1, L3: a plain --from walk revives at the plan's
 	// own first point, whatever step the run is started on).
 	StartStep int `json:"start_step"`
 	// TriedSteps are the revive points the walk read, in order: the revive point, then the fallback rows of its leg
 	// and the previous leg's last move row (the entrance has no step: EntranceTried says it was reached).
 	TriedSteps []int `json:"tried_steps"`
-	// EntranceTried says the entrance fallback's `.go xyz` went out (review round 1, Opus L3): true while the walk
+	// EntranceTried says the entrance fallback's `.go xyz` went out (review round 1, L3): true while the walk
 	// refused at the entrance, whether its go landed or not.
 	EntranceTried bool `json:"entrance_tried"`
 	// WaitedS is how long the revive waited for the point to go quiet: the 120 s check plus the D-C re-reads, in

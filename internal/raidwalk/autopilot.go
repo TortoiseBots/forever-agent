@@ -747,7 +747,7 @@ func DecideAutoAction(o AutoObservation, r AutoRunState, now time.Time, stall ti
 			d := AutoDecision{Action: AutoRestart, Reuse: true, Backoff: AutoBackoff(r.FastFailures), Reason: reason}
 			// A practice walk that keeps freezing without ever exiting is torn down and relaunched like any stall, and
 			// the relaunch spends the same persisted budget as an exit relaunch (finish counts it from
-			// PracticeRelaunch): without that, a frozen practice relaunches forever (Codex HIGH, round 1).
+			// PracticeRelaunch): without that, a frozen practice relaunches forever (round 1).
 			if r.Goal.Kind == "practice" {
 				if r.PracticeRelaunches >= AutoPracticeRelaunches {
 					return AutoDecision{Action: AutoStop, Escalate: true,

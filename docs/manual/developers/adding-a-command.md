@@ -4,7 +4,7 @@ title: Adding a command
 description: How to add a top-level or subcommand to the forever-agent CLI, with the help line, the scope, the exit codes and the tests it must pass.
 tags: [developers, cli, commands, guide]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:38:33Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:38:33Z }
 sources:
   - id: main
     resource: cmd/forever-agent/main.go

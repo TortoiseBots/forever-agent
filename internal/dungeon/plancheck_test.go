@@ -349,7 +349,7 @@ func TestPlanCheckTunedLook(t *testing.T) {
 	}
 }
 
-// Velratha's pull group 9 (ZF batch 2, Haiku s2): the pack at 1636 1105 stands off the mesh, the path ends at 1625.6 1109.3, and the look
+// Velratha's pull group 9 (ZF batch 2, s2): the pack at 1636 1105 stands off the mesh, the path ends at 1625.6 1109.3, and the look
 // point 21 yd back from there was 31 yd from the pack (the live move ended at 1605.47 1104.17, the run stopped on "could not get a view").
 // LookPoint moves it up the path to the first point within the view.
 func TestLookPointStaysWithinView(t *testing.T) {

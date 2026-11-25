@@ -4,7 +4,7 @@ title: Where the old bundle went
 description: Every page of the former docs/okf bundle, its class, and the page in this manual that now holds it.
 tags: [developers, docs, migration, history]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:55:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T21:55:00Z }
 sources:
   - id: bundle
     resource: docs/manual/index.md

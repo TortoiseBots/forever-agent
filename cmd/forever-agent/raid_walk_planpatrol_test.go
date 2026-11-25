@@ -125,7 +125,7 @@ func TestPlanPatrolWithoutOneGroupKeepsBlockingAndSaysSo(t *testing.T) {
 	}
 }
 
-// Codex HIGH (round 4): a same-entry mob first seen far off, dead, must not retire a live patrol that the frames never saw.
+// Round 4: a same-entry mob first seen far off, dead, must not retire a live patrol that the frames never saw.
 func TestPlanPatrolDeadSameEntryElsewhereKeepsBlocking(t *testing.T) {
 	plan := planPatrolPlan()
 	// The dead mob was first seen 500 yd out; its last row (at the path's centre) is no reason to bind it.

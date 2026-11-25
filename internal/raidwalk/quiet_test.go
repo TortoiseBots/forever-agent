@@ -51,7 +51,7 @@ func quietProven(units []world.Unit, patrols []QuietPatrol, p dungeon.Point, hom
 	return quietProvenAt(units, patrols, p, nil, homes)
 }
 
-// Codex HIGH (forever-agent#360): stillness is not proof of home. A paused
+// (forever-agent#360): stillness is not proof of home. A paused
 // patrol at 31-45 yd passed the old stillness check, and the raid could be
 // summoned next to it. The idle exemption now needs a proven home: a plan
 // spawn (by spawn guid when the plan names one, else by entry) within 3 yd of
@@ -212,7 +212,7 @@ func TestQuietAt(t *testing.T) {
 
 // D-A (walk 25): the refusal was a mob standing at its own spawn 44.6 yd from the revive point, not fighting: an idle
 // unit beyond the landing reach does not block the revive — once two reads quietIdleHold apart saw it idle at the same
-// spot (review round 1, Opus M1: one read is no proof, the mob may start to move next).
+// spot (review round 1, M1: one read is no proof, the mob may start to move next).
 func TestQuietAtIgnoresIdleUnitBeyondReach(t *testing.T) {
 	p := dungeon.Point{}
 	u := hostileAt("Razzashi Venombrood", 44.6, false, false)
@@ -225,7 +225,7 @@ func TestQuietAtIgnoresIdleUnitBeyondReach(t *testing.T) {
 	}
 }
 
-// TestQuietAtIdleNeedsTwoReads (review round 1, Opus M1): D-A's exemption is not an idle-ness test but a
+// TestQuietAtIdleNeedsTwoReads (review round 1, M1): D-A's exemption is not an idle-ness test but a
 // idle-at-home one — the same unit must be seen idle twice, quietIdleHold apart, within quietIdleMoveYd of the same
 // position. A unit idle on read 1 and moving on read 2 was never idle at home, so read 1 does not exempt it.
 func TestQuietAtIdleNeedsTwoReads(t *testing.T) {
@@ -275,7 +275,7 @@ func TestQuietAtIdleNeedsTwoReads(t *testing.T) {
 	}
 }
 
-// Codex round 3: the two reads must be consecutive evidence. A unit missing from a read, a read too long ago, or a
+// Round 3: the two reads must be consecutive evidence. A unit missing from a read, a read too long ago, or a
 // failed read in between starts the pair over.
 func TestQuietAtIdlePairNeedsFreshConsecutiveReads(t *testing.T) {
 	p := dungeon.Point{}

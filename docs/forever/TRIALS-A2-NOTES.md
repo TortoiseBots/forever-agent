@@ -73,7 +73,7 @@ which the runner does not start).
 
 ## Fix round A2 (review findings)
 
-Codex's five and Gemini's nineteen, each verified against the code and the
+The first review's five and the second review's nineteen, each verified against the code and the
 Python runner, with a failing test first where the finding was real.
 
 | # | finding | fix/reject (one line) |
@@ -105,7 +105,7 @@ Python runner, with a failing test first where the finding was real.
 | G20 | `TestRepeatLostOnDisconnect` `&&` | FIX: asserts `collect.Lost() != ""` directly (the `&&` wording was wrong: the old test already failed when neither fired; the hook var is gone). |
 | G21 | no `run`/`cleanup` execution tests | FIX: `TestCleanupReleasesLeases` and `TestTrialsCleanupNoSlotsFileFailsLoud` cover cleanup+release end to end (a live `run` needs a serve per slot, out of scope). |
 
-## Fix round A2-R2 (Codex re-check findings)
+## Fix round A2-R2 (re-check findings)
 
 | # | finding | fix (one line) |
 |---|---|---|

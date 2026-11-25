@@ -4,7 +4,7 @@ title: Decision captures
 description: What the TortoiseBots observability daemon records and how pulls carry it home.
 tags: [turtle, decisions, dashboard]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:46:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:46:00Z }
 sources:
   - id: tbdash-client
     resource: internal/tbdash/client.go

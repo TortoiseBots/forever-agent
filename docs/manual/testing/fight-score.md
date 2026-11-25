@@ -4,7 +4,7 @@ title: fight-score
 description: Score a finished fight JSON from the dashboard with the fight debugger's two tank checks and the class spell oracle.
 tags: [testing, fight-score, tanks, oracle]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:15Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:15Z }
 sources:
   - id: fightscore-cmd
     resource: cmd/forever-agent/fight_score_cmd.go

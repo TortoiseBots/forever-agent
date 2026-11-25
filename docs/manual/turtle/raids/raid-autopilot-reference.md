@@ -4,7 +4,7 @@ title: raid-autopilot reference
 description: Every autopilot flag, the targets.txt format, STOP and YIELD, status.txt, the checkpoint and the exit codes.
 tags: [turtle, raids, autopilot, reference]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:50:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:50:00Z }
 sources:
   - id: auto-cmd
     resource: cmd/forever-agent/raid_autopilot_cmd.go

@@ -4,7 +4,7 @@ title: Contracts
 description: The versioned agreements between forever-agent and a bot module, where they live, and how each side proves it speaks them.
 tags: [developers, contracts, bot-module, protocol]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:38:33Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:38:33Z }
 sources:
   - id: adr1
     resource: docs/adr/0001-agent-talks-to-bots-through-contracts.md

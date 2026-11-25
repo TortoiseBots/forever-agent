@@ -4,7 +4,7 @@ title: Run a raid walk
 description: Pick an until clause, launch the walk, and read its result.
 tags: [turtle, raids, raid-walk]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:35:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:35:00Z }
 sources:
   - id: walk-cmd
     resource: cmd/forever-agent/raid_walk_cmd.go

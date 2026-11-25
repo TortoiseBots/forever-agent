@@ -4,7 +4,7 @@ title: Recover from wipes
 description: Let the walk revive the raid and resume the run after a wipe.
 tags: [turtle, raids, wipe, recovery]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:40:00Z }
 sources:
   - id: walk-cmd
     resource: cmd/forever-agent/raid_walk_cmd.go

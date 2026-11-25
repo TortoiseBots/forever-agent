@@ -90,7 +90,7 @@ The packet is the packed GUID then the uint32 reaction (CombatPackets.h:118-133,
 AI_REACTION_ALERT 0 (pre-aggro, CreatureAI.cpp:156), FRIENDLY 1, HOSTILE 2 (every attack, Unit.cpp:6242),
 AFRAID 3, DESTROY 4 (SharedDefines.h:6636-6642). The parser names all five and refuses short/trailing packets.
 
-Fix round (reviews claude-core-gains-2, codex-core-gains-2): only HOSTILE becomes kind "hostile" (a pull
+Fix round (the cold review and the adversarial review): only HOSTILE becomes kind "hostile" (a pull
 moment); ALERT is its own "alert" kind (stealth notice, not aggro, so a watch counting hostile rows no longer
 flags false accidental pulls); FRIENDLY, AFRAID, DESTROY and unknown values write no row. The reaction joins
 describesMapContent (mapchange.go), so an old-map copy held between the suspend and the resume is dropped at

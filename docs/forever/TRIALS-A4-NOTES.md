@@ -153,7 +153,7 @@ Open assumption (not provable without the server): the live reply for
 module's refusal word. The cause of defect 5 is read from the code and the
 quoted line, not from a live timing trace.
 
-## Review round (cold review + Codex adversarial, 2026-11-21)
+## Review round (cold and adversarial reviews, 2026-11-21)
 
 One fix round for every finding. Each has a test that failed on the tree
 before the fix (`a4_review_test.go`, `a4_defects_test.go`,

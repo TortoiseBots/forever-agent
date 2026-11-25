@@ -110,7 +110,7 @@ func TestNoMobStandsInAPullGroupsRangeUnlisted(t *testing.T) {
 	}
 }
 
-// The check finds what Codex found in the first Wailing Caverns plan: a mob 3 yd from a one-member group, and a boss inside a pack's radius.
+// The check finds what the first Wailing Caverns plan's review found: a mob 3 yd from a one-member group, and a boss inside a pack's radius.
 func TestPackOverlapsFindsAForeignMobAndABoss(t *testing.T) {
 	cs := []creature{
 		{Entry: 1, Name: "Pack", LevelMax: 20, Faction: 14, Pos: dungeon.Point{X: 0, Y: 0, Z: 0}},

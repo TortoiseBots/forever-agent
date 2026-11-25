@@ -158,7 +158,7 @@ The gates ran on the round's final committed tree (clean, no uncommitted changes
 
 ## 6. Fix round: the K4 review findings
 
-Two reviews of the K4 branch (`claude-cli-k`, `codex-cli-k`) found the live pass measuring from the wrong origins,
+Two reviews of the K4 branch (the cold review and the adversarial review) found the live pass measuring from the wrong origins,
 converting walk failures into pass data, ignoring its runtime ceilings, not checking GM replies, a loose allow-list and
 an unfiltered level fill. One go fixed all of them; each fix has a test that failed before it (the failures are quoted
 in section 3).
@@ -174,7 +174,7 @@ in section 3).
 | the level fill trusted any unit and fell back to the entry | only `creature` with the spawn's low-24-bit guid and entry; no entry fallback |
 | every step shared one units slice | each spot gets its own copy |
 | the report mixed partial levels after an abort | the report notes `live stops: N of M read` |
-| the slot's identity was never checked (codex) | `slot.json`'s character must equal the session's `status.character` before any GM line |
+| the slot's identity was never checked (the review) | `slot.json`'s character must equal the session's `status.character` before any GM line |
 | tests mirrored the code | fakes track the session position, fail, refuse and block; the canonical sent lines are asserted |
 
 ### Gates (fix round)

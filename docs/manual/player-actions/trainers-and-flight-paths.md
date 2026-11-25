@@ -4,7 +4,7 @@ title: Trainers and flight paths
 description: Read a trainer's list and buy spells, and read a flight master's nodes and take a taxi flight.
 tags: [player-actions, trainers, taxi, flight-paths, npc]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T02:05:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T02:05:00Z }
 sources:
   - id: trainer-methods
     resource: internal/forever/world/serve_trainer_methods.go

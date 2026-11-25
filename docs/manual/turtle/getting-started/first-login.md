@@ -4,7 +4,7 @@ title: First login
 description: Build turtle-agent, write the settings file, log a character in, and send one RPC call.
 tags: [turtle, getting-started, tutorial, login, rpc, settings]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:25:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:25:00Z }
 sources:
   - id: readme
     resource: README.md

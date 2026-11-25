@@ -77,7 +77,7 @@ func TestScratchKeepsTheAvoidBoxes(t *testing.T) {
 }
 
 // A box that crosses a polygon without holding any of its corners marks it when it covers enough of it: the polygon is clipped by the
-// box, not tested by its corners (Codex review of #211).
+// box, not tested by its corners (#211).
 func TestAvoidBoxCrossingAnEdgeMarksThePolygon(t *testing.T) {
 	p := planner(t, []navfixture.Poly{navfixture.Square(0, 0, 40, 10, 0)})
 	// x 10 to 30 of 0 to 40: half the polygon, and no corner of it inside.

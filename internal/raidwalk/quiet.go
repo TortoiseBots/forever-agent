@@ -19,14 +19,14 @@ import (
 // unit at 30 yd or closer still blocks, and every unit in combat, holding a target or moving keeps the 45/80 yd rules
 // below.
 //
-// Being still proves nothing about where home is (Codex HIGH, forever-agent#360): a patrol that paused at 31-45 yd
+// Being still proves nothing about where home is (forever-agent#360): a patrol that paused at 31-45 yd
 // passed the old stillness check, and the raid could be summoned next to it. So the exemption also needs a proven
 // home (PlanHomeSpawns, from the plan): the unit must stand within quietHomeYd of a plan spawn of its entry — by
 // spawn GUID when the plan names it (a creature's low bits are its spawn guid), else by entry — and units of a group
 // the plan marks as a patrol (PullGroup.Patrol) are NEVER exempt, even at the group's own positions. Without plan
 // spawn data (a nil list) there is no exemption: the strict 45 yd rule holds.
 //
-// The exemption needs TWO reads (review round 1, Opus M1): quietIdleHold is how far apart they must be and
+// The exemption needs TWO reads (review round 1, M1): quietIdleHold is how far apart they must be and
 // quietIdleMoveYd how close to the same spot, so a mob that was idle once and starts to move is not waved through on
 // the strength of one stale sighting.
 //
@@ -45,7 +45,7 @@ const (
 	// quietIdleHold / quietIdleMoveYd are D-A's two-read rule.
 	quietIdleHold   = 5 * time.Second
 	quietIdleMoveYd = 1
-	// quietIdleMaxGap bounds how old the first of the two reads may be (Codex round 3): a sighting from long ago,
+	// quietIdleMaxGap bounds how old the first of the two reads may be (round 3): a sighting from long ago,
 	// or from before a stretch of failed reads, is no evidence about the unit now.
 	quietIdleMaxGap = 30 * time.Second
 	// quietCritterHP is the top of a critter's max-HP band, the place phase's own (placeCritterHP): a level-1 unit
@@ -273,7 +273,7 @@ func (homes QuietHomeSpawns) atHome(u *world.Unit) bool {
 }
 
 // QuietIdleReads is the revive's memory of the last read that saw each hostile idle at home: D-A's exemption needs the
-// unit seen idle twice, quietIdleHold apart and within quietIdleMoveYd of the same position (review round 1, Opus M1).
+// unit seen idle twice, quietIdleHold apart and within quietIdleMoveYd of the same position (review round 1, M1).
 type QuietIdleReads struct {
 	prev map[string]quietIdleAt
 }
@@ -369,8 +369,8 @@ func QuietBlockers(units []world.Unit, patrols []QuietPatrol, p dungeon.Point, i
 		seen[strings.ToUpper(u.GUID.String())] = true
 		d := dist3(p, dungeon.Point{X: u.X, Y: u.Y, Z: u.Z})
 		// D-A (walk 25, two reads since review round 1): an idle unit beyond the landing reach never blocks the revive,
-		// but only once two reads quietIdleHold apart saw it idle at the same spot, and only at its proven home (Codex
-		// HIGH). idleHome records this read either way; a nil tracker, or no plan home, exempts nothing.
+		// but only once two reads quietIdleHold apart saw it idle at the same spot, and only at its proven home
+		// (HIGH). idleHome records this read either way; a nil tracker, or no plan home, exempts nothing.
 		home := idle != nil && idle.idleHome(u, now) && homes.atHome(u)
 		if home && d > quietIdleYd {
 			continue
@@ -382,7 +382,7 @@ func QuietBlockers(units []world.Unit, patrols []QuietPatrol, p dungeon.Point, i
 			rs = append(rs, ranked{b: unitBlocker(u, d), rank: 1, key: d})
 		}
 	}
-	// Snapshot-aware (Codex round 3): a unit this complete read did not see as a live hostile loses its earlier
+	// Snapshot-aware (round 3): a unit this complete read did not see as a live hostile loses its earlier
 	// sighting, so one that vanished, died or respawned needs two fresh reads again.
 	if idle != nil {
 		for k := range idle.prev {

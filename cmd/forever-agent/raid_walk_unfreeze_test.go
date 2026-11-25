@@ -329,7 +329,7 @@ func TestPlaceUnfreezeOffSendsNothing(t *testing.T) {
 	}
 }
 
-// F6 and Codex high: a `.summon` that fails once is logged as a failure, spends nothing, and the hire is tried again
+// F6: a `.summon` that fails once is logged as a failure, spends nothing, and the hire is tried again
 // on a later poll at least 5 s on (polls 3 s apart here), where the summon takes.
 func TestPlaceUnfreezeSummonFailsOnceThenSucceeds(t *testing.T) {
 	sc := newUnfreezeScene(t, time.Second)
@@ -573,7 +573,7 @@ func TestPlaceUnfreezeFailedViewKeepsThePollTime(t *testing.T) {
 	}
 }
 
-// Codex high (round 2): the commander's `.go` is accepted at once but lands 2 s later. The summon must wait for the
+// Round 2: the commander's `.go` is accepted at once but lands 2 s later. The summon must wait for the
 // landing (it lands the hire at the commander), and a landing that never comes is a `.go` failure with no summon.
 func TestPlaceUnfreezeWaitsForTheLanding(t *testing.T) {
 	sc := newUnfreezeScene(t, 6*time.Second)

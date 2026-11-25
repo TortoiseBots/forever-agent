@@ -1,8 +1,8 @@
 package world
 
 // The fix round over serve W2-W4: every finding of the two reviews has a test here (or beside the code it covers)
-// that fails on the code the reviews read. The numbers in the comments are the finding numbers of the cold review
-// (claude-serve-w2-w4.md); the Codex review's three findings are the GM bypass (1), the per-link capture bound (8)
+// that fails on the code the reviews read. The numbers in the comments are the finding numbers of the cold review;
+// the adversarial review's three findings are the GM bypass (1), the per-link capture bound (8)
 // and the follow lifecycle and map identity (6, 11).
 
 import (
@@ -289,7 +289,7 @@ func TestServeFollowSurvivesAReconnect(t *testing.T) {
 	f.wait(t)
 }
 
-// (Codex) A follow loop never outlives the daemon: it is derived from the daemon's own lifetime and ended with it.
+// A follow loop never outlives the daemon: it is derived from the daemon's own lifetime and ended with it.
 func TestServeFollowEndsWithTheDaemon(t *testing.T) {
 	f := farLeader(t)
 	f.serveLeaderX = 1100

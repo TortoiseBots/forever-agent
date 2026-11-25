@@ -4,7 +4,7 @@ title: Watch the agent in 3D
 description: Open the dashboard's 3D view, follow a running serve or replay a recorded run, understand the markers and the camera, and know what stage 1 does not draw yet.
 tags: [bots-and-raids, dashboard, 3d, replay]
 status: draft
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T04:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T04:30:00Z }
 sources:
   - id: view3d-go
     resource: internal/dashboard/view3d.go

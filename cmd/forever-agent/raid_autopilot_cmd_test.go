@@ -1426,7 +1426,7 @@ func TestAutoOneBadLineDoesNotBlockTheOtherEdits(t *testing.T) {
 	}
 }
 
-// Opus round 1 (HIGH): the live re-read accepts done a + new b on a's slot, so the restart that follows must too. The
+// Round 1 (HIGH): the live re-read accepts done a + new b on a's slot, so the restart that follows must too. The
 // start marks the ids the checkpoint holds as done or stopped as inactive, like the re-read does.
 func TestAutoRestartAcceptsADoneIDsSlotTaken(t *testing.T) {
 	f := newAutoFixture(t)
@@ -1448,7 +1448,7 @@ func TestAutoRestartAcceptsADoneIDsSlotTaken(t *testing.T) {
 	}
 }
 
-// Opus round 1 (HIGH): the first line in file order must not win a slot over a live id. A new line inserted ABOVE the
+// Round 1 (HIGH): the first line in file order must not win a slot over a live id. A new line inserted ABOVE the
 // running id's line is the skipped one; the running id keeps its slot and never gets a second launch beside it.
 func TestAutoNewLineAboveARunningIDDoesNotTakeItsSlot(t *testing.T) {
 	f := newAutoFixture(t)
@@ -1477,7 +1477,7 @@ func TestAutoNewLineAboveARunningIDDoesNotTakeItsSlot(t *testing.T) {
 	}
 }
 
-// Opus round 1 (MEDIUM): a done id is inactive whoever holds its slot's lease now. b runs on a's slot (lease held by
+// Round 1 (MEDIUM): a done id is inactive whoever holds its slot's lease now. b runs on a's slot (lease held by
 // b), and an unrelated new line must not make a count as active again and warn about b.
 func TestAutoDoneIDStaysInactiveWhileANewIDHoldsItsLease(t *testing.T) {
 	f := newAutoFixture(t)
@@ -1500,7 +1500,7 @@ func TestAutoDoneIDStaysInactiveWhileANewIDHoldsItsLease(t *testing.T) {
 	}
 }
 
-// Opus round 1 (MEDIUM): a skipped line is re-read every tick only while some id's state changed; an idle supervisor
+// Round 1 (MEDIUM): a skipped line is re-read every tick only while some id's state changed; an idle supervisor
 // with a skipped line does not re-parse the file (and so does not take a lease check per tick).
 func TestAutoSkippedLineIsNotRereadWhileNothingChanges(t *testing.T) {
 	f := newAutoFixture(t)
@@ -1522,7 +1522,7 @@ func TestAutoSkippedLineIsNotRereadWhileNothingChanges(t *testing.T) {
 	}
 }
 
-// Opus round 1 (MEDIUM): the fresh-instance retry after exit 29 is once per GOAL, not once per streak: a goal whose
+// Round 1 (MEDIUM): the fresh-instance retry after exit 29 is once per GOAL, not once per streak: a goal whose
 // fresh retry placed and ran, then hit exit 29 again on a later reuse placement, stops the id.
 func TestAutoExit29RetryIsOncePerGoal(t *testing.T) {
 	f := newAutoFixture(t)
@@ -2953,7 +2953,7 @@ func tickN(s *autoSupervisor, n int) {
 	}
 }
 
-// Codex round 2 (HIGH): a running a gains one malformed line, and a new b is added on a's slot. a's bad line keeps
+// Round 2 (HIGH): a running a gains one malformed line, and a new b is added on a's slot. a's bad line keeps
 // its live state, and that state keeps its slot: b is skipped, never launched beside a (only c, on its own slot, is).
 func TestAutoBadLineIDKeepsItsSlotFromANewID(t *testing.T) {
 	f := newAutoFixture(t)
@@ -2980,7 +2980,7 @@ func TestAutoBadLineIDKeepsItsSlotFromANewID(t *testing.T) {
 	}
 }
 
-// Opus round 2 (HIGH-1): a is done, b runs on a's slot, and a's goal line is edited. The edited done id is a new id
+// Round 2 (HIGH-1): a is done, b runs on a's slot, and a's goal line is edited. The edited done id is a new id
 // for the slot check: its line is skipped as b's slot, and it is never queued to launch beside b.
 func TestAutoEditedDoneIDDoesNotTakeARunningIDsSlot(t *testing.T) {
 	f := newAutoFixture(t)
@@ -3008,7 +3008,7 @@ func TestAutoEditedDoneIDDoesNotTakeARunningIDsSlot(t *testing.T) {
 	}
 }
 
-// Opus round 2 (MEDIUM-1): an edited active id moving onto a slot another live id runs on is skipped, whatever the
+// Round 2 (MEDIUM-1): an edited active id moving onto a slot another live id runs on is skipped, whatever the
 // file order; both runs go on and nothing is launched.
 func TestAutoEditedActiveIDMovingOntoAnOccupiedSlotIsSkipped(t *testing.T) {
 	f := newAutoFixture(t)
@@ -3038,7 +3038,7 @@ func TestAutoEditedActiveIDMovingOntoAnOccupiedSlotIsSkipped(t *testing.T) {
 	}
 }
 
-// Opus round 2 (fix 2): an escalated id whose checkpoint's child still answers holds its slot at a restart. The
+// Round 2 (fix 2): an escalated id whose checkpoint's child still answers holds its slot at a restart. The
 // escalation is a person's decision, not a teardown: a run that is still live keeps its slot, or a new line would be
 // launched beside it. A dead child frees the slot.
 func TestAutoStartEscalatedIDWithALiveChildHoldsItsSlot(t *testing.T) {
@@ -3065,7 +3065,7 @@ func TestAutoStartEscalatedIDWithALiveChildHoldsItsSlot(t *testing.T) {
 	}
 }
 
-// Opus round 2 (LOW-2): a checkpointed id whose last goal's boss is dead (not yet marked done) holds no slot at a
+// Round 2 (LOW-2): a checkpointed id whose last goal's boss is dead (not yet marked done) holds no slot at a
 // start: a new id on its slot is accepted.
 func TestAutoStartBossDeadLastGoalIsInactive(t *testing.T) {
 	f := newAutoFixture(t)
@@ -3338,7 +3338,7 @@ func TestBossWipeFreshProgressPastOldBestResetsTheCount(t *testing.T) {
 	}
 }
 
-// Round 4 (Codex HIGH): an exit-26 retry between the boss wipe and placement loses the fresh start. The fresh-instance
+// Round 4 (HIGH): an exit-26 retry between the boss wipe and placement loses the fresh start. The fresh-instance
 // relaunch after the wipe exits 26 before placement, and the cap retry must still start from the goal's --from in a
 // fresh instance, never from bestStep (the boss row). bestStep still survives: a later run past it counts as progress.
 func TestBossWipeFreshCapRetryKeepsGoalStart(t *testing.T) {
@@ -3735,7 +3735,7 @@ func TestAutoBossWipeRestartLeavesPlaceFailsAlone(t *testing.T) {
 	}
 }
 
-// Round 2 (Codex HIGH): the wipe-at-boss check used max(run.log step, summary step) but Progressed read only the
+// Round 2 (HIGH): the wipe-at-boss check used max(run.log step, summary step) but Progressed read only the
 // cached run.log step, so a summary step beyond it counted as a boss wipe with NO progress and could escalate an id
 // that advanced. One effective step (the larger of the two) now drives all of it. Here attempt 2's run.log is behind
 // its summary (100 vs 397); the summary's 397 is progress over attempt 1's 396, so the count restarts and the id is

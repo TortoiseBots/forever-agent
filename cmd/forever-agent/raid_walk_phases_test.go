@@ -510,7 +510,7 @@ func TestRaidWalkSelfRegroupSummonsNobody(t *testing.T) {
 	}
 }
 
-// TestRaidWalkReviveLandedCheck pins the landing predicate (Codex HIGH, F4 round 2, walk 24 C1): the session
+// TestRaidWalkReviveLandedCheck pins the landing predicate (F4 round 2, walk 24 C1): the session
 // reports the `.go` destination at once, flagged ZUnknown until the server sends a position, so only a settled
 // status counts. x/y must be within 10 yd and z within 30 yd (dropToFloor may move z), on the plan's map. A
 // teleport the session has ACKED (TeleportSeq > beforeSeq) is a landing over a navmesh hole, where the z guess
@@ -572,7 +572,7 @@ func TestRaidWalkReviveLandedCheck(t *testing.T) {
 			t.Fatalf("far go: %s: reviveLanded = %v, want %v", c.name, got, c.want)
 		}
 	}
-	// A far go publishes the new map and the sequence bump in one update after the worldport ack (Codex HIGH): a
+	// A far go publishes the new map and the sequence bump in one update after the worldport ack: a
 	// map change with an equal sequence is not a landing, and an unread sequence lands nothing either.
 	for _, c := range []struct {
 		name      string
@@ -612,7 +612,7 @@ func TestRaidWalkReviveLandedCheck(t *testing.T) {
 	}
 }
 
-// TestRaidWalkReviveWaitsForTheSettledLanding (Codex HIGH, F4 round 2): the status reports the `.go` destination
+// TestRaidWalkReviveWaitsForTheSettledLanding (F4 round 2): the status reports the `.go` destination
 // at once with ZUnknown (or Falling) set and settles a few polls later. No summon may leave before it settles.
 func TestRaidWalkReviveWaitsForTheSettledLanding(t *testing.T) {
 	for _, falling := range []bool{false, true} {
@@ -648,7 +648,7 @@ func TestRaidWalkReviveWaitsForTheSettledLanding(t *testing.T) {
 	}
 }
 
-// TestRaidWalkEntranceFallbackWaitsForTheLanding (Codex MEDIUM-2): the first revive point never gets quiet, so the
+// TestRaidWalkEntranceFallbackWaitsForTheLanding (MEDIUM-2): the first revive point never gets quiet, so the
 // revive falls back to the entrance. That second `.go xyz` lags like the first, and the summons must wait for ITS
 // landing (the old waitMap saw only the map id, already right, and summoned from the old spot).
 func TestRaidWalkEntranceFallbackWaitsForTheLanding(t *testing.T) {
@@ -788,7 +788,7 @@ func TestRaidWalkReviveLandsAfterAFarTeleport(t *testing.T) {
 	}
 }
 
-// TestRaidWalkReviveWaitsForTheFreshAppearLanding (review round 1, Codex HIGH): the commander may already stand on the
+// TestRaidWalkReviveWaitsForTheFreshAppearLanding (review round 1): the commander may already stand on the
 // plan's map (in a copy of its own), so the map id proves nothing about an `.appear`. The `.go xyz` may leave only
 // after a FRESH landing next to the hire; here the appear lands 3 status reads late.
 func TestRaidWalkReviveWaitsForTheFreshAppearLanding(t *testing.T) {
@@ -898,7 +898,7 @@ func ghostRevive(t *testing.T, statusFails int) (*fixture, int) {
 	return f, f.run(context.Background())
 }
 
-// TestRaidWalkReviveGhostsOffTheMapKeepTheFarGo (review round 2, Opus M-new): hires released to the graveyard show on
+// TestRaidWalkReviveGhostsOffTheMapKeepTheFarGo (review round 2, M-new): hires released to the graveyard show on
 // another map, so there is nobody to appear at. The normal revive keeps the far go and its summons (each resolves to
 // the hire's own bound copy) and notes that its quiet check was blind.
 func TestRaidWalkReviveGhostsOffTheMapKeepTheFarGo(t *testing.T) {
@@ -918,7 +918,7 @@ func TestRaidWalkReviveGhostsOffTheMapKeepTheFarGo(t *testing.T) {
 	}
 }
 
-// TestRaidWalkReviveStatusRetriedBeforeTheGo (review round 2, Codex MEDIUM): a failed status read must not be taken
+// TestRaidWalkReviveStatusRetriedBeforeTheGo (review round 2): a failed status read must not be taken
 // for the plan's map (that picks the near rule, and a far go then never lands). Two failed reads are retried and the
 // revive goes on; three end a normal revive with exit 19.
 func TestRaidWalkReviveStatusRetriedBeforeTheGo(t *testing.T) {
@@ -942,7 +942,7 @@ func TestRaidWalkReviveStatusRetriedBeforeTheGo(t *testing.T) {
 	}
 }
 
-// TestRaidWalkReviveRetriesThePreAppearRead (review round 2, Opus L1): one failed status read before the appear is
+// TestRaidWalkReviveRetriesThePreAppearRead (review round 2, L1): one failed status read before the appear is
 // retried and the appear still counts; two leave the commander unjoined, and a normal revive stops.
 func TestRaidWalkReviveRetriesThePreAppearRead(t *testing.T) {
 	for _, c := range []struct {
@@ -972,7 +972,7 @@ func TestRaidWalkReviveRetriesThePreAppearRead(t *testing.T) {
 	}
 }
 
-// TestRaidWalkSelfRegroupJoinsAfterTheRevives (review round 2, Opus L4): an unjoined self-regroup retries the join once
+// TestRaidWalkSelfRegroupJoinsAfterTheRevives (review round 2, L4): an unjoined self-regroup retries the join once
 // its revives have the hires up on the plan's map, and notes the result.
 func TestRaidWalkSelfRegroupJoinsAfterTheRevives(t *testing.T) {
 	f, _ := selfRegroupWipeWith(t, nil, func(f *fixture) {
@@ -1004,7 +1004,7 @@ func TestRaidWalkSelfRegroupJoinsAfterTheRevives(t *testing.T) {
 	}
 }
 
-// TestRaidWalkAppearLandedCheck pins the fresh-landing predicate of a revive `.appear` (review round 1, Codex HIGH):
+// TestRaidWalkAppearLandedCheck pins the fresh-landing predicate of a revive `.appear` (review round 1):
 // on the plan's map, within 15 yd (x/y) of the hire's last frame position, and moved since the read before the appear.
 func TestRaidWalkAppearLandedCheck(t *testing.T) {
 	hire := botPos{mapID: 309, x: 100, y: 100, z: 10}
@@ -1088,7 +1088,7 @@ func TestRaidWalkReviveNeverLanding(t *testing.T) {
 	}
 }
 
-// TestRaidWalkReviveLandingHonoursTheRecoveryDeadline (Codex MEDIUM-2): the landing wait is bounded by the
+// TestRaidWalkReviveLandingHonoursTheRecoveryDeadline (MEDIUM-2): the landing wait is bounded by the
 // recovery's entry deadline, not only by its own 30 s. The fake clock jumps to 10 s before the deadline at the
 // recovery's go (--wipe-rest 30s: deadline = entry + 90s), the landing never comes, and the walk must end with the
 // timed-out note within a few seconds, not after the full 30 s landing wait.
@@ -1154,7 +1154,7 @@ func TestRaidWalkNoteFramesWriteErrorOnce(t *testing.T) {
 	}
 }
 
-// TestRaidWalkEntranceGoNeverLands (review round 1, Codex/Opus H1): the entrance fallback's `.go xyz` is accepted
+// TestRaidWalkEntranceGoNeverLands (review round 1, H1): the entrance fallback's `.go xyz` is accepted
 // (the map id follows) but the server never lands it, so the commander still stands at the revive point. The old code
 // set cur = e before the landing wait and then let D-C read e, whose units the walk could see from p said quiet: a
 // "not revived" refusal became a summon with the commander still at p. Now only a LANDED go makes the entrance the
@@ -1241,7 +1241,7 @@ func TestRaidWalkEntranceGoNeverLands(t *testing.T) {
 	}
 }
 
-// TestRaidWalkQuietPatrolExemptionIsPerPoint (review round 1, Codex H2): the patrol exemption is "its visible member
+// TestRaidWalkQuietPatrolExemptionIsPerPoint (review round 1, H2): the patrol exemption is "its visible member
 // is 80 yd out and leaving", measured from the checked point. A stationary member whose distance grows only because
 // the walk switched its point (p -> entrance) is not leaving, so the entrance's read must start from a fresh quiet
 // state. With p's distances kept, the entrance read would wrongly exempt the patrol and revive into it.
@@ -1293,7 +1293,7 @@ func TestRaidWalkQuietPatrolExemptionIsPerPoint(t *testing.T) {
 	}
 }
 
-// TestRaidWalkReviveStepIsThePointUsed (review round 1, Opus L3): the refusal's start_step is the step of the revive
+// TestRaidWalkReviveStepIsThePointUsed (review round 1, L3): the refusal's start_step is the step of the revive
 // point the walk actually used, not the --from step it resolved: a plain walk revives at the plan's first positioned
 // row, whatever step the run starts on.
 func TestRaidWalkReviveStepIsThePointUsed(t *testing.T) {
@@ -1319,7 +1319,7 @@ func TestRaidWalkReviveStepIsThePointUsed(t *testing.T) {
 	}
 }
 
-// TestRaidWalkQuietWaitInterrupt (review round 1, Opus L2): an operator's interrupt during the D-C wait is the
+// TestRaidWalkQuietWaitInterrupt (review round 1, L2): an operator's interrupt during the D-C wait is the
 // interrupted ending (exit 18, "interrupted"), never a "not revived" refusal with a revive_refusal: the walk did not
 // lose the revive, it was stopped.
 func TestRaidWalkQuietWaitInterrupt(t *testing.T) {
@@ -1350,7 +1350,7 @@ func TestRaidWalkQuietWaitInterrupt(t *testing.T) {
 	}
 }
 
-// TestRaidWalkSelfRegroupQuietWaitIsCapped (review round 1, Opus M2): a self-regroup's D-C wait ends no later than
+// TestRaidWalkSelfRegroupQuietWaitIsCapped (review round 1, M2): a self-regroup's D-C wait ends no later than
 // selfRegroupQuietCap past the wipe. TB's own regroup is long over by then, so a point still blocked is not about to
 // be freed by it, and the walk refuses instead of waiting the recovery out.
 func TestRaidWalkSelfRegroupQuietWaitIsCapped(t *testing.T) {
@@ -1386,7 +1386,7 @@ func TestRaidWalkSelfRegroupQuietWaitIsCapped(t *testing.T) {
 	}
 }
 
-// TestRaidWalkGhostsRecheckAfterTheWait (review round 1, Opus M2): the D-C wait is long, so the hires' maps are
+// TestRaidWalkGhostsRecheckAfterTheWait (review round 1, M2): the D-C wait is long, so the hires' maps are
 // re-read when it is over. With one hire released to the graveyard during the wait the walk takes the ghosts path: it
 // skips the late join, which would `.appear` at a hire that is no longer on the plan's map.
 func TestRaidWalkGhostsRecheckAfterTheWait(t *testing.T) {

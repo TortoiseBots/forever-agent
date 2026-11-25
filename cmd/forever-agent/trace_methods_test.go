@@ -100,21 +100,21 @@ func TestDungeonRunWritesATraceUnderTheRunID(t *testing.T) {
 // A run started with run_meta carries it in the report and in the trace header beside trace_meta.
 func TestDungeonRunWritesRunMeta(t *testing.T) {
 	r, dir := traceRig(t)
-	r.call("dungeon_run", `{"name":"rig","run_id":"r-meta-1","trace_meta":{"tb_sha":"abc"},"run_meta":{"model":"haiku","effort":"max","run":"zf-ab-2-s5"}}`)
+	r.call("dungeon_run", `{"name":"rig","run_id":"r-meta-1","trace_meta":{"tb_sha":"abc"},"run_meta":{"model":"worker","effort":"max","run":"zf-ab-2-s5"}}`)
 	st := r.eventually("dungeon_status", "{}", func(m map[string]any) bool {
 		ds := m["result"].(map[string]any)
 		return ds["state"] == "failed" && ds["running"] == false
 	})["result"].(map[string]any)
 	rep := st["report"].(map[string]any)
 	rm, _ := rep["run_meta"].(map[string]any)
-	if rm["model"] != "haiku" || rm["effort"] != "max" || rm["run"] != "zf-ab-2-s5" {
+	if rm["model"] != "worker" || rm["effort"] != "max" || rm["run"] != "zf-ab-2-s5" {
 		t.Fatalf("report run_meta %v", rm)
 	}
 	f, err := trace.Read(filepath.Join(dir, "r-meta-1.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Header.Meta["tb_sha"] != "abc" || f.Header.Meta["run_model"] != "haiku" || f.Header.Meta["run_effort"] != "max" || f.Header.Meta["run_label"] != "zf-ab-2-s5" {
+	if f.Header.Meta["tb_sha"] != "abc" || f.Header.Meta["run_model"] != "worker" || f.Header.Meta["run_effort"] != "max" || f.Header.Meta["run_label"] != "zf-ab-2-s5" {
 		t.Fatalf("header meta %v", f.Header.Meta)
 	}
 }

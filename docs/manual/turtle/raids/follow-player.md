@@ -4,7 +4,7 @@ title: Follow the lead bot as a player
 description: Walk behind a bot-led run on its trail, hold, regroup and stop rules.
 tags: [turtle, raids, follow, guide]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:45:00Z }
 sources:
   - id: follow
     resource: internal/dungeon/follow.go

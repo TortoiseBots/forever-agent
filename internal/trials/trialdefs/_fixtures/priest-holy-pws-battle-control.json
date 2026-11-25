@@ -60,7 +60,7 @@
       "min_n": 0,
       "min_opportunity_s": 0,
       "pass_if": ">= 1",
-      "source": "briefs-omp/trials-3-rules-healers.md",
+      "source": "trial notes: healer rules, round 3",
       "why_expect": "control: Battle Stance is no tank, the guard must not fire"
     }
   ],

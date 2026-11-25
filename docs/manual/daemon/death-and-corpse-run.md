@@ -4,7 +4,7 @@ title: Death and the corpse run
 description: "Read the character's death state and drive a corpse run: release the spirit, find the corpse, run back, reclaim it, accept a resurrect, and run the live death checks."
 tags: [daemon, death, corpse, methods]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
 sources:
   - id: serve-death
     resource: internal/forever/world/serve_session_methods.go

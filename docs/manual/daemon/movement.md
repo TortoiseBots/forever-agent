@@ -4,7 +4,7 @@ title: Movement
 description: Move the character with straight walks, navmesh routes and follow loops, ask the navmesh what ground is walkable, and check a walk live.
 tags: [daemon, movement, navmesh, follow, pathing]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T04:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T04:40:00Z }
 sources:
   - id: serve-movement
     resource: internal/forever/world/serve_session.go

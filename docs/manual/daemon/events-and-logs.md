@@ -4,7 +4,7 @@ title: Events and logs
 description: Read the combat log, the session's ordered event stream and the chat log, with cursors and long-poll waits.
 tags: [daemon, events, logs, combat, chat]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:07Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:07Z }
 sources:
   - id: combatlog
     resource: internal/forever/world/combatlog.go

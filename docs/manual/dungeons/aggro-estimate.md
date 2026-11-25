@@ -4,7 +4,7 @@ title: How the aggro estimate works
 description: The aggro radius, packs, call-for-help ring and drag sweep an offline check counts, and what the estimate cannot see.
 tags: [dungeons, aggro, patrols, checks]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:42:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T21:42:00Z }
 sources:
   - id: aggroest
     resource: internal/aggroest/aggroest.go

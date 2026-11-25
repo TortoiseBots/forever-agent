@@ -4,7 +4,7 @@ title: Rogue, hunter, retribution paladin, warlock
 description: What each melee and ranged damage rotation casts, when, and where it stands.
 tags: [turtle, combat, dps, rogue, hunter, paladin, warlock]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:45:00Z }
 sources:
   - id: rogue-go
     resource: internal/brain/rogue.go

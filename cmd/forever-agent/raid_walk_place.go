@@ -1468,7 +1468,7 @@ func (w *walk) placeLife(name string, now time.Time) reviveSeen {
 // arrive. The lines are the wipe-end fast path's own shape (reviveDeadHires): one `.revive <name>` per hire a frame
 // read from here on does not show alive, 100 ms apart, a failed line retried once. A hire no such frame shows at all is
 // unknown, and unknown is revived too: `.revive` on a living bot is harmless, and skipping it could leave a corpse
-// (Codex r2: a partial frame with one living row hid the other 19 hires). The frames are then read every placeRevivePoll
+// (r2: a partial frame with one living row hid the other 19 hires). The frames are then read every placeRevivePoll
 // for up to placeReviveWait until a frame read after the revive shows every hire ALIVE: a failed, empty or stale read
 // leaves a hire unknown, and unknown at the deadline is not revived. The count still not alive (dead or unknown) comes
 // back for the caller's fast fail. The run is marked ASSISTED: this is a GM assist, not a real clear.

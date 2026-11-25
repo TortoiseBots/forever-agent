@@ -884,8 +884,8 @@ func TestVendorSecondOpenOnTheSameVendorWorks(t *testing.T) {
 	}
 }
 
-// TestVendorBuyNeedsTheItemToArrive: a success answer with no item behind it is unconfirmed, not a purchase (Codex
-// high), and an answer that names another vendor is not this purchase's answer.
+// TestVendorBuyNeedsTheItemToArrive: a success answer with no item behind it is unconfirmed, not a purchase
+// (high), and an answer that names another vendor is not this purchase's answer.
 func TestVendorBuyNeedsTheItemToArrive(t *testing.T) {
 	v := newVendorWorld(t, npc.NPCFlagVendor)
 	v.noItemAfterBuy = true
@@ -914,7 +914,7 @@ func TestVendorBuyNeedsTheItemToArrive(t *testing.T) {
 }
 
 // TestVendorBuyReadsAnInventoryFailure: a full bag refuses a purchase as SMSG_INVENTORY_CHANGE_FAILURE, which the step
-// names instead of waiting out its 5 s (Claude 8).
+// names instead of waiting out its 5 s (finding 8).
 func TestVendorBuyReadsAnInventoryFailure(t *testing.T) {
 	v := newVendorWorld(t, npc.NPCFlagVendor)
 	v.refuseBuyInv = true

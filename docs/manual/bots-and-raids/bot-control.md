@@ -4,7 +4,7 @@ title: Ordering bots
 description: How the agent talks to a bot module, which commands it sends, which of your bots it may order, and the live checks that drive the module end to end.
 tags: [bots-and-raids, bots, orders, commander]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
 sources:
   - id: bot-commands
     resource: contracts/bot-commands/v1/README.md

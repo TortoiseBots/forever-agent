@@ -158,7 +158,7 @@ func testkitToken(t *testing.T, lines ...string) []string {
 // end (FIX-TRIALS-A3): a setup row is ok ONLY on a server read-back. The
 // `blue` bot kit has no Forever item source, so the trial cannot provision
 // gear and ends SKIPPED with needs=bot_items (never PASS) — the false
-// positive the codex review flagged. Consumables prove through `ItemScan`
+// positive the review flagged. Consumables prove through `ItemScan`
 // (exists=yes) and visibility finalizes against the hire's State dm.
 func TestSetupPriestHealLatencyRows(t *testing.T) {
 	s, f := newSetupFake(t)

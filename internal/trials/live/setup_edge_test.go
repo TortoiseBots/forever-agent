@@ -152,7 +152,7 @@ func TestSkipWhenNotABot(t *testing.T) {
 	}
 }
 
-// TestBotGearNeedsScanAndEquip pins codex [high] (FIX-TRIALS-A3): a bot gear
+// TestBotGearNeedsScanAndEquip pins [high] (FIX-TRIALS-A3): a bot gear
 // row is ok ONLY when the run scanned and equipped the wanted kit through a
 // read-back. With no Forever item source for the bot kit there is nothing to
 // scan or equip, so ensureBotGear returns ok=false with a SKIPPED reason (a
@@ -176,7 +176,7 @@ func TestBotGearNeedsScanAndEquip(t *testing.T) {
 	}
 }
 
-// TestShieldUnreadableIsNotOk pins codex [high] (FIX-TRIALS-A3): an
+// TestShieldUnreadableIsNotOk pins [high] (FIX-TRIALS-A3): an
 // unreadable shield state is UNVERIFIED and never ok. The LiveSetup shield
 // check fails the row so the trial is INVALID, never PASS.
 func TestShieldUnreadableIsNotOk(t *testing.T) {
@@ -194,7 +194,7 @@ func TestShieldUnreadableIsNotOk(t *testing.T) {
 	}
 }
 
-// TestQueuedRoleNeedsStateReadBack pins codex [high] (FIX3-TRIALS-A3): a
+// TestQueuedRoleNeedsStateReadBack pins [high] (FIX3-TRIALS-A3): a
 // queued/stored `.tb role` answer only confirms the command was accepted,
 // so bot_role is ok ONLY when a `State` read-back shows the requested role
 // in effect. A stale role or a missing bot leaves the row UNVERIFIED-failed
@@ -245,7 +245,7 @@ func TestQueuedRoleNeedsStateReadBack(t *testing.T) {
 	}
 }
 
-// TestVisibleNeedsStateReadBack pins codex [medium] (FIX-TRIALS-A3): the
+// TestVisibleNeedsStateReadBack pins [medium] (FIX-TRIALS-A3): the
 // visibility commands alone prove nothing. A State answer with no bot that
 // sees the player at a numeric dm keeps the row failed (never a pass).
 func TestVisibleNeedsStateReadBack(t *testing.T) {

@@ -4,7 +4,7 @@ title: Watching bots on a dashboard
 description: Read a server's bot roster dashboard, use the agent's live page with its Positions panel, and see why replaying a recording is Turtle-only.
 tags: [bots-and-raids, dashboard, roster, replay]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T23:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T23:40:00Z }
 sources:
   - id: dash-bots
     resource: cmd/forever-agent/forever_dash_bots.go

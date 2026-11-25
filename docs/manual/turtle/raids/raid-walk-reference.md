@@ -4,7 +4,7 @@ title: raid-walk flags
 description: Every raid-walk flag, its default, and an example.
 tags: [turtle, raids, raid-walk, reference]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:50:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:50:00Z }
 sources:
   - id: walk-cmd
     resource: cmd/forever-agent/raid_walk_cmd.go

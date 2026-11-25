@@ -4,7 +4,7 @@ title: Mail and auction house
 description: Read, take, return and send mail, and browse, buy and sell at the auction house.
 tags: [player-actions, mail, auction, economy]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:00Z }
 sources:
   - id: mail-methods
     resource: internal/forever/world/serve_mail_methods.go

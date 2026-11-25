@@ -4,7 +4,7 @@ title: Install and build
 description: Build forever-agent from source, run its checks, and know what a build without cgo can still do.
 tags: [getting-started, install, build, go]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:31:22Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:31:22Z }
 sources:
   - id: gomod
     resource: go.mod

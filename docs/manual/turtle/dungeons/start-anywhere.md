@@ -4,7 +4,7 @@ title: Start anywhere
 description: Begin a run at any leg or pull group, stage the start first, and pass the safety gates.
 tags: [turtle, dungeon, commander, start, stage]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:35:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:35:00Z }
 sources:
   - id: dungeon-methods
     resource: cmd/forever-agent/dungeon_methods.go

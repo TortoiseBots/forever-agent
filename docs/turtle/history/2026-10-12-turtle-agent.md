@@ -1,7 +1,5 @@
 # turtle-agent Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
 **Goal:** A headless Go client that logs one test character into the Tortoise WoW 1.18.1 server (vanilla 1.12 protocol plus Turtle changes), plays next to the TortoiseBots bots (chat, GM and `.bot` commands, party, target, attack, cast, short walks, GM teleport) and exposes what happens as an ordered event log over local JSON-RPC, so the wow-play-harness can run its MVP scenario with no game window.
 
 **Architecture:** One Go process per logged-in character. `auth` does SRP6 against realmd (build 7272); `worldconn` frames and header-encrypts the world socket (build 5875, rolling XOR); `session` is a single-owner loop that dispatches packets to handlers, which update `objects` (units around the player) and append to `events` (ordered, sequence-numbered); `game` holds pure packet codecs; `rpc` serves loopback JSON-RPC 2.0 over HTTP; `cmd/turtle-agent` wires it together and has a capture mode that records decrypted world packets as test fixtures. A thin Python `HeadlessClient` in `~/wow-play-harness` gives testers the same surface as the real-client harness.
@@ -35,7 +33,7 @@
 - Throttles: realmd allows 15 accounts per IP per 300 s, `MinRealmListDelay = 1`, `WrongPass.MaxCount = 10`; tests reuse one account, request the realm list once per connection and retry a rejected proof at most once.
 - Toolchain: Go 1.27.1 in `~/.local/go`, `GOTOOLCHAIN=local`, no third-party Go modules; `make test` runs gofmt check, vet and `go test -race` with no CI.
 - Live target is a test server at 192.0.2.10; the realmd port is `RealmServerPort` from the test server's `realmd.conf` (template default 3724, realmd.conf.dist.in:27).
-- Every commit message ends with the two lines `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>` and `Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw`.
+- Every commit message names the change only: a subject line and a body when the why needs one. No trailers, no tool or reviewer names.
 
 ## Review Focus
 
@@ -339,9 +337,6 @@ cd ~/turtle-agent && git status --short
 git add go.mod Makefile .gitignore NOTICE cmd/turtle-agent/main.go cmd/turtle-agent/main_test.go
 git commit -F - <<'EOF'
 Skeleton: Go 1.27.1 module, make test, CLI usage and version
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -702,9 +697,6 @@ cd ~/turtle-agent && git status --short
 git add internal/packet
 git commit -F - <<'EOF'
 packet: little-endian reader/writer, packed GUIDs, hex GUID JSON
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -1009,9 +1001,6 @@ cd ~/turtle-agent && git status --short
 git add tools/opcodegen internal/opcode NOTICE
 git commit -F - <<'EOF'
 opcode: 1.12.1 table generated from the core's Opcodes_1_12_1.h
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -1268,9 +1257,6 @@ cd ~/turtle-agent && git status --short
 git add internal/config
 git commit -F - <<'EOF'
 config: settings file with accounts, loopback RPC, redacted printing
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -1680,9 +1666,6 @@ cd ~/turtle-agent && git status --short
 git add internal/auth/srp.go internal/auth/srp_test.go NOTICE
 git commit -F - <<'EOF'
 auth: SRP6 mirroring realmd's unpadded BigNumber hashing
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -2251,9 +2234,6 @@ cd ~/turtle-agent && git status --short
 git add internal/auth/realmd.go internal/auth/realmd_test.go
 git commit -F - <<'EOF'
 auth: realmd login with build 7272, vanilla realm list, one proof retry
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -3044,9 +3024,6 @@ cd ~/turtle-agent && git status --short
 git add internal/worldconn NOTICE
 git commit -F - <<'EOF'
 worldconn: XOR header cipher, 1.12 framing, auth session with addon block
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -3419,9 +3396,6 @@ cd ~/turtle-agent && git status --short
 git add internal/events
 git commit -F - <<'EOF'
 events: ordered event log with exclusive cursors, filters and eviction
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -3743,9 +3717,6 @@ cd ~/turtle-agent && git status --short
 git add internal/capture
 git commit -F - <<'EOF'
 capture: TWCAP1 packet recorder with secret redaction and scan
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -4648,9 +4619,6 @@ cd ~/turtle-agent && git status --short
 git add internal/session NOTICE
 git commit -F - <<'EOF'
 session: char enum, enter world, ping, logout and disconnect handling
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -5035,9 +5003,6 @@ cd ~/turtle-agent && git status --short
 git add cmd/turtle-agent
 git commit -F - <<'EOF'
 cli: login with capture mode and --stay; scrub-check and capture-stats
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -5164,9 +5129,6 @@ cd ~/turtle-agent && git status --short
 git add testdata/captures/m1-login.twcap internal/session/capture_test.go
 git commit -F - <<'EOF'
 Milestone 1 on a test server: login, in world, clean logout; scrubbed login capture
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -5598,9 +5560,6 @@ cd ~/turtle-agent && git status --short
 git add internal/game
 git commit -F - <<'EOF'
 game: chat codecs (incl. Turtle hardcore channel) and name/creature queries
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -6018,9 +5977,6 @@ cd ~/turtle-agent && git status --short
 git add internal/session
 git commit -F - <<'EOF'
 session: chat, whispers, GM/.bot commands; names resolved without reordering
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -6661,9 +6617,6 @@ cd ~/turtle-agent && git status --short
 git add internal/rpc cmd/turtle-agent NOTICE
 git commit -F - <<'EOF'
 rpc: loopback JSON-RPC server; status, chat, gm, events, chat_log, logout
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -6772,9 +6725,6 @@ cd ~/turtle-agent && git status --short
 git add testdata/captures/m2-chat.twcap internal/game/capture_test.go
 git commit -F - <<'EOF'
 Milestone 2 on a test server: chat, GM and .bot commands over RPC; chat fixture
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -7200,9 +7150,6 @@ cd ~/turtle-agent && git status --short
 git add internal/game/group.go internal/game/group_test.go
 git commit -F - <<'EOF'
 game: group invite, command result, group list and member stats codecs
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -7634,9 +7581,6 @@ cd ~/turtle-agent && git status --short
 git add internal/session cmd/turtle-agent/methods.go
 git commit -F - <<'EOF'
 session: party invite/accept/leave, group list and member stats; party RPCs
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -7721,9 +7665,6 @@ cd ~/turtle-agent && git status --short
 git add testdata/captures/m3-party.twcap internal/game/capture_test.go
 git commit -F - <<'EOF'
 Milestone 3 on a test server: two bots invited, stats and leave; party fixture
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -8541,9 +8482,6 @@ cd ~/turtle-agent && git status --short
 git add internal/game/movement.go internal/game/movement_test.go internal/objects
 git commit -F - <<'EOF'
 objects: 1.12 update-object, compressed update, compressed moves, monster move
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -8950,9 +8888,6 @@ cd ~/turtle-agent && git status --short
 git add internal/objects
 git commit -F - <<'EOF'
 objects: store with health/aura/combat changes and filtered unit snapshots
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -9314,9 +9249,6 @@ cd ~/turtle-agent && git status --short
 git add internal/session cmd/turtle-agent/methods.go
 git commit -F - <<'EOF'
 session: object store wiring, monster moves, death/aura events, units RPC
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -9370,9 +9302,6 @@ cd ~/turtle-agent && git status --short
 git add testdata/captures/m4-world.twcap internal/objects/capture_test.go
 git commit -F - <<'EOF'
 Milestone 4 on a test server: units with names, health and party flags; world fixture
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -9651,9 +9580,6 @@ cd ~/turtle-agent && git status --short
 git add internal/game/actions.go internal/game/actions_test.go
 git commit -F - <<'EOF'
 game: selection, attack, cast, movement, teleport and forced-move codecs
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -10363,9 +10289,6 @@ cd ~/turtle-agent && git status --short
 git add internal/session cmd/turtle-agent/methods.go
 git commit -F - <<'EOF'
 session: target, attack, cast, face, short walks, GM teleport with acks
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -10475,9 +10398,6 @@ cd ~/turtle-agent && git status --short
 git add testdata/captures/m5-attack.twcap internal/game/capture_test.go
 git commit -F - <<'EOF'
 Milestone 5 on a test server: teleport, target, walk, attack and cast; attack fixture
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -11123,9 +11043,6 @@ cd ~/turtle-agent && git status --short
 git add internal/game/combat.go internal/game/combat_test.go internal/game/gametest
 git commit -F - <<'EOF'
 game: combat-log parsers for every 1.12 combat event kind
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -11408,9 +11325,6 @@ cd ~/turtle-agent && git status --short
 git add internal/session
 git commit -F - <<'EOF'
 session: combat events with names, kills, spell failures and the party flag
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -11879,9 +11793,6 @@ cd ~/wow-play-harness && git status --short
 git add wowharness/headless.py tests/test_headless.py
 git commit -F - <<'EOF'
 Headless backend: HeadlessClient over turtle-agent's JSON-RPC
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -12250,9 +12161,6 @@ cd ~/wow-play-harness && git status --short
 git add wowharness/mcp_headless.py tools/headless_mvp.py tests/test_mcp_headless.py
 git commit -F - <<'EOF'
 Headless MCP server with the harness tool names, and the MVP scenario script
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 
@@ -12346,9 +12254,6 @@ cd ~/turtle-agent && git status --short
 git add testdata/captures/m6-fight.twcap internal/game/capture_test.go
 git commit -F - <<'EOF'
 Milestone 6 on a test server: headless MVP fight report; fight fixture
-
-Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01MKCBbD9VJLeKqwGUyyzxyw
 EOF
 ```
 

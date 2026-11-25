@@ -4,7 +4,7 @@ title: Write a rotation
 description: Add a priority-list rotation file, check it against the spell data, and load it.
 tags: [turtle, combat, rotation]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:40:00Z }
 sources:
   - id: rotations-doc
     resource: docs/ROTATIONS.md

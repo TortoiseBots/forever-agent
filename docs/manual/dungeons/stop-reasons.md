@@ -4,7 +4,7 @@ title: Stop reasons and verdicts
 description: Every reason a Forever dungeon run, watch or walk can end with, and the verdict each kind of report carries.
 tags: [dungeons, reference, errors, verdicts]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T10:00:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T10:00:00Z }
 sources:
   - id: driver-run
     resource: internal/forever/driver/run.go
