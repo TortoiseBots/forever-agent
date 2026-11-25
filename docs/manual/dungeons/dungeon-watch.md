@@ -14,6 +14,12 @@ sources:
     resource: internal/forever/driver/actions.go
   - id: driver-record
     resource: internal/forever/driver/record.go
+  - id: tactics-check
+    resource: cmd/forever-agent/forever_watch_tactics.go
+  - id: tactics-module
+    resource: internal/tactics/module.go
+  - id: tactics-compare
+    resource: internal/tactics/compare.go
 ---
 
 > **Not yet proven on a live server.** The watch machine is exercised against the scripted module; its live mode is wired but has not been run against a real server. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
@@ -28,7 +34,7 @@ forever-agent forever dungeon-watch --leader NAME --plan FILE \
     [--frame-every SEC] [--combat-max-mb N] [--combatlog-watch group|unit|off] \
     [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] \
     [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] \
-    [--soap-user NAME --soap-password-file FILE]
+    [--soap-user NAME --soap-password-file FILE] [--module-tactics FILE]
 ```
 
 `dungeon-watch` is for a run the bot module leads itself: its tank bot is the run leader, its party is the module's
@@ -95,6 +101,7 @@ on; the summary then says `unsupported` and the log is in range only.
 | `--map` | off | After the summary, write the run's map (SVG and HTML replay) into `--out`; a failure is one log line and never fails the watch. |
 | `--navmesh` | none | mmaps folder for the live entry walk. |
 | `--dry` | off | Run the watch machine against the scripted module; no network. |
+| `--module-tactics` | none | The module's `ai_boss_tactic` rows as JSON (one object per row: `map`, `boss_entry`, `kind`, `target_entry`, `spell_id`, `priority`, `param`, `hp_min`, `hp_max`) to judge the plan's fight steps against in the report; without it the report says the check was not made. |
 | `--no-preflight`, `--preflight-only`, `--serve-dir`, `--export`, `--soap-*` | | As on [dungeon-run](dungeon-run.md); the preflight mode is `dungeon-watch` and checks the leader bot. |
 
 # Examples
@@ -149,6 +156,54 @@ With `--out` the watch writes:
 The report card (`card: ...`) names the verdict `CLEARED`, `STOPPED AT <leg/step> (<reason>)` or `PAUSED-STUCK AT
 <leg/step> (<pause reason>)`, or `FAILED (<reason>)`, plus the flags (re-pulled steps, member deaths, slow legs)
 and the evidence for each.
+
+# The tactics check
+
+A plan's boss fight steps (`bosses[].tactics`: interrupt this cast, kill that add first, leave that blast) are the
+agent's own and are never exported to the server module; on a watched run the bots fight by the module's own boss
+tactics rows, its `ai_boss_tactic` table. So a plan step the module's rows contradict, or do not carry, is a step
+nobody runs. After the watch, `--module-tactics FILE` judges every such step against those rows and names each
+disagreement.
+
+`FILE` is the table's rows as a JSON array, one object per row with the column names the check reads (`map`,
+`boss_entry`, `kind`, `target_entry`, `spell_id`, `priority`, `param`, `hp_min`, `hp_max`; a column it does not read
+is ignored). The health band is part of the table's key, so two phase-banded rows of one boss are two rows; it is read
+but not compared. An export of this query gives the file:
+
+```sql
+SELECT map, boss_entry, kind, target_entry, spell_id, priority, param, hp_min, hp_max FROM ai_boss_tactic
+```
+
+The file is read before the run. A file that is not a JSON array, a row without a map, a boss entry or a kind, a row
+of the wrong shape (an `interrupt` without a spell, a `kill_first` without a target, an `avoid_cast` without its
+yards), a duplicate key or more than 20000 rows is a usage error naming the file and the row, and the watch exits
+`2` before it touches the server.
+
+The check counts one fight step per `interrupt` entry, per `kill_first` entry, per `never_target` entry and per
+`move_out` row of each boss block, and compares the three axes the plan and the module share:
+
+| Axis | The plan says | The module's rows say |
+|---|---|---|
+| interrupts | `interrupt`, by id or name | `interrupt` rows: a plan spell no such row names is a disagreement; a name is resolved to every id the spell table gives it |
+| kill order | `kill_first`, `never_target` | `kill_first` rows with priorities: an entry with no row disagrees, and so does a plan order against the module's priorities (lower first; equal priorities are one wave); a `never_target` the module kills first disagrees |
+| avoid | `move_out` cast rows with yards | `avoid_cast` rows with yards: a spell with no row disagrees, and so does a plan that leaves fewer yards than the widest row for any of the spell's ids |
+
+The block's `dispel` and `no_dispel` steps, a `move_out` ground rule, a `never_target` the module has no row for, a
+boss the file does not name and a spell name the build cannot resolve are listed as not checked: the module's table
+has no row that could answer them, so they are never counted as agreement.
+
+The lines print after the report card, and when the watch wrote a record they are also written beside it as
+`<run_id>.tactics-check.txt`:
+
+```text
+tactics: 3 plan fight steps checked against the module's 62 rows: 1 disagree
+tactics: leg 1 "revelosh" boss 6910: interrupt "Lightning Bolt": the module's rows interrupt Chain Lightning (16006), Chain Lightning (15117) only
+tactics: not checked: leg 2 "sentinel" boss 7023: move_out 10132 (ground): the module's rows have no ground-effect row the check reads
+```
+
+Without `--module-tactics` the section is one line, `tactics: not checked (no --module-tactics file): the plan's
+fight steps are only judged against the module's boss tactics rows`; a plan with no block, or a block the file cannot
+judge, says not checked too. The section is never a pass it did not establish. `--dry` writes the same section.
 
 # Exit codes
 
