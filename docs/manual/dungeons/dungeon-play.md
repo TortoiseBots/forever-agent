@@ -185,8 +185,9 @@ the module's read-only `.tb los` query — the one line of the player run's comm
   clears, and then steps forward along the path (`PlayAgentLeadYd` a step, the path's last sample ahead when less is
   left) until the tank itself sees the unit — neither step ever goes back toward the tank, which is what run 4 did for
   every try. After every step the search **waits for the tank to close up** (`PlayTankWait`, 15 s at most) before it
-  reads the sight again, because a live follow reaches its spot a poll or two behind the leader; at the path's end it
-  waits once and looks once more before giving up.
+  reads the sight again, because a live follow reaches its spot a poll or two behind the leader; the step that reaches
+  the path's end is waited for and looked at like every other, and a search with no step left does not wait twice on
+  the same ground.
 - **One sight budget a pull**: at most 24 queries (`PlayTankSightSpots`) and 60 s (`PlayTankSightTime`) from the
   first look cover the skull pick, the stand walk and the search after **every** tank refusal together, and the
   refusal path's own 90 s (`PlayRefuseTime` from the first refusal) caps what is left; the waits for the tank spend

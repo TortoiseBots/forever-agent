@@ -667,11 +667,12 @@ func (p *playRun) tankSightPick(members []Unit, budget *sightBudget) (skull, cro
 // toward the tank — until the TANK itself sees the unit, so the follow advances with it. After every walk the search
 // waits for the tank to close up (waitTankFollow, bounded) before the sight is read: a live follow lands a body's
 // length behind the agent, and a look taken while it still stands at the last spot reports the ground it left, not
-// the ground it is on. At the path's end it waits and looks once more before giving up. Bounded by PlayTankSightTries
-// and the pull's one sightBudget (PlayTankSightSpots queries and PlayTankSightTime from the pull's first look, the
-// pick and the refusals included; the tank waits spend that same time). seen is whether the tank sees the unit at the
-// end; known is false when the module stopped answering (a rate refusal, an error) or the budget is spent, and the
-// caller then keeps its older flow. A stop of the run's own is the run's.
+// the ground it is on; the step that reaches the path's end gets that wait and look like every other, and a search
+// with no step left does not wait twice on the same ground. Bounded by PlayTankSightTries and the pull's one
+// sightBudget (PlayTankSightSpots queries and PlayTankSightTime from the pull's first look, the pick and the refusals
+// included; the tank waits spend that same time). seen is whether the tank sees the unit at the end; known is false
+// when the module stopped answering (a rate refusal, an error) or the budget is spent, and the caller then keeps its
+// older flow. A stop of the run's own is the run's.
 func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget *sightBudget) (seen, known bool) {
 	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 {
 		return false, false
@@ -768,20 +769,12 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 		tries++
 		next, ok := p.leadPoint(samples, u)
 		if !ok {
-			// The path's end: the tank's follow may still be closing up on the last step, so wait and look once
-			// more before the search gives up.
-			p.waitTankFollow(ctx, budget)
-			if !budget.take(p.now()) {
-				record(false, false)
-				return false, false
-			}
-			seen, _, known := p.tankSight(u)
-			if !known {
-				record(false, false)
-				return false, false
-			}
-			record(seen, true)
-			return seen, true
+			// The path's end, and the loop's order is what makes it safe: the walk that reached the last sample was
+			// followed by its own wait, and the look above is taken after it. Waiting again here would buy the tank no
+			// new ground and could spend the budget's last seconds, which would turn the server's known NO into an
+			// unknown and hand the pull to the fallback the search exists to prevent.
+			record(false, true)
+			return false, true
 		}
 		p.pullWalk = true
 		p.walkToWithin(ctx, next, PlaySightLeadArriveYd, false)

@@ -178,6 +178,28 @@ func TestPlayTankSightSpentBudgetIsUnknown(t *testing.T) {
 	}
 }
 
+// TestPlayTankSightPathEndWaitsOnce: a search that runs out of path right after its last wait must not wait again on
+// the same ground. A second wait buys the tank no new ground and can spend the budget's last seconds, which would turn
+// the server's known NO into an unknown and hand the pull to the fallback the search exists to prevent.
+func TestPlayTankSightPathEndWaitsOnce(t *testing.T) {
+	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) { f.SelfPos = Vec3{} })
+	p := &playRun{cfg: PlayConfig{Bots: playBots}, route: rig.route, ports: rig.ports, lim: DefaultPlayLimits()}
+	p.ports.ServerSight = &standSightPort{tankIn: false, pointIn: true}
+	budget := &sightBudget{start: p.now()}
+	// The skull stands inside the touch distance of the path's second sample: the walkable samples are the tank's own
+	// spot alone, so the search has no step left on its first try.
+	skull := Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{0, 6, 0}}
+	start := p.now()
+	seen, known := p.tankSightStand(context.Background(), 0, skull, budget)
+	if seen || !known {
+		t.Fatalf("the path's end returned seen=%v known=%v; want a known unseen (the server answered NO)", seen, known)
+	}
+	if spent := p.now().Sub(start); spent > PlayTankWait+p.lim.Poll {
+		t.Fatalf("the search spent %v waiting for a tank that cannot follow; want one bound %v (a second wait on the same ground)",
+			spent, PlayTankWait)
+	}
+}
+
 // TestPlayTankSightGoneMemberIsSkipped: the module cannot find the nearest member (it left the view, which the live
 // adapter reads as a NO with its answer known), so the pick skips it and puts the skull on the member the tank sees.
 // One unanswerable member never turns the server's sight off for the pull.
