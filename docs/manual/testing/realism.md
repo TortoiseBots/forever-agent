@@ -152,14 +152,14 @@ Per bot, against the common picks of its own level group (`talent-picks.csv`, th
 
 The build must be the whole build: a list with fewer points than the character's level has (one point per level from 10, 51 at 60) is `INCONCLUSIVE` whatever `talents_complete` says, because its missing points would read as off-picks. A list with more points than the level allows, or a rank above the talent's own maximum, is refused by the loader.
 
-INCONCLUSIVE: no talents in the snapshot, a partial list (`talents_complete` false or too few points for the level), a spec the tables do not name, a level with no talent points, no common picks in the file, a talent id that is not a rank-1 id the tables know for the spec, and a level group whose common picks account for fewer than **2 points** of the build in its trees (too few to judge).
+INCONCLUSIVE: no talents in the snapshot, a partial list (`talents_complete` false or too few points for the level), a spec the tables do not name, a level with no talent points, no common picks in the file, a talent id that is not a rank-1 id the tables know for the spec, a level group whose common picks account for fewer than **2 points** of the build in its trees (too few to judge), and — below 60, where there is no split part to judge the tree distribution — points in a tree the level group's common picks do not cover (the share would be a guess).
 
 ## Gear realism (`REALISM-GEAR`)
 
 The main check, for every bot whose items were read. It reports the average item level, the quality mix and the spread of the item levels, and judges three decisive parts: no `PASS` over a partial reading.
 
 - **required_level** — any item whose required level is above the bot's level is a `FAIL`: no player of that level could wear it. This is a game fact from the item record, not a player choice, and it is the clearest "could not have it" signal. A bot with any worn item whose required level was not read is `INCONCLUSIVE` (the impossible item could be the unread one).
-- **item_level** — the share of slots whose item level is above the bot's level plus its band's allowance. `PASS` at **10%** or less (one slot in ten, a starting value to tune). The measure says how many worn items were judged when some carry no item level; the part is `INCONCLUSIVE` when none does.
+- **item_level** — the share of slots whose item level is above the bot's level plus its band's allowance. `PASS` at **10%** or less (one slot in ten, a starting value to tune). One worn item without an item level leaves the part `INCONCLUSIVE` and says how many slots it could not read (the unread one could be far above the allowance); none read is `INCONCLUSIVE` too.
 
   | Bot level | Allowance |
   |---|---|
@@ -173,7 +173,7 @@ The main check, for every bot whose items were read. It reports the average item
   These are starting values, derived as the **95th percentile of (item level − required level)** over the game's own item table, counted at each required level: through level 59 an item sits about five item levels above its required level, while at 60 the raid tier reaches item levels 88-92 on required-level-60 items, so the high percentile is 30. A real batch may move them. Raid gear on a pool bot is the `source` part's business, not this one's.
 - **source** — any worn item whose `source` is `raid`, `pvp` or `reputation` fails, on a snapshot of pool bots. Every worn item must carry a source for the part to pass: one permitted item beside an unread one is `INCONCLUSIVE`, because the unread one could be the raid piece.
 
-INCONCLUSIVE: no items read (or a bot that wears nothing), any worn item with no required level, no item carrying an item level, and any worn item with no source. A snapshot taken today has no item source, so GEAR is `INCONCLUSIVE` even for the one character whose outfit it reads.
+INCONCLUSIVE: no items read (or a bot that wears nothing), any worn item with no required level, any worn item with no item level, and any worn item with no source. A snapshot taken today has no item source, so GEAR is `INCONCLUSIVE` even for the one character whose outfit it reads.
 
 ## Stat priority (`REALISM-STATS`)
 

@@ -123,20 +123,23 @@ func gearCheck(b Bot, _ Tables) Check {
 	}
 
 	var parts []Part
-	if len(levels) == 0 {
+	switch {
+	case len(levels) == 0:
 		parts = append(parts, Part{Name: "item_level", Verdict: VerdictInconclusive, Decisive: true,
 			Reason: "no worn item carries an item level (the item read-out is missing)"})
-	} else {
+	case len(levels) < len(b.Items):
+		// An unread item could be the one far above the allowance: the part judges what it saw and
+		// says how many slots it could not, never a PASS over a partial set (H4's contract).
+		parts = append(parts, Part{Name: "item_level", Verdict: VerdictInconclusive, Decisive: true,
+			Reason: fmt.Sprintf("%d of %d worn item(s) carry no item level, so an over-allowance one cannot be ruled out",
+				len(b.Items)-len(levels), len(b.Items))})
+	default:
 		share := float64(above) / float64(len(levels))
-		measure := fmt.Sprintf("%d of %d item level(s) above level %d plus %.0f (%.0f%% allowed)",
-			above, len(levels), b.Level, allowance, GearAboveShareMax*100)
-		if len(levels) < len(b.Items) {
-			measure = fmt.Sprintf("%d of %d worn item(s) judged: %s; %d carry no item level",
-				len(levels), len(b.Items), measure, len(b.Items)-len(levels))
-		}
 		parts = append(parts, Part{
 			Name: "item_level", Verdict: verdictAtMost(share, GearAboveShareMax), Value: share,
-			Measure: measure, Lines: aboveLines, Decisive: true,
+			Measure: fmt.Sprintf("%d of %d item level(s) above level %d plus %.0f (%.0f%% allowed)",
+				above, len(levels), b.Level, allowance, GearAboveShareMax*100),
+			Lines: aboveLines, Decisive: true,
 		})
 	}
 

@@ -157,9 +157,23 @@ func talentCheck(b Bot, t Tables) Check {
 			capacityPerTab[row.Tab] += int(row.MaxRank)
 		}
 	}
-	denominator := 0
+	denominator, uncovered := 0, 0
 	for tab := range splitTabs {
-		denominator += min(pointsPerTab[tab], capacityPerTab[tab])
+		switch {
+		case pointsPerTab[tab] == 0:
+		case capacityPerTab[tab] == 0:
+			// No common pick of this level group sits in a tree the bot spent points in. Below 60
+			// there is no split part to judge the tree distribution, so the share would be a guess
+			// over the covered trees only; a couple of common points would otherwise read as 100%.
+			uncovered += pointsPerTab[tab]
+		default:
+			denominator += min(pointsPerTab[tab], capacityPerTab[tab])
+		}
+	}
+	if b.Level != 60 && uncovered > 0 {
+		return checkOf(RuleTalents, []Part{part("point_share", VerdictInconclusive, 0, "",
+			fmt.Sprintf("%d point(s) sit in a tree the level group's common picks do not cover: the share would be a guess",
+				uncovered))}, nil)
 	}
 	if denominator < TalentCommonPointsMin {
 		return checkOf(RuleTalents, []Part{part("point_share", VerdictInconclusive, 0, "",

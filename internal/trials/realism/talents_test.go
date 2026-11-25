@@ -375,6 +375,30 @@ func TestTalentCheckPartialBuildIsInconclusive(t *testing.T) {
 	}
 }
 
+// TestTalentCheckUncoveredTreeIsInconclusive pins the self-review case: below 60 there is no split
+// part, so points in a tree the level group's common picks do not cover are not silently forgiven
+// (a couple of common points would otherwise read as a 100% share).
+func TestTalentCheckUncoveredTreeIsInconclusive(t *testing.T) {
+	f := &fakeTables{specs: map[string]bool{"druid|balance": true}}
+	f.picks = append(f.picks,
+		aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: 1, MaxRank: 5, PickPct: 90},
+		aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: 1, MaxRank: 5, PickPct: 90})
+	for i := int64(10); i <= 14; i++ {
+		f.picks = append(f.picks,
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 1, SpellID: i, MaxRank: 5, PickPct: 10},
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 1, SpellID: i, MaxRank: 5, PickPct: 10})
+	}
+	b := Bot{ID: "bot1", Class: "druid", Spec: "balance", Level: 30,
+		TalentsKnown: true, TalentsComplete: true, Talents: []Talent{
+			{SpellID: 1, Rank: 5},
+			{SpellID: 10, Rank: 5}, {SpellID: 11, Rank: 5}, {SpellID: 12, Rank: 5}, {SpellID: 13, Rank: 5}, {SpellID: 14, Rank: 1},
+		}}
+	c := checkOfID(t, Judge(b, f), RuleTalents)
+	if c.Verdict != VerdictInconclusive || !strings.Contains(c.Reason, "do not cover") {
+		t.Fatalf("a build off the common picks' trees must be INCONCLUSIVE: %s (%s)", c.Verdict, c.Reason)
+	}
+}
+
 // TestTalentCheckUnknownIDIsInconclusive pins the rank-1 id contract: an id the tables do not name
 // is INCONCLUSIVE with that reason, never a FAIL on an id the module may spell differently.
 func TestTalentCheckUnknownIDIsInconclusive(t *testing.T) {

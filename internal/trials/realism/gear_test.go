@@ -134,12 +134,17 @@ func TestGearAboveShareThreshold(t *testing.T) {
 	if level := partOf(t, checkOfID(t, Judge(build(2), Default()), RuleGear), "item_level"); level.Verdict != VerdictFail {
 		t.Fatalf("2 of 10 above must fail: %+v", level)
 	}
-	// A partial item set says how many worn items the item-level part judged.
+	// A partial item set is INCONCLUSIVE: an unread item level could be the one far above the
+	// allowance, so the part never passes over it and says how many slots it could not read.
 	partial := bot("bot1", 60)
 	partial.Items = []Item{item("head", 1, 60), {Slot: "chest", ItemID: 2, RequiredLevel: 1, Source: "dungeon"}}
-	measure := partOf(t, checkOfID(t, Judge(partial, Default()), RuleGear), "item_level").Measure
-	if !strings.Contains(measure, "1 of 2 worn item(s) judged") {
-		t.Fatalf("the item level measure must say how many slots were judged: %q", measure)
+	c := checkOfID(t, Judge(partial, Default()), RuleGear)
+	level := partOf(t, c, "item_level")
+	if level.Verdict != VerdictInconclusive || !strings.Contains(level.Reason, "1 of 2 worn item(s) carry no item level") {
+		t.Fatalf("the item level part must be INCONCLUSIVE on a partial set: %+v", level)
+	}
+	if c.Verdict != VerdictInconclusive {
+		t.Fatalf("a partial item level reading must leave the check INCONCLUSIVE: %s (%s)", c.Verdict, c.Reason)
 	}
 }
 
