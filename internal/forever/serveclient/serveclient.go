@@ -320,19 +320,20 @@ type LOSParams struct {
 
 // LOS is the los method's answer (serve's ServeLOS): the server's own line of sight between the two sides, the yards
 // apart, and whether they share a map and instance and are both in the world. It is the core's sight test (the one
-// the bots' attack gate uses), not the navmesh ray: it needs no --navmesh. A refusal the module writes into its line
-// arrives here as a result with Reason set (bad-argument, unknown-unit, not-in-world, different-maps, no-access,
-// rate), and a module build without the command is an *Error with -32003 and "not supported by this module build".
+// the bots' attack gate uses), not the navmesh ray: it needs no --navmesh. A and B are the sides as the module
+// answered them: the unit's NAME when it resolved one (a guid side included), the two-decimal coordinate text for a
+// spot, or the word it did not resolve. A refusal the module writes into its line arrives here as a result with
+// Reason set (bad-argument, unknown-unit, not-in-world, different-maps, no-access, rate), and a module build without
+// the command is an *Error with -32003 and "not supported by this module build".
 type LOS struct {
-	A            string   `json:"a"`
-	B            string   `json:"b"`
-	Map          uint32   `json:"map,omitempty"`
-	Clear        bool     `json:"clear"`
-	DistYD       *float64 `json:"dist_yd,omitempty"`
-	SameMap      bool     `json:"same_map"`
-	InWorld      bool     `json:"in_world"`
-	Reason       string   `json:"reason,omitempty"`
-	RetryAfterMS int      `json:"retry_after_ms,omitempty"`
+	A       string   `json:"a"`
+	B       string   `json:"b"`
+	Map     uint32   `json:"map,omitempty"`
+	Clear   bool     `json:"clear"`
+	DistYD  *float64 `json:"dist_yd,omitempty"`
+	SameMap bool     `json:"same_map"`
+	InWorld bool     `json:"in_world"`
+	Reason  string   `json:"reason,omitempty"`
 }
 
 // LOS asks the server whether its line of sight is clear between the two sides.

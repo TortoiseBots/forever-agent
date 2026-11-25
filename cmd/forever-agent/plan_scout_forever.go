@@ -18,6 +18,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/forever/serveclient"
+	"github.com/pjerra/forever-agent/internal/forever/sightcmd"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/planlint"
 	"github.com/pjerra/forever-agent/internal/planscout"
@@ -37,6 +38,12 @@ const (
 	// scoutForeverWalkMin is the least budget a walk is started with: a walk needs its route planned and walked, so a
 	// pass with less than this left does not start one (the hop is skipped as "walk budget").
 	scoutForeverWalkMin = 2 * time.Second
+	// scoutForeverSightPace is the least time between two sight queries of one pass: the module allows five at once
+	// per caller and one more every 200 ms, so 250 ms keeps every batch under the refill without spending the burst.
+	scoutForeverSightPace = 250 * time.Millisecond
+	// scoutForeverSightPass bounds the sight queries of one live pass. A pack larger than the bound leaves its later
+	// stands not asked (the report says so); the pass itself is never held by a slow or refusing server.
+	scoutForeverSightPass = time.Minute
 )
 
 // scoutForeverCeilingDur is how long --max-minutes gives the live pass; the tests shorten it.
@@ -289,8 +296,9 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 	readStops, noteStops := 0, false
 	rayNoted := false
 	losOK := true // false once the serve answers that it has no walk_ray method
-	// sight is the module's own los query beside the ray: a serve whose module build has no los command, or that
-	// refuses for rate, is said once and then the pass asks no more (the ray stands alone).
+	// sight is the module's own los query beside the ray: a serve whose module build has no los command, that
+	// refuses access, or that keeps refusing for rate, is said once and then the pass asks no more (the ray stands
+	// alone). A unit the server no longer has is skipped alone, and the query pass has its own time bound.
 	sight := scoutForeverSight{ok: true}
 	noteStopCount := func() {
 		if noteStops || len(stops) == 0 {
@@ -408,6 +416,16 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 		readStops++
 	}
 	noteStopCount()
+	if sight.notAsked > 0 {
+		why := "the sight query stopped asking"
+		if sight.timedOut {
+			why = fmt.Sprintf("the sight pass's %s bound ran out", scoutForeverSightPass)
+		}
+		data.Notes = append(data.Notes, fmt.Sprintf("live sight: %d stand(s) were not asked (%s)", sight.notAsked, why))
+	}
+	if sight.skipped > 0 {
+		data.Notes = append(data.Notes, fmt.Sprintf("live sight: the module refused %d pack unit(s) (unknown-unit, not-in-world or different-maps); those units stay unanswered and the pass went on", sight.skipped))
+	}
 	budget := o.walkBudgetD
 	if budget <= 0 {
 		budget = 5 * time.Minute
@@ -515,22 +533,84 @@ func foreverWalkRayAt(ctx context.Context, c scoutForeverClient, spot planscout.
 	return true, err
 }
 
-// scoutForeverSight is the module's own sight query over one live pass: whether the module answers it at all, and
-// whether a refusal or a failure has been said already. Both stop the pass asking again, so a server without the
-// command costs one line, not one per spot, and never a retry loop.
+// scoutForeverSight is the module's own sight query over one live pass: whether the module still answers it, how long
+// it may keep asking, and how many stands and units it did not ask about. A refusal that is about the whole pass
+// (unsupported, no access, a malformed answer, a rate refusal that survived the one retry) stops the asking and is
+// said once; a refusal about one unit (it despawned, died or changed map) skips that unit alone.
 type scoutForeverSight struct {
-	ok   bool
-	said bool
+	ok       bool
+	said     bool
+	last     time.Time // the previous query, for the pace
+	end      time.Time // the pass's bound, set at its first query
+	notAsked int       // stands whose pack was never asked
+	skipped  int       // pack units the module refused one by one
+	timedOut bool      // the bound, not a refusal, stopped the pass
+}
+
+// errScoutSightEnd is the sight pass's own bound: the stand it happens on is left not asked, and the pass goes on with
+// the ray alone rather than holding the whole live pass.
+var errScoutSightEnd = errors.New("plan-scout: the sight pass's time bound ran out")
+
+// pace waits out the module's refill and checks the pass's bound; it is called before every query, the retry included.
+func (s *scoutForeverSight) pace(ctx context.Context) error {
+	now := time.Now()
+	if s.end.IsZero() {
+		s.end = now.Add(scoutForeverSightPass)
+	}
+	if !s.last.IsZero() {
+		if d := scoutForeverSightPace - now.Sub(s.last); d > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(d):
+			}
+		}
+	}
+	if time.Now().After(s.end) {
+		return errScoutSightEnd
+	}
+	s.last = time.Now()
+	return nil
+}
+
+// ask runs one query under the pace, and asks the same query once more when the module answers a rate refusal (the
+// pace has waited its refill by then). Any other answer is returned as it is.
+func (s *scoutForeverSight) ask(ctx context.Context, c scoutForeverClient, stand, guid string) (serveclient.LOS, error) {
+	for attempt := 0; ; attempt++ {
+		if err := s.pace(ctx); err != nil {
+			return serveclient.LOS{}, err
+		}
+		ans, err := c.LOS(ctx, serveclient.LOSParams{A: stand, B: guid})
+		if err != nil {
+			return serveclient.LOS{}, err
+		}
+		if ans.Reason != sightcmd.Rate || attempt > 0 {
+			return ans, nil
+		}
+	}
+}
+
+// foreverLOSUnsupported reports whether the query failed because the module build has no such command, rather than
+// because the answer or the link was bad.
+func foreverLOSUnsupported(err error) bool {
+	if code, ok := serveclient.CodeOf(err); ok && code == rpc.CodeMethodNotFound {
+		return true
+	}
+	return strings.Contains(err.Error(), "not supported by this module build")
 }
 
 // foreverServerSightAt records the server's own sight answer between a pull row's stand and every unit of its target
 // pack that the live read saw. Each answer is stored beside the navmesh ray under the same LOSKey, so the report shows
-// both. A serve whose module build has no los command, or that refuses or fails the query (rate, no access, a lost
-// line), is said once in the report's notes and the pass asks no more, recording the ray alone from then on. An error is
+// both. The queries are paced and bounded; a whole-pass refusal (no command, no access, a malformed answer, a repeated
+// rate) is said once and the pass asks no more, while a unit the server no longer has is skipped alone. An error is
 // returned only for the pass's own context ending.
 func foreverServerSightAt(ctx context.Context, c scoutForeverClient, spot planscout.LiveSpot, units []serveclient.Unit,
 	data *planscout.LiveData, sight *scoutForeverSight) error {
-	if !sight.ok || len(spot.TargetGuids) == 0 {
+	if len(spot.TargetGuids) == 0 {
+		return nil
+	}
+	if !sight.ok {
+		sight.notAsked++
 		return nil
 	}
 	byLow := make(map[uint32]string, len(units))
@@ -560,23 +640,37 @@ func foreverServerSightAt(ctx context.Context, c scoutForeverClient, spot plansc
 		if !ok {
 			continue // a pack unit the live read never saw: there is no guid to name it by
 		}
-		ans, err := c.LOS(ctx, serveclient.LOSParams{A: stand, B: guid})
+		ans, err := sight.ask(ctx, c, stand, guid)
 		if err != nil {
+			if errors.Is(err, errScoutSightEnd) {
+				sight.timedOut = true
+				sight.notAsked++
+				return nil
+			}
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			give(fmt.Sprintf("live sight: the server does not answer los (%v); the sight answers are the navmesh ray's alone", err))
-			return nil
-		}
-		if ans.Reason != "" {
-			wait := ""
-			if ans.RetryAfterMS > 0 {
-				wait = fmt.Sprintf(" (retry after %d ms)", ans.RetryAfterMS)
+			if foreverLOSUnsupported(err) {
+				give(fmt.Sprintf("live sight: the server does not answer los (%v); the sight answers are the navmesh ray's alone", err))
+			} else {
+				give(fmt.Sprintf("live sight: the los query for %s failed (%v); the sight answers are the navmesh ray's alone", guid, err))
 			}
-			give(fmt.Sprintf("live sight: the module refused the los query for %s%s; the sight answers from here on are the navmesh ray's alone", ans.Reason, wait))
 			return nil
 		}
-		data.ServerLOS[planscout.LOSKey{Step: spot.Step, Guid: t.Guid}] = ans.Clear
+		switch ans.Reason {
+		case "":
+			data.ServerLOS[planscout.LOSKey{Step: spot.Step, Guid: t.Guid}] = ans.Clear
+		case sightcmd.UnknownUnit, sightcmd.NotInWorld, sightcmd.DifferentMaps:
+			// The unit despawned, died or changed map between the read and the query: leave it unanswered and ask the
+			// rest of the pack.
+			sight.skipped++
+		case sightcmd.Rate:
+			give("live sight: the module refused the los query for rate twice; the sight answers are the navmesh ray's alone")
+			return nil
+		default:
+			give(fmt.Sprintf("live sight: the module refused the los query for %s; the sight answers are the navmesh ray's alone", ans.Reason))
+			return nil
+		}
 	}
 	return nil
 }

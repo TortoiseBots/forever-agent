@@ -45,21 +45,56 @@ func TestServeLOSAnswer(t *testing.T) {
 	f.wait(t)
 }
 
-// TestServeLOSRefusalIsAResult: a refusal the module writes into its one line (no access, a rate with its wait, two
-// maps) is the call's result with reason set — a polling tool needs the code — and the fields the refusal hid stay
-// absent.
+// TestServeLOSGuidAnswersTheName: the module answers a resolved guid side with the unit's NAME, and the method returns
+// that name in the side's field. The plan scout sends a spot and a pack guid, so this is its every successful query.
+func TestServeLOSGuidAnswersTheName(t *testing.T) {
+	const guid = "0000000000000000000000000000BEEF"
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveCommander = func(line string) []string {
+		if !strings.HasPrefix(line, ".tb los ") {
+			return nil
+		}
+		return []string{"los a=-7.00,0.00,0.00 b=ForeverRat map=700 los=1 dist=3.0 same_map=1 in_world=1 #T"}
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	var out ServeLOS
+	json.Unmarshal(a.mustCall(t, "los", map[string]any{"a": "-7,0,0", "b": "0x" + guid}), &out)
+	if out.Reason != "" || !out.Clear || out.Map != 700 {
+		t.Fatalf("answer %+v", out)
+	}
+	if out.A != "-7.00,0.00,0.00" || out.B != "ForeverRat" {
+		t.Fatalf("answer sides %q %q, want the spot echoed with two decimals and the unit's name", out.A, out.B)
+	}
+	if out.DistYD == nil || *out.DistYD != 3 {
+		t.Fatalf("answer distance %v, want 3", out.DistYD)
+	}
+	lines := f.serveTBLines()
+	if len(lines) != 1 || !strings.Contains(lines[0], strings.ToLower(guid)) {
+		t.Fatalf("the fake module saw %q", lines)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeLOSRefusalIsAResult: a refusal the module writes into its one line (no access, a rate, two maps) is the
+// call's result with reason set — a polling tool needs the code — and the fields the refusal hid stay absent.
 func TestServeLOSRefusalIsAResult(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		line string
 		want ServeLOS
 	}{
-		{"no access hides the map", "los a=Tanka b=Healera map= los= same_map= in_world= reason=no-access #T",
+		{"no access hides the map", "los a=Tanka b=Healera map= los=0 dist= same_map= in_world= reason=no-access #T",
 			ServeLOS{A: "Tanka", B: "Healera", Reason: "no-access"}},
-		{"rate carries its wait", "los a=Tanka b=Healera map=0 los= same_map= in_world= reason=rate retry_ms=250 #T",
-			ServeLOS{A: "Tanka", B: "Healera", Map: 0, Reason: "rate", RetryAfterMS: 250}},
-		{"different maps give no distance", "los a=Tanka b=Healera map=0 los=0 same_map=0 in_world=1 reason=different-maps #T",
-			ServeLOS{A: "Tanka", B: "Healera", SameMap: false, InWorld: true, Reason: "different-maps"}},
+		{"rate states nothing", "los a=Tanka b=Healera map= los=0 dist= same_map= in_world= reason=rate #T",
+			ServeLOS{A: "Tanka", B: "Healera", Reason: "rate"}},
+		{"different maps give no distance", "los a=Tanka b=Healera map=530 los=0 dist= same_map=0 in_world=1 reason=different-maps #T",
+			ServeLOS{A: "Tanka", B: "Healera", Map: 530, InWorld: true, Reason: "different-maps"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeServer(t)
@@ -77,7 +112,7 @@ func TestServeLOSRefusalIsAResult(t *testing.T) {
 
 			var out ServeLOS
 			json.Unmarshal(a.mustCall(t, "los", map[string]any{"a": "Tanka", "b": "Healera"}), &out)
-			if out.Reason != tc.want.Reason || out.A != tc.want.A || out.B != tc.want.B || out.RetryAfterMS != tc.want.RetryAfterMS {
+			if out.Reason != tc.want.Reason || out.A != tc.want.A || out.B != tc.want.B || out.Map != tc.want.Map {
 				t.Fatalf("answer %+v, want %+v", out, tc.want)
 			}
 			if tc.want.Reason == "no-access" && out.DistYD != nil {
@@ -113,6 +148,7 @@ func TestServeLOSUnsupported(t *testing.T) {
 func TestServeLOSMalformedLine(t *testing.T) {
 	for _, tc := range []struct{ name, line string }{
 		{"a missing key", "los a=Tanka b=Healera map=0 los=1 same_map=1 in_world=1 #T"},
+		{"the retry hint the module never writes", "los a=Tanka b=Healera map= los=0 dist= same_map= in_world= reason=rate retry_ms=250 #T"},
 		{"another pair", "los a=Other b=Healera map=0 los=1 dist=1.0 same_map=1 in_world=1 #T"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -148,6 +184,8 @@ func TestServeLOSParams(t *testing.T) {
 	waitServeState(t, a, "online", steps)
 
 	a.mustFail(t, "los", map[string]any{"a": "1,2,3", "b": "4,5,6"}, -32602, "two spots need map")
+	a.mustFail(t, "los", map[string]any{"a": "Tanka", "b": "Healera", "map": 700}, -32602, "two spots")
+	a.mustFail(t, "los", map[string]any{"a": "1,2,3", "b": "4,5,6", "map": 0}, -32602, "1-65535")
 	a.mustFail(t, "los", map[string]any{"a": "", "b": "Tanka"}, -32602, "empty")
 	if lines := f.serveTBLines(); len(lines) != 0 {
 		t.Fatalf("a refused call sent %q", lines)

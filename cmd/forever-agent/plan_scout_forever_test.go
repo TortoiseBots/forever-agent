@@ -104,13 +104,15 @@ type fakeForeverServe struct {
 	// unitsAt, when set, answers a units read from the session's own position (the way the serve reads around it).
 	unitsAt func(x, y float32) []serveclient.Unit
 	// los answers the module's own sight query (#259): nil answers every query with a clear line at 12.5 yd. losErr
-	// answers it with this error (the daemon's "not supported by this module build"), losRefusal with this reason, and
-	// loss logs every query as "a|b".
-	los        func(a, b string) serveclient.LOS
-	losErr     error
-	losRefusal string
-	losCalls   int
-	loss       []string
+	// answers it with this error (the daemon's "not supported by this module build"), losRefusal with this reason,
+	// losRefusals with one reason for the named guid, and loss logs every query as "a|b" with its time.
+	los         func(a, b string) serveclient.LOS
+	losErr      error
+	losRefusal  string
+	losRefusals map[string]string
+	losCalls    int
+	loss        []string
+	lossAt      []time.Time
 	// rays logs every walk_ray read: the sight point and the target.
 	rays []fakeRay
 }
@@ -153,23 +155,66 @@ func (f *fakeForeverServe) WalkRay(_ context.Context, from *[3]float32, x, y, z 
 	return serveclient.WalkRay{Known: true, In: true, Source: "navmesh_raycast"}, nil
 }
 
-// LOS answers the module's own sight query.
+// LOS answers the module's own sight query the way the module does: a spot comes back with two decimals and a guid
+// with the unit's name (or its 32 hex digits when the fake has no such unit).
 func (f *fakeForeverServe) LOS(_ context.Context, p serveclient.LOSParams) (serveclient.LOS, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.losCalls++
 	f.loss = append(f.loss, p.A+"|"+p.B)
+	f.lossAt = append(f.lossAt, time.Now())
+	answer := serveclient.LOS{A: f.echoSide(p.A), B: f.echoSide(p.B)}
 	if f.losErr != nil {
 		return serveclient.LOS{}, f.losErr
 	}
 	if f.losRefusal != "" {
-		return serveclient.LOS{A: p.A, B: p.B, Reason: f.losRefusal}, nil
+		answer.Reason = f.losRefusal
+		return answer, nil
+	}
+	if reason, ok := f.losRefusals[fakeCanonGuid(p.B)]; ok {
+		answer.Reason = reason
+		return answer, nil
 	}
 	if f.los != nil {
-		return f.los(p.A, p.B), nil
+		verdict := f.los(p.A, p.B)
+		verdict.A, verdict.B = answer.A, answer.B
+		return verdict, nil
 	}
 	dist := 12.5
-	return serveclient.LOS{A: p.A, B: p.B, Clear: true, DistYD: &dist, SameMap: true, InWorld: true}, nil
+	answer.Clear, answer.DistYD, answer.SameMap, answer.InWorld = true, &dist, true, true
+	return answer, nil
+}
+
+// echoSide renders one sent side as the module prints it: a spot with two decimals (the line's coordinate form), a
+// resolved guid as the unit's name, and anything else as the word itself.
+func (f *fakeForeverServe) echoSide(side string) string {
+	if strings.Contains(side, ",") {
+		parts := strings.Split(side, ",")
+		for i, part := range parts {
+			v, err := strconv.ParseFloat(part, 32)
+			if err != nil {
+				return side
+			}
+			parts[i] = strconv.FormatFloat(v, 'f', 2, 32)
+		}
+		return strings.Join(parts, ",")
+	}
+	canon := fakeCanonGuid(side)
+	for _, u := range f.units {
+		if fakeCanonGuid(string(u.GUID)) == canon && u.Name != "" {
+			return u.Name
+		}
+	}
+	return side
+}
+
+// fakeCanonGuid is a guid as 32 lower-case hex digits, the way a comparison between the sent and answered forms needs.
+func fakeCanonGuid(s string) string {
+	h := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(s, "0x"), "0X"))
+	if len(h) < 32 && len(h) > 0 {
+		h = strings.Repeat("0", 32-len(h)) + h
+	}
+	return h
 }
 
 func newFakeForeverServe(units ...serveclient.Unit) *fakeForeverServe {
@@ -1112,7 +1157,7 @@ func TestScoutForeverRecordsServerSightBesideTheRay(t *testing.T) {
 	}
 	fake.los = func(_, b string) serveclient.LOS {
 		dist := 12.5
-		return serveclient.LOS{A: "stand", B: b, Clear: strings.HasSuffix(b, "65"), DistYD: &dist, SameMap: true, InWorld: true}
+		return serveclient.LOS{Clear: strings.HasSuffix(b, "65"), DistYD: &dist, SameMap: true, InWorld: true}
 	}
 	useFakeForeverServe(t, fake)
 	code, _, errOut := runCLI("plan-scout", "scout_pack", "--dir", dir, "--mmaps", mmaps,
@@ -1122,9 +1167,14 @@ func TestScoutForeverRecordsServerSightBesideTheRay(t *testing.T) {
 	}
 	fake.mu.Lock()
 	calls, queries := fake.losCalls, append([]string(nil), fake.loss...)
+	at := append([]time.Time(nil), fake.lossAt...)
 	fake.mu.Unlock()
 	if calls != 2 {
 		t.Fatalf("%d los query(ies), want one per pack unit (%q)", calls, queries)
+	}
+	// The pass paces its queries: the module's bucket refills one every 200 ms.
+	if len(at) == 2 && at[1].Sub(at[0]) < 200*time.Millisecond {
+		t.Fatalf("the two queries were %s apart, want at least 200ms", at[1].Sub(at[0]))
 	}
 	for _, q := range queries {
 		if !strings.HasSuffix(q, "|0x00000000000000000000000000000064") && !strings.HasSuffix(q, "|0x00000000000000000000000000000065") {
@@ -1171,19 +1221,20 @@ func TestScoutForeverRecordsServerSightBesideTheRay(t *testing.T) {
 	}
 }
 
-// TestScoutForeverServerSightFallsBack: a module build without the los command is said once, the pass asks no more,
-// and the sight answers stay the navmesh ray's. A rate refusal is the same: one note, with the module's wait, no retry.
+// TestScoutForeverServerSightFallsBack: a module build without the los command is said once and the pass asks no more;
+// a rate refusal is retried once for the same query and, if it comes back again, said once and the pass asks no more.
 func TestScoutForeverServerSightFallsBack(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		setup func(*fakeForeverServe)
 		want  string
+		calls int
 	}{
 		{"an older module", func(f *fakeForeverServe) {
 			f.losErr = &serveclient.Error{Code: rpc.CodeGame,
 				Message: "los: not supported by this module build (the server does not answer .tb los)", Method: "los"}
-		}, "does not answer los"},
-		{"a rate refusal", func(f *fakeForeverServe) { f.losRefusal = "rate" }, "refused the los query for rate"},
+		}, "does not answer los", 1},
+		{"a rate refusal", func(f *fakeForeverServe) { f.losRefusal = "rate" }, "refused the los query for rate twice", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -1203,8 +1254,8 @@ func TestScoutForeverServerSightFallsBack(t *testing.T) {
 			fake.mu.Lock()
 			calls := fake.losCalls
 			fake.mu.Unlock()
-			if calls != 1 {
-				t.Fatalf("%d los queries, want one: the pass must not ask again", calls)
+			if calls != tc.calls {
+				t.Fatalf("%d los queries, want %d: one try, at most one retry, and then the pass must not ask again", calls, tc.calls)
 			}
 			rep := foreverReport(t, dir, "scout_fallback")
 			said, checked := 0, false
@@ -1231,5 +1282,98 @@ func TestScoutForeverServerSightFallsBack(t *testing.T) {
 				t.Fatal("the report has no live_los check")
 			}
 		})
+	}
+}
+
+// TestScoutForeverServerSightSkipsOneRefusedUnit: a unit that despawned, died or changed map between the read and the
+// query answers unknown-unit, not-in-world or different-maps. That one unit is left unanswered and the pass asks the
+// rest; it does not turn server sight off.
+func TestScoutForeverServerSightSkipsOneRefusedUnit(t *testing.T) {
+	for _, reason := range []string{"unknown-unit", "not-in-world", "different-maps"} {
+		t.Run(reason, func(t *testing.T) {
+			dir := t.TempDir()
+			mmaps := foreverFlat(t)
+			foreverScoutPackPlanFile(t, dir, "scout_skip")
+			fake := newFakeForeverServe(foreverPackUnits()...)
+			fake.ray = func(_ [3]float32, _, _, _ float32) serveclient.WalkRay {
+				return serveclient.WalkRay{Known: true, In: false, Hit: 3, Source: "navmesh_raycast"}
+			}
+			fake.losRefusals = map[string]string{fakeCanonGuid("0x00000000000000000000000000000064"): reason}
+			useFakeForeverServe(t, fake)
+			code, _, errOut := runCLI("plan-scout", "scout_skip", "--dir", dir, "--mmaps", mmaps,
+				"--spawns", foreverExport(), "--forever", "--out", filepath.Join(dir, "out"), "--live", "--slot", t.TempDir())
+			if code == exitLivePhaseRefused || code == exitPlanScoutLiveAborted {
+				t.Fatalf("live pass: code %d err %q", code, errOut)
+			}
+			fake.mu.Lock()
+			calls := fake.losCalls
+			fake.mu.Unlock()
+			if calls != 2 {
+				t.Fatalf("%d los queries, want both pack units asked", calls)
+			}
+			rep := foreverReport(t, dir, "scout_skip")
+			for _, n := range rep.Notes {
+				if strings.Contains(n, "does not answer los") || strings.Contains(n, "refused the los query") {
+					t.Fatalf("one refused unit stopped the pass: %q", n)
+				}
+			}
+			var step int
+			for _, st := range rep.Steps {
+				for _, c := range st.Checks {
+					if c.Name == planscout.CheckLiveLOS {
+						step = st.Step
+					}
+				}
+			}
+			if step == 0 {
+				t.Fatal("the report has no live_los check")
+			}
+			c := foreverLOSCheck(t, rep, step)
+			if c.Data["server_answered"] != 1 {
+				t.Fatalf("check data %v, want the one unit the server answered", c.Data)
+			}
+		})
+	}
+}
+
+// TestScoutForeverSightPaceAndBound: the sight pass spaces its queries by the named pace, and its named bound ends the
+// asking instead of holding the live pass.
+func TestScoutForeverSightPaceAndBound(t *testing.T) {
+	ctx := context.Background()
+	expired := scoutForeverSight{ok: true, end: time.Now().Add(-time.Second)}
+	if err := expired.pace(ctx); !errors.Is(err, errScoutSightEnd) {
+		t.Fatalf("a pass past its bound: %v, want the bound", err)
+	}
+	var sight scoutForeverSight
+	start := time.Now()
+	if err := sight.pace(ctx); err != nil {
+		t.Fatalf("first query: %v", err)
+	}
+	if err := sight.pace(ctx); err != nil {
+		t.Fatalf("second query: %v", err)
+	}
+	if d := time.Since(start); d < scoutForeverSightPace {
+		t.Fatalf("two queries were %s apart, want at least %s", d, scoutForeverSightPace)
+	}
+	if sight.end.Sub(start) < scoutForeverSightPass-time.Second {
+		t.Fatalf("the pass bound is %s from the first query, want %s", sight.end.Sub(start), scoutForeverSightPass)
+	}
+}
+
+// TestScoutForeverSightNotAsked: once the pass has stopped asking, a stand with a pack is counted as not asked and no
+// query goes out for it.
+func TestScoutForeverSightNotAsked(t *testing.T) {
+	fake := newFakeForeverServe(foreverPackUnits()...)
+	sight := scoutForeverSight{ok: false}
+	data := planscout.LiveData{ServerLOS: map[planscout.LOSKey]bool{}}
+	spot := planscout.LiveSpot{Step: 1, TargetGuids: []planscout.LiveTarget{{Guid: 100}, {Guid: 101}}}
+	if err := foreverServerSightAt(context.Background(), fake, spot, nil, &data, &sight); err != nil {
+		t.Fatalf("sight: %v", err)
+	}
+	if sight.notAsked != 1 {
+		t.Fatalf("%d stand(s) not asked, want 1", sight.notAsked)
+	}
+	if fake.losCalls != 0 {
+		t.Fatalf("%d los queries after the pass stopped asking", fake.losCalls)
 	}
 }

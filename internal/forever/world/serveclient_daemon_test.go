@@ -267,8 +267,8 @@ func TestServeClientTypesMatchTheDaemon(t *testing.T) {
 	roundTrip(t, "event_log", log, new(serveclient.EventLogPage))
 	roundTrip(t, "act", ServeActResult{Lines: []string{"step 1 wait ok"}, OK: true}, new(serveclient.ActResult))
 	dist := 12.5
-	roundTrip(t, "los", ServeLOS{A: "Tanka", B: "target", Map: 530, Clear: true, DistYD: &dist, SameMap: true,
-		InWorld: true, Reason: "rate", RetryAfterMS: 250}, new(serveclient.LOS))
+	roundTrip(t, "los", ServeLOS{A: "-7.00,0.00,0.00", B: "ForeverRat", Map: 700, Clear: true, DistYD: &dist,
+		SameMap: true, InWorld: true}, new(serveclient.LOS))
 }
 
 // TestStatusKeysPinContract pins ServeStatus's JSON keys and verifies that every TA StatusInfo JSON key except the

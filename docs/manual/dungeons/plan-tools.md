@@ -260,8 +260,15 @@ its reason gives the server's verdict and how many units the two disagree about.
 totals (`live sight: the server and the navmesh ray disagree on N of M sight answers`). The server decides: one unit
 in its sight settles the check even where the ray says otherwise, and its "none in sight" counts only when it answered
 for every unit of the pack — a partial answer that saw nothing leaves the ray's verdict standing, with the reason
-saying how many the server answered. A server whose module build does not answer the query, or that refuses it for
-`rate`, is said once in the notes and the pass goes on with the ray alone.
+saying how many the server answered.
+
+The queries are paced at 250 ms, which keeps them inside the server's five-at-once bucket and its 200 ms refill, and
+the whole query pass has a one-minute bound. A `rate` refusal is waited out and the same query asked once more. A unit
+the server no longer has (`unknown-unit`, `not-in-world`, `different-maps`: it despawned, died or changed map between
+the read and the query) is skipped alone, with one note naming how many pack units stayed unanswered; the rest of the
+pack is still asked. A server whose module build has no query, that refuses access, or that answers `rate` twice is
+said once in the notes and the pass goes on with the ray alone. When the query pass's bound or such a stop leaves
+stands unasked, one note says how many were not asked.
 
 # plan-diff
 

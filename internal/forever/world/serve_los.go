@@ -8,8 +8,7 @@ package world
 // session's GM guard runs before the line like every other `.tb` line. A refusal the module writes into its answer
 // (`no-access`, `not-in-world`, `different-maps`, `rate`, ...) is the method's result with reason set, because a
 // polling tool needs the code; a malformed line, and a module that does not answer the command at all, are typed
-// errors. A rate refusal is returned as it arrived, with the module's retry hint when the line carried one, and
-// nothing retries it here.
+// errors. A rate refusal is returned as it arrived; nothing retries it here.
 
 import (
 	"context"
@@ -21,8 +20,8 @@ import (
 
 // ServeLOS is the los method's result: the module's answer, one field per key of its line.
 type ServeLOS struct {
-	// A and B are the sides the module resolved, in its own words (a `target` side is answered with what the
-	// character had selected).
+	// A and B are the sides the module answered, in its own words: the unit's NAME when it resolved one (a guid side
+	// included), the two-decimal coordinate text for a spot, or the word it did not resolve.
 	A string `json:"a"`
 	B string `json:"b"`
 	// Map is the map the answer is about; it is absent on a refusal that hides it (no-access).
@@ -39,8 +38,6 @@ type ServeLOS struct {
 	// Reason is the module's refusal code: bad-argument, unknown-unit, not-in-world, different-maps, no-access or
 	// rate. It is absent on an answer.
 	Reason string `json:"reason,omitempty"`
-	// RetryAfterMS is the module's own wait on a rate refusal, 0 when the line carried none.
-	RetryAfterMS int `json:"retry_after_ms,omitempty"`
 }
 
 // serveLOSParams is the los method's params: the two sides (a name, "target", a guid as the daemon prints it, or a
@@ -70,8 +67,7 @@ func (st *serveState) serveLOS(ctx context.Context, p serveLOSParams) (ServeLOS,
 	if err != nil {
 		return ServeLOS{}, losError(err)
 	}
-	out := ServeLOS{A: rep.A, B: rep.B, Clear: rep.Clear, SameMap: rep.SameMap, InWorld: rep.InWorld,
-		Reason: rep.Reason, RetryAfterMS: rep.RetryAfterMS}
+	out := ServeLOS{A: rep.A, B: rep.B, Clear: rep.Clear, SameMap: rep.SameMap, InWorld: rep.InWorld, Reason: rep.Reason}
 	if rep.HasMap {
 		out.Map = rep.Map
 	}

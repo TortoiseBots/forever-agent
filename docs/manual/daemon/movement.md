@@ -24,6 +24,8 @@ sources:
     resource: internal/forever/world/serve_los.go
   - id: tb-los
     resource: internal/forever/command/tbcmd/los.go
+  - id: sight-answer
+    resource: internal/forever/sightcmd/sightcmd.go
 ---
 
 # What this is
@@ -160,20 +162,20 @@ module on the server to answer the query; a build without it answers an error na
 | Parameter | Type | Meaning |
 |---|---|---|
 | `a`, `b` | string | The two sides: a character or bot name, `target` (the character's own selection), a guid as the daemon prints it (`0x` and hex), or a ground spot `x,y,z`. |
-| `map` | number | The map id, needed when both sides are spots. |
+| `map` | number | The map id, from 1 to 65535, needed when both sides are spots. |
 
-A side that is none of those forms, and two spots without `map`, are refused `-32602` with nothing sent.
+A side that is none of those forms, two spots without `map`, `map` outside 1-65535, and `map` with a unit side (a unit
+carries its own map) are refused `-32602` with nothing sent.
 
 | Field | Meaning |
 |---|---|
-| `a`, `b` | The sides the server resolved, in its own words (a `target` side answers what the character had selected). |
+| `a`, `b` | The sides the server answered, in its own words: a unit's NAME when the server found it (a side sent as a guid included), a ground spot with two decimals, or the word it could not resolve. A `target` side answers what the character had selected. |
 | `clear` | The server's line of sight between them. |
-| `dist_yd` | How far apart they are, in yards; absent when the refusal states no distance. |
-| `map` | The map the answer is about; absent on a refusal that hides it. |
+| `dist_yd` | How far apart they are, in yards; absent on every refusal (the server states no distance when it refuses). |
+| `map` | The map the answer is about; absent on a refusal that hides it. Map id 0 is a real map (Eastern Kingdoms) and is left out of the JSON too, so a caller reads a non-refusal without it as map 0. |
 | `same_map` | Both sides are on one map AND one instance of it. Reads `false` on a refusal that hid it. |
 | `in_world` | Both sides are in the world. Reads `false` on a refusal that hid it. |
 | `reason` | A refusal code, absent on an answer: `bad-argument`, `unknown-unit` (a GameMaster or the console only), `not-in-world`, `different-maps`, `no-access` or `rate`. |
-| `retry_after_ms` | On `rate`: the wait the server's own answer carried, when it stated one. |
 
 A refusal is the call's answer with `reason` set, not an RPC error: a tool reads the code. `no-access` is the one
 answer a caller below GameMaster gets for another player's character and for a name that resolved to nothing alike,
