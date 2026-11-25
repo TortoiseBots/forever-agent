@@ -184,11 +184,14 @@ the module's read-only `.tb los` query — the one line of the player run's comm
   sample **ahead of its own stand** (the sample nearest it, never one behind it toward the tank) that the server
   clears, and then steps forward along the path (`PlayAgentLeadYd` a step, the path's last sample ahead when less is
   left) until the tank itself sees the unit — neither step ever goes back toward the tank, which is what run 4 did for
-  every try.
+  every try. After every step the search **waits for the tank to close up** (`PlayTankWait`, 15 s at most) before it
+  reads the sight again, because a live follow reaches its spot a poll or two behind the leader; at the path's end it
+  waits once and looks once more before giving up.
 - **One sight budget a pull**: at most 24 queries (`PlayTankSightSpots`) and 60 s (`PlayTankSightTime`) from the
   first look cover the skull pick, the stand walk and the search after **every** tank refusal together, and the
-  refusal path's own 90 s (`PlayRefuseTime` from the first refusal) caps what is left. Spent, the pull goes on as it
-  stands and the module is the judge. The lead steps are bounded by 8 tries (`PlayTankSightTries`).
+  refusal path's own 90 s (`PlayRefuseTime` from the first refusal) caps what is left; the waits for the tank spend
+  that same time. Spent, the answer is **unknown** and the pull keeps the older flow below (the module is the judge),
+  never "the server sees from no point". The lead steps are bounded by 8 tries (`PlayTankSightTries`).
 - The search is recorded as `pull_tank_sight` (`group`, `target`, `seen`, `yd`) for the pick, `pull_sight_stand`
   (`group`, `target`, `seen`, `known`, `tries`, `x`, `y`, `z`) for the walk, and `pull_sight_cut` (`group`, `target`,
   `blocker` with its `guid`, `entry` and `yd` from the unit) when another pack's clearance ended it.

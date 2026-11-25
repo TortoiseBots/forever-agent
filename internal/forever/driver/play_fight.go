@@ -609,6 +609,20 @@ func (b *sightBudget) take(now time.Time) bool {
 	return true
 }
 
+// end is when the budget's time runs out: PlayTankSightTime from the pull's first look, capped by the refusal path's
+// own bound. The zero time is an unbounded one. The sight search's waits for the tank are held inside it too, so a
+// tank that cannot follow never costs time a query could still use.
+func (b *sightBudget) end() time.Time {
+	end := time.Time{}
+	if !b.start.IsZero() {
+		end = b.start.Add(PlayTankSightTime)
+	}
+	if !b.limit.IsZero() && (end.IsZero() || b.limit.Before(end)) {
+		end = b.limit
+	}
+	return end
+}
+
 // tankSightPick is the pull's marks read from the server's own sight: the skull on the first live member of the kill
 // order the TANK sees from where it stands, the cross on the next one in that order. seen is false when the tank sees
 // none (the caller's search then walks it into sight of the first). ok is false when the module cannot answer at all,
@@ -650,11 +664,14 @@ func (p *playRun) tankSightPick(members []Unit, budget *sightBudget) (skull, cro
 // at PlayLosEyeYd), never nearer than PlaySightTouchYd to the unit to pull from, never more than PlaySightPastStandYd
 // past the pull's stand and never into another pack's clearance (tankSightSamples); the agent walks to the first
 // sample the server clears, then steps forward along the path — from the sample nearest its own stand, never back
-// toward the tank — until the TANK itself sees the unit, so the follow advances with it. Bounded by
-// PlayTankSightTries and the pull's one sightBudget (PlayTankSightSpots queries and PlayTankSightTime from the pull's
-// first look, the pick and the refusals included). seen is whether the tank sees the unit at the end; known is false
-// when the module stopped answering (a rate refusal, an error) or the budget is spent, and the caller then keeps its
-// older flow. A stop of the run's own is the run's.
+// toward the tank — until the TANK itself sees the unit, so the follow advances with it. After every walk the search
+// waits for the tank to close up (waitTankFollow, bounded) before the sight is read: a live follow lands a body's
+// length behind the agent, and a look taken while it still stands at the last spot reports the ground it left, not
+// the ground it is on. At the path's end it waits and looks once more before giving up. Bounded by PlayTankSightTries
+// and the pull's one sightBudget (PlayTankSightSpots queries and PlayTankSightTime from the pull's first look, the
+// pick and the refusals included; the tank waits spend that same time). seen is whether the tank sees the unit at the
+// end; known is false when the module stopped answering (a rate refusal, an error) or the budget is spent, and the
+// caller then keeps its older flow. A stop of the run's own is the run's.
 func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget *sightBudget) (seen, known bool) {
 	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 {
 		return false, false
@@ -694,9 +711,11 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 	// the live failure the lead step fixed.
 	near := nearestSample(samples, p.self)
 	for _, at := range samples[max(near, 0):] {
-		// The budget is read before every query: a long, wholly blocked path is no unbounded loop.
+		// The budget is read before every query: a long, wholly blocked path is no unbounded loop. A spent budget is
+		// NOT an answer that the server sees from no point (that would hand the pull to the fallback): it is unknown,
+		// and the caller keeps today's flow.
 		if !budget.take(p.now()) {
-			return false, true
+			return false, false
 		}
 		in, _, ok := p.pointSight(at, u)
 		if !ok {
@@ -714,6 +733,9 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 		if p.stopReason != "" || p.stall != "" {
 			return false, true
 		}
+		// The stand just moved the agent: the tank's follow is a body's length behind, and a look taken at once reads
+		// the spot it still stands on. Wait (bounded) for it to close up before the sight is read.
+		p.waitTankFollow(ctx, budget)
 		walked = true
 		break
 	}
@@ -727,9 +749,10 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 		})
 	}
 	for {
+		// A spent budget is unknown, never "the server sees from no point": the caller must keep today's flow.
 		if !budget.take(p.now()) {
-			record(false, true)
-			return false, true
+			record(false, false)
+			return false, false
 		}
 		if seen, _, ok := p.tankSight(u); !ok {
 			record(false, false)
@@ -745,8 +768,20 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 		tries++
 		next, ok := p.leadPoint(samples, u)
 		if !ok {
-			record(false, true)
-			return false, true
+			// The path's end: the tank's follow may still be closing up on the last step, so wait and look once
+			// more before the search gives up.
+			p.waitTankFollow(ctx, budget)
+			if !budget.take(p.now()) {
+				record(false, false)
+				return false, false
+			}
+			seen, _, known := p.tankSight(u)
+			if !known {
+				record(false, false)
+				return false, false
+			}
+			record(seen, true)
+			return seen, true
 		}
 		p.pullWalk = true
 		p.walkToWithin(ctx, next, PlaySightLeadArriveYd, false)
@@ -754,6 +789,9 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 		if p.stopReason != "" || p.stall != "" {
 			return false, true
 		}
+		// The lead step moved the agent: wait for the tank to follow before the next look (never at the spot it
+		// still stands on).
+		p.waitTankFollow(ctx, budget)
 	}
 }
 
@@ -883,18 +921,37 @@ func (p *playRun) tankNear(at Vec3, yd float64) bool {
 // did: a tank that cannot come beside the stand (a ledge it cannot follow down) is one bounded wait, and the pull is
 // then ordered from where the party stands and the module judges.
 func (p *playRun) waitTankNear(ctx context.Context, at Vec3, yd float64) bool {
-	deadline := p.now().Add(PlayTankWait)
+	return p.waitTankNearUntil(ctx, at, yd, p.now().Add(PlayTankWait))
+}
+
+// waitTankNearUntil is waitTankNear with the caller's own deadline (orderTank's take window, a sight budget): the
+// wait never runs past what its caller may still spend.
+func (p *playRun) waitTankNearUntil(ctx context.Context, at Vec3, yd float64, until time.Time) bool {
 	for {
 		if p.tankNear(at, yd) {
 			return true
 		}
-		if !p.now().Before(deadline) {
+		if !p.now().Before(until) {
 			return false
 		}
 		if !p.sleep(ctx, p.lim.Poll) {
 			return false
 		}
 	}
+}
+
+// waitTankFollow waits for the tank to close up with the agent after a sight-search walk, before the sight is read
+// again: a live follow lands a body's length behind the agent, and a look taken while the tank still stands on the
+// spot it left reports that spot's line, not the walk's. The wait is PlayTankWait at most, held inside the pull's one
+// sight budget (budget.end), and it is no query: a tank that cannot follow costs one bound and the look is read from
+// where it stands. The tolerance is one yard past the beside distance, so a tank at its follow spot counts.
+func (p *playRun) waitTankFollow(ctx context.Context, budget *sightBudget) bool {
+	p.refreshSelf()
+	until := p.now().Add(PlayTankWait)
+	if end := budget.end(); !end.IsZero() && end.Before(until) {
+		until = end
+	}
+	return p.waitTankNearUntil(ctx, p.self, PlayTankBesideYd+1, until)
 }
 
 // pullApproach walks the agent to the plan's stand for the group (unless it already stands within PlayArriveYd of it),
@@ -2000,6 +2057,12 @@ func (p *playRun) inPullPosition(u Unit) bool {
 // distance from the mob (the zero unit for every other bound). path is the checked polyline, ending exactly on to.
 func (p *playRun) agentApproachPoint(group int, at Vec3) (Vec3, []Vec3, string, Unit, float64, bool) {
 	p.refreshSelf()
+	// The clearance's baseline belongs to the run, across the approach's re-plans: a run that has none yet builds it
+	// here. A nil map would let packOnPath keep the start-inside distances in its throwaway one, and the next re-plan
+	// would measure the same hostiles from scratch.
+	if p.approachBase == nil {
+		p.approachBase = map[wire.GUID]float64{}
+	}
 	stop := PlayAgentReachYd - PlayAgentPullMarginYd
 	route, err := p.ports.Walker.Path(p.self, at)
 	if err != nil || route.Kind != navmesh.RouteComplete || len(route.Points) < 2 {

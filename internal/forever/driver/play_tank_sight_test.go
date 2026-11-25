@@ -42,6 +42,35 @@ func dumpPlay(t *testing.T, rig *playRig) {
 	}
 }
 
+// toldToFollow makes the fake's whole party a following one. TrailYd's trail applies only to a bot that was told to
+// follow, and the run's first pull comes before the follow its fight state sends.
+func toldToFollow(f *PlayFake) {
+	for _, b := range playBots {
+		f.Moved[strings.ToLower(b)] = true
+	}
+}
+
+// TestPlayFakeTrailIsForBotsToldToFollow: TrailYd moves only a bot that was told to follow; a bot still on its own
+// scripted spot stays there, so a test whose run never follows cannot silently get a trailing party.
+func TestPlayFakeTrailIsForBotsToldToFollow(t *testing.T) {
+	key := strings.ToLower(playBots[0])
+	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) {
+		f.BotPos[key] = Vec3{5, 5, 0}
+		f.TrailYd = PlayTankBesideYd
+	})
+	f := rig.fake
+	if err := f.Walk(context.Background(), [][3]float32{{0, 0, 0}, {10, 0, 0}}); err != nil {
+		t.Fatalf("the walk failed: %v", err)
+	}
+	if got := f.botPos(f.bot(playBots[0])); dist3(got, Vec3{5, 5, 0}) > 0.01 {
+		t.Fatalf("a bot never told to follow stands at %v; want its own spot (5,5,0)", got)
+	}
+	f.Moved[key] = true
+	if got := f.botPos(f.bot(playBots[0])); dist3(got, Vec3{5, 0, 0}) > 0.01 {
+		t.Fatalf("a bot told to follow stands at %v; want 5 yd behind the walked end (5,0,0)", got)
+	}
+}
+
 // wallAtY is the module's sight of a ledge at y 11: a mob north of it is seen only from north of it.
 func wallAtY(from, to Vec3) bool { return !(from[1] < 11 && to[1] >= 11) }
 
@@ -111,6 +140,44 @@ func TestPlayTankSightPickSharesTheSearchBudget(t *testing.T) {
 	}
 }
 
+// standSightPort answers the tank's and the ground's sight apart: a stand search's scan needs a tank that sees nothing
+// and a spot that clears, which one shared answer cannot script.
+type standSightPort struct{ tankIn, pointIn bool }
+
+func (s *standSightPort) TankSees(string, wire.GUID) (bool, float64, bool) { return s.tankIn, 0, true }
+func (s *standSightPort) PointSees(Vec3, wire.GUID) (bool, float64, bool)  { return s.pointIn, 0, true }
+
+// TestPlayTankSightSpentBudgetIsUnknown: a budget that runs out mid-search is UNKNOWN, never "the server sees from no
+// point" — the second reads as an answer and hands a pack to the fallback agent pull at once, while the doc comment
+// and the manual say a spent budget keeps today's flow. Both budget reads inside the search are checked: the sample
+// scan's and the lead loop's.
+func TestPlayTankSightSpentBudgetIsUnknown(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		used    int
+		pointIn bool
+	}{
+		{"scan", PlayTankSightSpots - 2, false},
+		{"lead", PlayTankSightSpots - 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			port := &standSightPort{tankIn: false, pointIn: tc.pointIn}
+			rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) { f.SelfPos = Vec3{} })
+			p := &playRun{cfg: PlayConfig{Bots: playBots}, route: rig.route, ports: rig.ports, lim: DefaultPlayLimits()}
+			p.ports.ServerSight = port
+			budget := &sightBudget{start: p.now(), used: tc.used}
+			skull := Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{0, 20, 0}}
+			seen, known := p.tankSightStand(context.Background(), 0, skull, budget)
+			if seen || known {
+				t.Fatalf("a spent budget returned seen=%v known=%v; want unknown (today's flow)", seen, known)
+			}
+			if budget.used != PlayTankSightSpots {
+				t.Fatalf("the budget spent %d queries; want it to stop at its bound %d", budget.used, PlayTankSightSpots)
+			}
+		})
+	}
+}
+
 // TestPlayTankSightGoneMemberIsSkipped: the module cannot find the nearest member (it left the view, which the live
 // adapter reads as a NO with its answer known), so the pick skips it and puts the skull on the member the tank sees.
 // One unanswerable member never turns the server's sight off for the pull.
@@ -168,6 +235,7 @@ func TestPlayRefusalLeadsTheTankIntoServerSight(t *testing.T) {
 		f.SightFunc = func(Vec3, Vec3) bool { return true }
 		// The tank trails five yards behind the agent, the way a live follow leaves it: south of the ledge the agent's
 		// stand cleared.
+		toldToFollow(f)
 		f.TrailYd = PlayTankBesideYd
 		// The module's own sight is the ledge.
 		f.ModuleSight = func(from, to Vec3) bool {
@@ -227,6 +295,7 @@ func TestPlayTankSightLeadStepsForward(t *testing.T) {
 		f.AddUnit(Unit{GUID: skull, Entry: 11320, Pos: Vec3{42, 22, 0}})
 		f.SpawnBosses()
 		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		toldToFollow(f)
 		f.TrailYd = PlayTankBesideYd
 		f.SrvSight, f.ModuleSight = wallAtY, wallAtY
 	})
@@ -262,6 +331,51 @@ func TestPlayTankSightLeadStepsForward(t *testing.T) {
 		t.Fatal("the pull recorded no pull_sight_stand event")
 	} else if tries, _ := ev.D["tries"].(float64); tries >= float64(PlayTankSightTries) {
 		t.Fatalf("the stand search took %v tries; want under the bound %d (a forward lead needs a few)", tries, PlayTankSightTries)
+	}
+}
+
+// TestPlayTankSightWaitsForTheTankToFollow: a live follow reaches its spot a poll or two after the agent walked, so a
+// look taken right after a lead step reads the ground the tank left. The search waits for it to close up after every
+// step, so the tank still gets the server's sight within the tries and the pull is ordered to it, never to the agent's
+// fallback. Without the wait every look reports the trail's start (the agent's old stand, south of the ledge) and the
+// first order is refused.
+func TestPlayTankSightWaitsForTheTankToFollow(t *testing.T) {
+	skull := fightGUID(1)
+	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: skull, Entry: 11320, Pos: Vec3{42, 22, 0}})
+		f.SpawnBosses()
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		toldToFollow(f)
+		f.TrailYd = PlayTankBesideYd
+		// The tank needs longer than the whole search's walking to reach the spot it was sent to.
+		f.TrailLag = 8 * time.Second
+		f.SrvSight, f.ModuleSight = wallAtY, wallAtY
+	})
+	rig.ports.ServerSight, rig.ports.Refusals = rig.fake, rig.fake
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		dumpPlay(t, rig)
+		t.Fatalf("stop = %q; want clear (the search waited for the lagging tank)", res.Stop)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 0 {
+		dumpPlay(t, rig)
+		t.Fatalf("%d fallback pulls; want none (the tank was waited for and saw the skull)", n)
+	}
+	if rig.fake.BlindOrders != 0 {
+		dumpPlay(t, rig)
+		t.Fatalf("the module refused %d order(s); want none", rig.fake.BlindOrders)
+	}
+	ev := playEvents(t, rig)["pull_sight_stand"]
+	if ev.Ev == "" {
+		t.Fatal("the pull recorded no pull_sight_stand event")
+	}
+	if seen, _ := ev.D["seen"].(bool); !seen {
+		dumpPlay(t, rig)
+		t.Fatalf("the stand search ended unseen: %v", ev.D)
+	}
+	if tries, _ := ev.D["tries"].(float64); tries >= float64(PlayTankSightTries) {
+		t.Fatalf("the stand search took %v tries; want under the bound %d", tries, PlayTankSightTries)
 	}
 }
 
@@ -469,6 +583,7 @@ func TestPlayTankSightBudgetIsOnePerPull(t *testing.T) {
 	rig := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
 		f.SpawnBosses()
 		f.AddUnit(Unit{GUID: stranger, Entry: 700, Pos: spot, Owner: wire.GUID{Low: 0x999}})
+		toldToFollow(f)
 		f.TrailYd = PlayTankBesideYd
 		f.SightFunc = func(Vec3, Vec3) bool { return true }
 		f.SrvSight = func(Vec3, Vec3) bool { return false } // the server clears no spot on the way
@@ -527,6 +642,24 @@ func TestPlayTankSightSamplesDoNotMoveTheApproachBaseline(t *testing.T) {
 	}
 }
 
+// TestAgentApproachBuildsItsBaseline: an approach whose baseline is still nil (a zero-value run, a future caller)
+// builds it before packOnPath reads the clearance, instead of handing it a nil map that it would spend on its throwaway
+// one — the start-inside distances must survive the approach's re-plans.
+func TestAgentApproachBuildsItsBaseline(t *testing.T) {
+	near := Unit{GUID: fightGUID(7), Entry: 11322, Pos: Vec3{0, 10, 0}}
+	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) {
+		f.AddUnit(near)
+		f.SelfPos = Vec3{}
+	})
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports}
+	// The agent stands 10 yd from the near hostile (inside its 22-yd clearance) and its path to the target runs
+	// through it: the first pass records the distance the agent started at.
+	p.agentApproachPoint(-1, Vec3{0, 30, 0})
+	if got, ok := p.approachBase[near.GUID]; !ok || got != 10 {
+		t.Fatalf("the approach's baseline holds %.1f yd (held %v) for the near hostile; want its start-inside 10", got, ok)
+	}
+}
+
 // TestPlayTankSightStandStartsAtTheAgent: the stand scan looks forward from the sample nearest the agent's own stand.
 // A spot that clears BEHIND the agent (it stands between the agent and the trailing tank) must not walk the leader
 // back toward the tank: that is the same backward step the lead loop was fixed for, taken before the loop even runs.
@@ -539,6 +672,7 @@ func TestPlayTankSightStandStartsAtTheAgent(t *testing.T) {
 		f.AddUnit(Unit{GUID: skull, Entry: 11320, Pos: Vec3{42, 22, 0}})
 		f.SpawnBosses()
 		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		toldToFollow(f)
 		f.TrailYd = PlayTankBesideYd
 		f.SrvSight, f.ModuleSight = sight, sight
 	})

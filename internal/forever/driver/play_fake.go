@@ -43,10 +43,11 @@ type PlayVote struct {
 //
 // The bot table is GoldenOwner's: a bot listed there is online and in the party once `.bot add` answered, and its
 // map changes when the run summons it. A bot stands at the agent's side once it was told to follow (or was summoned)
-// unless Stuck names it; before that it stands where BotPos puts it, or at the agent's side. With TrailYd set, the
-// party TRAILS: a bot not Stuck stands TrailYd behind the agent along the path the agent walked, and moves only after
-// the agent moved (a live tank's follow leaves a body behind, which is why the sight search steps the agent forward at
-// all).
+// unless Stuck names it; before that it stands where BotPos puts it, or at the agent's side. With TrailYd set, a bot
+// told to follow and not Stuck TRAILS: it stands TrailYd behind the agent along the path the agent walked, and moves
+// only after the agent moved (a live tank's follow leaves a body behind, which is why the sight search steps the agent
+// forward at all). TrailLag delays that move: until it elapses the bot still stands where the trail was when the agent
+// last walked, so a search that reads the sight without waiting sees the tank's old spot.
 type PlayFake struct {
 	*GoldenOwner
 	// Module is the fake bot module over the same bot table: the Owner port of a play run.
@@ -69,9 +70,15 @@ type PlayFake struct {
 	// TrailYd, when positive, is how far behind the agent a bot told to follow stands (along the agent's own walked
 	// path), instead of at its side: the fake's tank really trails, so a pull that leaves it behind is exercised.
 	TrailYd float64
+	// TrailLag, when positive with TrailYd, is how long a trailing bot takes to reach its follow spot after the agent
+	// walked: until then it stands on the trail as the agent left it TrailLag ago (a live follow moves a poll or two
+	// behind, never with the leader). Once the agent stands still that long, it stands at the walked spot.
+	TrailLag time.Duration
 	// trail is the agent's walked path, from where the first trailing bot was told to follow: the line a trailing bot
-	// stands on. It grows only when the agent walks (a trailing bot moves only after it moved).
-	trail []Vec3
+	// stands on. It grows only when the agent walks (a trailing bot moves only after it moved), and trailAt is when
+	// each point was walked, so TrailLag reads the line as it stood that long ago.
+	trail   []Vec3
+	trailAt []time.Time
 	// Stuck names the bots whose follow order does not move them: the run has to summon those.
 	Stuck map[string]bool
 	// NoAnswer names the bots (by lower-cased name, like Moved) that do not answer the corpse-run whisper: they stay
@@ -864,12 +871,13 @@ func (f *PlayFake) botGUID(name string) wire.GUID {
 	return wire.GUID{}
 }
 
-// botPos is where a bot stands: on the agent's trail TrailYd behind it when TrailYd is set (the fake's scripted
-// follow lag), at the agent's side once it follows, else its scripted spot.
+// botPos is where a bot stands: on the agent's trail TrailYd behind it when TrailYd is set and the bot was told to
+// follow (TrailLag reads the trail as it stood that long ago), at the agent's side once it follows, else its scripted
+// spot.
 func (f *PlayFake) botPos(b *OwnerBot) Vec3 {
 	key := strings.ToLower(b.Name)
-	if f.TrailYd > 0 && !f.Stuck[key] && len(f.trail) > 0 {
-		return trailBehind(f.trail, f.TrailYd)
+	if f.TrailYd > 0 && f.Moved[key] && !f.Stuck[key] && len(f.trail) > 0 {
+		return trailBehind(f.trailAsOf(f.Clock.Now().Add(-f.TrailLag)), f.TrailYd)
 	}
 	if f.Moved[key] {
 		return f.SelfPos
@@ -878,6 +886,21 @@ func (f *PlayFake) botPos(b *OwnerBot) Vec3 {
 		return p
 	}
 	return f.SelfPos
+}
+
+// trailAsOf is the trail as it stood at t: the points walked at or before t, the trail's first point when none was.
+func (f *PlayFake) trailAsOf(t time.Time) []Vec3 {
+	if len(f.trail) == 0 {
+		return nil
+	}
+	n := 0
+	for n < len(f.trailAt) && !f.trailAt[n].After(t) {
+		n++
+	}
+	if n == 0 {
+		return f.trail[:1]
+	}
+	return f.trail[:n]
 }
 
 // trailBehind is the point yd back along a walked path from its end, the path's start when it is shorter.
@@ -1453,13 +1476,17 @@ func (f *PlayFake) Walk(ctx context.Context, pts [][3]float32) error {
 	f.SelfPos = Vec3(pts[len(pts)-1])
 	if f.TrailYd > 0 {
 		// The agent's walk is the line a trailing bot follows: the path grows with the agent, never before it. The
-		// trail starts where the walk did, so the bot at the agent's side lags behind as the agent walks on.
+		// trail starts where the walk did, so the bot at the agent's side lags behind as the agent walks on. Each
+		// point carries the time it was walked, which TrailLag reads.
+		now := f.Clock.Now()
 		if len(f.trail) == 0 {
 			f.trail = []Vec3{Vec3(pts[0])}
+			f.trailAt = []time.Time{now}
 		}
 		for _, at := range pts {
 			if v := Vec3(at); dist3(v, f.trail[len(f.trail)-1]) > 0 {
 				f.trail = append(f.trail, v)
+				f.trailAt = append(f.trailAt, now)
 			}
 		}
 	}
