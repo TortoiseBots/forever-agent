@@ -252,6 +252,15 @@ The checks are the plan-check lints plus the scout's own rules: `reach` (a hop t
 step the walk never takes, from the plan row and from where a fight leaves the lead), `arrival` (a path that ends
 short), `climb_anchor` (too much climb at a gather point), and `joiners` (bodies a pull wakes that it does not own).
 
+On a Forever server the live pass also asks the server's own sight query (`los`, see
+[movement](../daemon/movement.md#los)) from each pull row's stand to every unit of its target pack that the live
+read saw. The server's answer is recorded beside the navmesh ray under the same unit: the pull row's `live_los`
+check carries `server_answered`, `server_in_sight` and `disagree` next to the ray's `answered` and `in_sight`, and
+its reason gives the server's verdict and how many units the two disagree about. One report note adds the pass's
+totals (`live sight: the server and the navmesh ray disagree on N of M sight answers`). Where the two disagree, the
+server's answer is the check's verdict. A server whose module build does not answer the query, or that refuses it
+for `rate`, is said once in the notes and the pass goes on with the ray alone.
+
 # plan-diff
 
 Compares two exports of one plan — two migrations, two plan files, or one of each — and prints what changed, with

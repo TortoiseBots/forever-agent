@@ -83,6 +83,7 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `path_to` | `x`, `y`, `z` | Plan a navmesh route, move nothing | [Movement](movement.md#path_to) |
 | `walk_path` | `x`, `y`, `z` | Plan and walk a navmesh route | [Movement](movement.md#walk_path) |
 | `walk_ray` | `x`, `y`, `z`, `from` | Navmesh walkability of a straight line | [Movement](movement.md#walk_ray) |
+| `los` | `a`, `b`, `map` | The server's own line of sight between two things, and the yards apart | [Movement](movement.md#los) |
 | `face` | `guid`, `name` | Turn toward a unit | [Movement](movement.md#face) |
 | `follow_start` | `lead`, `near`, `far`, `lost_s`, `tick_ms` | Start a follow loop | [Movement](movement.md#follow_start-follow_stop-follow_status) |
 | `follow_stop` | `{}` | Stop the follow loop and answer its result | [Movement](movement.md#follow_start-follow_stop-follow_status) |

@@ -833,6 +833,10 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("walk_ray", serveCallTyped(st, func(s *session, _ context.Context, p serveWalkRayParams) (ServeWalkRay, error) {
 		return s.serveWalkRay(p)
 	}))
+	// los is the server's own sight test (the core check the bots' attack gate uses), not the navmesh ray above.
+	srv.Register("los", serveCallTyped(st, func(_ *session, ctx context.Context, p serveLOSParams) (ServeLOS, error) {
+		return st.serveLOS(ctx, p)
+	}))
 	srv.Register("walk_path", serveCallTyped(st, func(s *session, ctx context.Context, p serveWalkParams) (ServePath, error) {
 		return s.serveWalkPath(ctx, p.X, p.Y, p.Z)
 	}))

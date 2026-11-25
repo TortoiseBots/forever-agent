@@ -82,7 +82,11 @@ type LiveData struct {
 	Walks      map[int]WalkResult
 	// Units is the `q units` read at that step's spot (stand, anchor or pull row).
 	Units map[int][]world.Unit
-	LOS   map[LOSKey]bool
+	// LOS is the navmesh ray's answer per spot and unit (the serve's walk_ray), and ServerLOS beside it is the
+	// server's own sight answer for a pull row's target pack (the module's los query). The two are kept apart so the
+	// report can say where they disagree.
+	LOS       map[LOSKey]bool
+	ServerLOS map[LOSKey]bool
 	// Aborted says the live pass stopped part-way; AbortReason says why.
 	Aborted     bool
 	AbortReason string
@@ -450,7 +454,51 @@ func MergeLive(rep *Report, in Input, w *worldspawn.World, live LiveData, opt Op
 		}
 	}
 	rep.Notes = append(rep.Notes, live.Notes...)
+	if note := liveSightSummary(live); note != "" {
+		rep.Notes = append(rep.Notes, note)
+	}
 	recount(rep)
+}
+
+// liveSightSummary says how the server's own sight answers compare with the navmesh ray: one line for the pass, or ""
+// when the pass read no server answer at all.
+func liveSightSummary(live LiveData) string {
+	answered, serverOnly, rayOnly := 0, 0, 0
+	keys := make([]LOSKey, 0, len(live.ServerLOS))
+	for k := range live.ServerLOS {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].Step != keys[j].Step {
+			return keys[i].Step < keys[j].Step
+		}
+		return keys[i].Guid < keys[j].Guid
+	})
+	for _, k := range keys {
+		server := live.ServerLOS[k]
+		ray, ok := live.LOS[k]
+		if !ok {
+			continue
+		}
+		answered++
+		if server && !ray {
+			serverOnly++
+		}
+		if ray && !server {
+			rayOnly++
+		}
+	}
+	if len(live.ServerLOS) == 0 {
+		return ""
+	}
+	if answered == 0 {
+		return fmt.Sprintf("live sight: the server answered %d sight queries, the navmesh ray none of them", len(live.ServerLOS))
+	}
+	if serverOnly == 0 && rayOnly == 0 {
+		return fmt.Sprintf("live sight: the server and the navmesh ray agree on all %d sight answers", answered)
+	}
+	return fmt.Sprintf("live sight: the server and the navmesh ray disagree on %d of %d sight answers (the server sees %d the ray does not, the ray sees %d the server does not)",
+		serverOnly+rayOnly, answered, serverOnly, rayOnly)
 }
 
 // liveWalkWanted says the walk pass ranks this step (its checks are in its list, or the live path failed).
@@ -743,7 +791,9 @@ func liveAggroCheck(st *StepResult, units []world.Unit, w *worldspawn.World, own
 	return c
 }
 
-// liveLOSCheck asks whether the stand sees any unit of the target pack (spec 3.4).
+// liveLOSCheck asks whether the stand sees any unit of the target pack (spec 3.4): the navmesh ray's answer, and the
+// server's own sight answer beside it when the live pass read one (LiveData.ServerLOS). Where both answered and
+// disagree, the server's answer is the verdict and the reason names the disagreement count.
 func liveLOSCheck(st *StepResult, targets []uint32, live LiveData) Check {
 	c := Check{Name: CheckLiveLOS, Source: SourceLive, Verdict: VerdictOK}
 	if len(targets) == 0 {
@@ -752,17 +802,46 @@ func liveLOSCheck(st *StepResult, targets []uint32, live LiveData) Check {
 		return c
 	}
 	answered, in := 0, 0
+	serverAnswered, serverIn, disagree := 0, 0, 0
 	for _, g := range targets {
-		los, ok := live.LOS[LOSKey{Step: st.Step, Guid: g}]
-		if !ok {
-			continue
+		key := LOSKey{Step: st.Step, Guid: g}
+		los, ok := live.LOS[key]
+		if ok {
+			answered++
+			if los {
+				in++
+			}
 		}
-		answered++
-		if los {
-			in++
+		server, serverOK := live.ServerLOS[key]
+		if serverOK {
+			serverAnswered++
+			if server {
+				serverIn++
+			}
+		}
+		if ok && serverOK && los != server {
+			disagree++
 		}
 	}
-	c.Data = map[string]float64{"targets": float64(len(targets)), "answered": float64(answered), "in_sight": float64(in)}
+	c.Data = map[string]float64{"targets": float64(len(targets)), "answered": float64(answered), "in_sight": float64(in),
+		"server_answered": float64(serverAnswered), "server_in_sight": float64(serverIn), "disagree": float64(disagree)}
+	if serverAnswered > 0 {
+		// The server's own sight test is the answer; the navmesh ray is reported beside it, and where the two
+		// disagree the check says so rather than letting the ray's verdict stand.
+		if serverIn > 0 {
+			c.Reason = fmt.Sprintf("%d of %d target pack unit(s) in sight from the stand (the server's sight)", serverIn, len(targets))
+			if disagree > 0 {
+				c.Reason += fmt.Sprintf("; the navmesh ray disagrees on %d unit(s)", disagree)
+			}
+			return c
+		}
+		c.Verdict = VerdictWarn
+		c.Reason = fmt.Sprintf("the pull shot waits for sight: none of the %d target pack units is in sight from the stand (the server's sight)", len(targets))
+		if disagree > 0 {
+			c.Reason += fmt.Sprintf("; the navmesh ray disagrees on %d unit(s)", disagree)
+		}
+		return c
+	}
 	switch {
 	case answered == 0:
 		c.Verdict = VerdictSkip
