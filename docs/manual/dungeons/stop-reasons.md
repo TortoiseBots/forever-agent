@@ -80,6 +80,7 @@ Walking, pulling and fighting:
 | `straggler:<role>` | A member fell behind for 90 s in a leg, even after the follow and summon attempts. | Check the member's engine and path. |
 | `straggler-behind-pack:<role>` | The commander could not walk back to a straggler behind an uncleared pack within 30 s. | Check the pack and the route. |
 | `boss-missing` | The boss was not at the plan's point within the state's wait (`Boss`, 60 s, plus `wait_s` for a patrolling boss). | Check the boss position and `wait_s`; a boss with no spawn row is summoned by an event and must not be a plain boss. |
+| `boss-not-ready` | Before a boss, after both rest windows, the party was still short: the healer under 50% mana or the tank under 70% health. The gate fails closed, so a tank or healer missing from the roster, dead, a ghost, or without a readable bar counts as short, and so does a healer whose power is not mana. | Let the party rest and pull again; check the named member's power type. |
 | `bosses-alive` | At the end, a boss of the run was still alive (a player run's check of every boss up to `--last-leg`). | The route or the boss order is wrong. |
 
 Deaths, wipes and the end:

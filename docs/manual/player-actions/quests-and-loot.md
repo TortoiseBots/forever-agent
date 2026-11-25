@@ -179,7 +179,9 @@ result marks it with `ritual: true`.
 
 ## roll
 
-`roll` votes in a group roll. `choice` is `need`, `greed` or `pass`; the roll is named by `looted` (the corpse or
+`roll` votes in a group roll. `choice` is `need`, `greed` or `pass`, and `vote` is its alias (the examples in the
+live notes spell it `vote`); give one, or both with the same word, and two different words are refused rather than
+picked between. The roll is named by `looted` (the corpse or
 object) and `item_slot`, or by neither when exactly one roll is open. `roll_id` is not accepted on this server:
 `rolls are named by looted and item_slot`.
 

@@ -68,7 +68,8 @@ must not be able to move that traffic somewhere else between the check and the
 login. Any other plain-http host needs `--dash-insecure-http`.
 
 Without `--watch` it prints the roster and exits. With `--watch` the first read is
-the baseline and later reads print only the changes:
+the baseline and prints the roster; every later good read prints the heartbeat line
+first and then its changes:
 
 | Event | When |
 |---|---|
@@ -76,6 +77,16 @@ the baseline and later reads print only the changes:
 | `stuck` | A bot that says moving has not moved for `--stuck-after`, and no move of at least half a yard happened. |
 | `lone-combat` | A bot has been in combat for `--lone-combat-after` with no group mate of its group in combat. |
 | `far-from-group` | A bot is more than `--group-distance` yards from its group's centre. It must come back under 80% of the distance before it can fire again. |
+
+The heartbeat line (`roster: N bot(s), M human(s); states ...`) is the watch's sign of life at the `--interval`
+pace. The bots answer of this port is a bare list, so the heartbeat is read from the dashboard's `GET /api/v1/status`
+route (bots, humans and the state counts) when the bots answer carries none; a dashboard without that route is a
+roster without a heartbeat, never a failed read. The fallback read is optional, so it has a half-second bound of its
+own instead of `--timeout`: a status route that hangs behind a healthy bots route costs each sample half a second.
+
+The dashboard's own macro states read as states like any other: a `busy` bot (a scripted block), a `stalled` mover or
+a `resting` bot is in the roster and in the far-from-group and death rules, and only a `moving` bot can be reported
+stuck.
 
 Each condition is reported once and fires again only after it cleared. A dashboard
 record that omits or zeroes a field the rules read (`hp`, `max_hp`, `map`,

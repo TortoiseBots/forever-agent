@@ -62,7 +62,7 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `target` | `guid`, `name` | Select a unit on the server | [Status](status-and-world-reads.md#unit-and-target) |
 | `gameobjects` | `within`, `radius`, `entry`, `type`, `name`, `limit` | Game objects in view | [Status](status-and-world-reads.md#gameobjects) |
 | `dynamic_objects` | `{}` | Ground spells in view | [Status](status-and-world-reads.md#dynamic_objects) |
-| `item_info` | `entries`, `wait_ms` | Item data for up to 64 entries | [Status](status-and-world-reads.md#item_info) |
+| `item_info` | `entry` or `entries`, `wait_ms` | Item data for up to 64 entries | [Status](status-and-world-reads.md#item_info) |
 | `map_snapshot` | `floor`, `plan`, `floors`, `background`, `html`, `pad` | The run so far as an SVG | [Status](status-and-world-reads.md#map_snapshot) |
 | `combat_near` | `x`, `y`, `z`, `radius`, `window_s`, `who` | Who hit mobs near a point recently | [Status](status-and-world-reads.md#combat_near) |
 | `death_status` | `{}` | Death phase and corpse | [Status](status-and-world-reads.md#death_status) |
@@ -88,6 +88,7 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `follow_stop` | `{}` | Stop the follow loop and answer its result | [Movement](movement.md#follow_start-follow_stop-follow_status) |
 | `teleport` | `x`, `y`, `z`, `map`, `require_ground` | `.go xyz` and the fall after it | [Travel](travel.md#teleport) |
 | `area_trigger` | `id` | Enter an area trigger | [Travel](travel.md#area_trigger) |
+| `area_trigger_watch` | `id`, `map`, `x`, `y`, `z`, `radius`, `clear` | Send the trigger on the walk's own crossing | [Travel](travel.md#area_trigger_watch) |
 | `mount` | `spell`, `entry` | Mount by spell or mount item | [Travel](travel.md#mount-and-dismount) |
 | `dismount` | `{}` | Cancel the mount aura | [Travel](travel.md#mount-and-dismount) |
 | `taxi` | `guid`, `node`, `nodes`, `wait_landing`, `wait_ms` | Flight window, or one flight | [Travel](travel.md#taxi) |
@@ -126,7 +127,7 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `loot_close` | `wait_ms` | Release the loot window | [Quests and loot](../player-actions/quests-and-loot.md) |
 | `open_object` | `guid`, `spell_id`, `take`, `wait_ms` | Open a chest or door, optionally take all | [Quests and loot](../player-actions/quests-and-loot.md) |
 | `use_object` | `guid`, `wait_ms` | Use a game object | [Quests and loot](../player-actions/quests-and-loot.md) |
-| `roll` | `looted`, `item_slot`, `roll_id`, `choice` | Need, greed or pass a group roll | [Quests and loot](../player-actions/quests-and-loot.md) |
+| `roll` | `looted`, `item_slot`, `roll_id`, `choice` (or its alias `vote`) | Need, greed or pass a group roll | [Quests and loot](../player-actions/quests-and-loot.md#roll) |
 
 # NPCs, vendors and gossip
 
@@ -169,7 +170,7 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `leave_group` | `{}` | Leave the party | [Groups](../player-actions/groups-raids-and-guild.md) |
 | `disband` | `{}` | Disband the group (leader) | [Groups](../player-actions/groups-raids-and-guild.md) |
 | `promote` | `name` | Promote a member to leader | [Groups](../player-actions/groups-raids-and-guild.md) |
-| `assistant` | `name`, `clear` | Set or clear a raid assistant | [Groups](../player-actions/groups-raids-and-guild.md) |
+| `assistant` | `name`, `clear` | Set or clear a raid assistant (a raid only) | [Groups](../player-actions/groups-raids-and-guild.md#party-leader-controls) |
 | `convert_raid` | `{}` | Convert the party to a raid | [Groups](../player-actions/groups-raids-and-guild.md) |
 | `raid_move` | `guid`, `name`, `subgroup`, `swap_with` | Move a member to a subgroup | [Groups](../player-actions/groups-raids-and-guild.md) |
 | `loot_method` | `method`, `master`, `threshold` | Set the group's loot rule | [Groups](../player-actions/groups-raids-and-guild.md) |

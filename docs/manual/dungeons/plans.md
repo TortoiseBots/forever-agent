@@ -87,8 +87,10 @@ pass.
 | `live-checked` | The plan was run live by a party. |
 
 `forever_status` is a separate axis: `n/a` (Turtle-custom content a Forever server does not have), `todo` (not
-exported for a Forever server yet), `exported` (run-leader rows were written for it), `live-checked` (it was run on
-a Forever server). `plan-list` prints the whole value, free text included.
+exported for a Forever server yet), `exported` (`tools/dungeongen` wrote the plan's run-leader rows for one and its
+spawns were checked against a Forever world export), `refused` (it was checked against ForeverCore data and cannot
+be cleared for a Forever run: the free text names the refused field, or the spawns or the route the server does not
+have) or `live-checked` (it was run on a Forever server). `plan-list` prints the whole value, free text included.
 
 A naming rule that bites: `plan-export` refuses a `draft` plan unless `--allow-draft` is passed, and
 `--all-live` exports only `live-checked` plans. The plan check does not care about the status: it walks the file as
@@ -136,7 +138,7 @@ A step holds exactly one of these keys:
 
 | Key | What it does |
 |---|---|
-| `use_object` | Uses a game object: `entry`, `near`, `range` (default 8 yd), `spawn` (exact object guid), `alt_entries` (entry per server name), `stand`, `requires_item`, `via_item` (use the item on the object), `proof`. |
+| `use_object` | Uses a game object: `entry`, `near`, `range` (default 8 yd), `spawn` (exact object guid), `alt_entries` (the entry another server uses for the object at the same position, keyed by server name; `plan-check --forever` reads the `forever` entry and every other reader keeps `entry`), `stand`, `requires_item`, `via_item` (use the item on the object), `proof`. |
 | `wait_for` | Waits for `gameobject` (`state` `ready`, `active`, `active_alt`, plus `gone_ok`), `hostiles_gone` (`radius`, optional `center`) or `unit` (`entries`, `near`, `radius` default 50 yd, `state` `seen`/`hostile`/`dead`/`gone`). `timeout_s` default 60, at most 600 (a hold's at most 1800); `fail_text` says why it matters. |
 | `loot_object` | Opens a chest or node and takes the contents: `entry`/`near`, `stand`, `expect_item`, `batch`. A batch is 3-6 chests within 15 yd of each other. |
 | `use_item` | Uses an item from the leader's bags: `entry`, `name`, `requires_item` (a reagent the use consumes), `expect_item`. |
@@ -160,6 +162,11 @@ patrolling boss, 1-600), `skip_unreachable` (why the boss may stand out of reach
 
 A leg's `rest` overrides the rest gates: `health` (default 90 percent), `healer_mana` (50), `mana` (35), `max_s`
 (60 s), and the walking-rest floors `walk_yd` (60 yd), `walk_health` (70), `walk_healer_mana` (40), `walk_mana` (25).
+
+Before a boss the run holds the party to a gate of its own, apart from the rest overrides: after both rest windows
+the healer must be at 50% mana and the tank at 70% health. A party still short stops `boss-not-ready` and the run
+records a `boss_rest_timeout` event; the gate fails closed, so a missing, dead or unreadable member, or a healer
+whose power is not mana, counts as short.
 
 # Keys and items
 

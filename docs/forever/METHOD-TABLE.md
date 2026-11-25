@@ -119,6 +119,7 @@ sent is in the model.
 | `addon_stop` | refused: no add-on host on this server: running a real add-on headless is a later ticket, so there is nothing to start, tick, click or read (addon_send is the ported half, the add-on message layer) |
 | `addon_tick` | refused: no add-on host on this server: running a real add-on headless is a later ticket, so there is nothing to start, tick, click or read (addon_send is the ported half, the add-on message layer) |
 | `area_trigger` | implemented |
+| `area_trigger_watch` | implemented |
 | `assistant` | implemented |
 | `attack` | implemented |
 | `auction_bid` | implemented |

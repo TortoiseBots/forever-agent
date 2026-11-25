@@ -38,7 +38,9 @@ vendor
 buy entry=2589 n=5
 ```
 
-Each step prints exactly one line: `step N verb ok <detail>` or `step N verb fail <reason>`. A failed step ends the
+Each step prints exactly one line: `step N verb ok <detail>` or `step N verb fail <reason>`. Every refused step gets
+its `fail` line, whichever verb it is: a verb that returns its refusal without printing one gets the line from the
+step runner, and a verb that prints its own (`wait`, `gm`, `goto`) keeps the one it printed. A failed step ends the
 run; the steps after it do not run. A step that opens a menu prints its options first
 (`menu option 12 npc 1234 "I want to browse your goods."`), a vendor prints its rows, a quest list its quests.
 

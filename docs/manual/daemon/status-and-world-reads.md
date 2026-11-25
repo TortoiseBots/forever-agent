@@ -52,6 +52,7 @@ Call shape and errors are on [RPC basics](rpc-basics.md). Units are also what
 | `target` | GUID | The unit `target`/`attack` selected, or the server's own target field. |
 | `health`, `max_health`, `power`, `max_power`, `power_type` | int | Vitals, and which power bar `power` is. |
 | `in_combat`, `falling`, `z_unknown` | bool | In combat; falling or airborne; the client could not work out the height after a fall, a knockback or a teleport. |
+| `fall_ms`, `fall_land_z` | int, float | While a fall is in the air: the flight left in milliseconds and the floor it lands on (omitted otherwise). |
 | `teleport_seq` | uint | How many server teleports this session has seen; a change means the server moved the character. |
 | `dead`, `ghost`, `on_taxi` | bool | Dead; dead as a ghost; on a taxi flight (the unit flag is set, or a flight has not landed). |
 | `latency_ms`, `server_packets`, `parse_errors` | uint, int, int | Last round trip, packets received, packets the decoder could not parse. |
@@ -143,8 +144,12 @@ Using or opening one is on [quests and loot](../player-actions/quests-and-loot.m
 # dynamic_objects
 
 Takes no parameters. Lists the ground spells in view (a Blizzard area, a fire patch, ...), nearest first:
-`guid`, `spell_id`, `caster`, `radius`, `x`, `y`, `z`, `distance`. `distance` is flat and is `-1` while
+`guid`, `kind`, `spell_id`, `caster`, `radius`, `x`, `y`, `z`, `distance`. `distance` is flat and is `-1` while
 the object has no position.
+
+`kind` names the object type the area arrived in: `dynamic object` (a persistent area aura, the usual ground spell)
+or `area trigger` (this core's `SPELL_EFFECT_CREATE_AREATRIGGER`, which is how Blizzard and Flamestrike land). An
+area trigger that carried no spell (a portal) is not a ground spell and stays out of the list.
 
 # item_info
 
@@ -152,8 +157,11 @@ Answers what the server's item data says about up to 64 item entries.
 
 | Parameter | Type | Default | Meaning |
 |---|---|---|---|
+| `entry` | int | — | One item entry, above 0. The single-item form of `entries`; both at once is refused. |
 | `entries` | int array | — (1 to 64 required) | Item entries to look up. A repeated entry is repeated in the answer. |
 | `wait_ms` | int | `0` | Not supported yet: any non-zero value is refused. The lookup uses the session's own database deadline. |
+
+Give `entry` or `entries` (1 to 64 ids).
 
 The result is `{"items":[...]}`, one row per requested entry in request order:
 
@@ -240,6 +248,8 @@ forever-agent forever rpc --timeout 2m ./slot map_snapshot '{"plan":"uldaman","b
 | `map_snapshot` error `nothing to draw yet` | The recorder has no position: the character is not in the world. |
 | `map_snapshot` note `no navmesh background: ...` | The daemon was started without `--navmesh`, or the folder lacks that map's tiles. |
 | `item_info: needs 1-64 entries` | Split the request into pages of at most 64 entries. |
+| `item_info: give entry or entries, not both` | Use one form. `entry` is the single-item shortcut. |
+| `item_info: entry N is not a positive item id` | An item entry is above 0. |
 
 # Related
 
