@@ -84,12 +84,13 @@ func (st *serveState) serveLOS(ctx context.Context, p serveLOSParams) (ServeLOS,
 
 // losError names the two los failures a caller must tell apart from a module answer: a server whose module build has
 // no los command at all (a clear "not supported by this module build", which a tool answers by falling back to what
-// it had), and an answer that is not a los record (refused, never read as a zero).
+// it had), and an answer that is not a los record (refused, never read as a zero). The texts name no command line: this
+// package builds none (dungeon_send_test.go holds that).
 func losError(err error) error {
 	switch {
 	case errors.Is(err, tbcmd.ErrLOSUnsupported):
 		return &rpc.Error{Code: rpc.CodeGame,
-			Message: "los: not supported by this module build (the server does not answer .tb los)"}
+			Message: "los: not supported by this module build (the server does not answer the los query)"}
 	case errors.Is(err, tbcmd.ErrBadReport), errors.Is(err, tbcmd.ErrBadValue):
 		return &rpc.Error{Code: rpc.CodeGame, Message: "los: the module's answer is not a los record: " + err.Error()}
 	}

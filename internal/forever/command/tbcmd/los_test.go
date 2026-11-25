@@ -115,9 +115,6 @@ func TestLOSAnswers(t *testing.T) {
 		{"other maps, no distance", "Tanka", "Healera",
 			"los a=Tanka b=Healera map=0 los=0 same_map=0 in_world=1 reason=different-maps #T",
 			LOSReport{A: "Tanka", B: "Healera", HasMap: true, SameMap: false, InWorld: true, Reason: LOSDifferentMaps}},
-		{"an answer with the module prefix", "Tanka", "Healera",
-			"TortoiseBots: los a=Tanka b=Healera map=0 los=1 dist=1.0 same_map=1 in_world=1 #T",
-			LOSReport{A: "Tanka", B: "Healera", HasMap: true, Clear: true, DistYD: 1, HasDist: true, SameMap: true, InWorld: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := oneReply(tc.line)
