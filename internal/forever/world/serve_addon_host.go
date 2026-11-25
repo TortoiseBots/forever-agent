@@ -17,8 +17,10 @@ package world
 // The sidecar is another process and a call can take CallTimeout to answer (a looping handler is killed only when
 // the budget runs out), so the sidecar calls run on the host's own goroutine: the loop prepares one job (the world
 // pushes, the events to fire, a tick) and never waits for it, and the job's answer is applied on the loop when it
-// arrives. The session therefore keeps collecting packets and answering RPCs while the add-on is busy; an add-on
-// that raised or was killed only ends the host, never the daemon.
+// arrives. addon_start's load, addon_tick's tick and addon_stop's close follow the same rule: they wait on their
+// RPC goroutine, and only their short session sections are queued, each method with one overall bound. The
+// session therefore keeps collecting packets and answering RPCs while the add-on is busy; an add-on that raised or
+// was killed only ends the host, never the daemon.
 
 import (
 	"context"
@@ -45,6 +47,10 @@ const (
 	// addonHostPages bounds one feed: a burst larger than this waits for the next loop turn instead of holding the
 	// session's events for longer.
 	addonHostPages = 4
+	// addonHostMethodBound bounds addon_start, addon_tick and addon_stop as a whole. Each sidecar call answers
+	// within addonhost.CallTimeout (3 s), and a tick may first wait for a running job, so the method's bound is
+	// two calls plus slack. It is the caller's wait, never the session loop's.
+	addonHostMethodBound = 10 * time.Second
 )
 
 // serveAddonStartParams is addon_start's: the add-on's folder (its .toc is found in it), the clock and any extra
@@ -91,9 +97,10 @@ type serveAddonHostState struct {
 	Registered []string             `json:"registered,omitempty"` // the list this session holds for it
 	Sent       []serveAddonSent     `json:"sent,omitempty"`
 	Received   []serveAddonReceived `json:"received,omitempty"`
-	Errors     []addonhost.LuaError `json:"errors,omitempty"` // the add-on's handler errors, contained
-	Chat       []addonhost.ChatLine `json:"chat,omitempty"`   // what it printed or wrote to the chat frame
-	Inbox      serveAddonInbox      `json:"inbox"`            // this session's receive counters
+	Errors     []addonhost.LuaError `json:"errors,omitempty"`    // the add-on's handler errors, contained
+	Chat       []addonhost.ChatLine `json:"chat,omitempty"`      // what it printed or wrote to the chat frame
+	Throttled  bool                 `json:"throttled,omitempty"` // it hit its send or per-call time budget
+	Inbox      serveAddonInbox      `json:"inbox"`               // this session's receive counters
 	Dropped    int                  `json:"dropped,omitempty"`
 	Stderr     string               `json:"stderr,omitempty"`
 	Error      string               `json:"error,omitempty"` // why a host that is not running ended
@@ -133,14 +140,25 @@ type addonCall struct {
 }
 
 // addonJob is what the loop hands the host's goroutine: the calls one turn needs, in order. It is built and
-// consumed on the loop, then run on the host's goroutine and dropped there.
+// consumed on the loop, then run on the host's goroutine and dropped there. done, when set, is the channel the
+// loop hands the job's applied answer back on: addon_tick queues its job on the loop and waits for it off the
+// queue, so it never holds the session.
 type addonJob struct {
 	calls []addonCall
+	done  chan addonJobResult
+}
+
+// addonTickWait is what a queued addon_tick section answers while the worker is busy: the channels to wait on,
+// instead of a job. Both are created once for the host's lifetime, so reading them off the loop is safe.
+type addonTickWait struct {
+	idle <-chan struct{}
+	quit <-chan struct{}
 }
 
 // addonJobResult is one job's answer, applied on the loop: everything the add-on asked for, the clock a tick
 // reached, the state a state call read, or why the host broke.
 type addonJobResult struct {
+	job   *addonJob
 	outs  []addonhost.Out
 	clock float64
 	state *addonhost.State
@@ -163,11 +181,13 @@ type serveAddonHost struct {
 	sent       []serveAddonSent
 	received   []serveAddonReceived
 	dropped    int
+	throttled  bool                // the add-on hit a per-call limit at least once
 	lastErr    string              // the last contained error (a registration or a feed failure)
 	err        error               // why the host ended
 	state      *addonhost.State    // what the last state read answered, nil before the first
 	jobs       chan *addonJob      // at most one queued: submit refuses while a job is out
 	results    chan addonJobResult // the worker's answers, drained on the loop
+	idle       chan struct{}       // a job finished; the loop signals it for a waiting addon_tick
 	quit       chan struct{}
 	quitOnce   sync.Once
 	workerDone chan struct{}
@@ -175,30 +195,57 @@ type serveAddonHost struct {
 }
 
 func registerAddonHostMethods(srv *rpc.Server, st *serveState) {
-	srv.Register("addon_start", serveCallTyped(st, func(s *session, _ context.Context, p serveAddonStartParams) (serveAddonHostState, error) {
-		return st.addonStart(s, p)
+	// addon_start, addon_tick and addon_stop run on their RPC goroutine, not on the session queue: the sidecar
+	// calls they wait for (a load, a tick) take up to CallTimeout, and every section that reads or writes the
+	// session is its own short queued call. The session therefore answers status and every other method while an
+	// add-on is stuck, and addonGate keeps one host mutation at a time (st.addonGate, not the queue).
+	srv.Register("addon_start", rpc.Typed(func(ctx context.Context, p serveAddonStartParams) (serveAddonHostState, error) {
+		out, err := st.addonStart(ctx, p)
+		if err != nil {
+			return serveAddonHostState{}, serveError(err)
+		}
+		return out, nil
 	}))
-	srv.Register("addon_stop", serveCallTyped(st, func(s *session, _ context.Context, _ serveEmpty) (serveAddonHostState, error) {
-		return st.addonStop(s)
+	srv.Register("addon_stop", rpc.Typed(func(ctx context.Context, _ serveEmpty) (serveAddonHostState, error) {
+		out, err := st.addonStop(ctx)
+		if err != nil {
+			return serveAddonHostState{}, serveError(err)
+		}
+		return out, nil
 	}))
 	srv.Register("addon_state", serveReadTyped(st, func(s *session, _ context.Context, _ serveEmpty) (serveAddonHostState, error) {
 		return st.addonState(s)
 	}))
-	srv.Register("addon_tick", serveCallTyped(st, func(s *session, _ context.Context, p serveAddonTickParams) (serveAddonTick, error) {
-		return st.addonTick(s, p)
+	srv.Register("addon_tick", rpc.Typed(func(ctx context.Context, p serveAddonTickParams) (serveAddonTick, error) {
+		out, err := st.addonTick(ctx, p)
+		if err != nil {
+			return serveAddonTick{}, serveError(err)
+		}
+		return out, nil
 	}))
 }
 
-// addonStart loads the add-on and registers its prefixes with this session.
-func (st *serveState) addonStart(s *session, p serveAddonStartParams) (serveAddonHostState, error) {
-	if st.addon != nil && st.addon.h != nil {
-		return serveAddonHostState{}, errors.New("addon_start: the add-on host is already running (addon_stop first)")
+// addonGateWait takes the add-on host's gate: one of the lifecycle and tick methods runs at a time, so their
+// short session sections and the sidecar's job order cannot interleave.
+func (st *serveState) addonGateWait(ctx context.Context) error {
+	select {
+	case st.addonGate <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-st.done:
+		return ErrLinkLost
 	}
+}
+
+func (st *serveState) addonGateFree() { <-st.addonGate }
+
+// addonStart loads the add-on and registers its prefixes with this session. The sidecar start and the load run on
+// this goroutine; only the session's own checks, the install and the prefixes are queued, so a load that hangs
+// costs the add-on its host (CallTimeout) and never the session loop.
+func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (serveAddonHostState, error) {
 	if strings.TrimSpace(p.Dir) == "" {
 		return serveAddonHostState{}, errors.New("addon_start: needs dir, the add-on's folder")
-	}
-	if s.opts.AddonOff {
-		return serveAddonHostState{}, errors.New("addon_start: this session was started with the add-on off (--addon off), so it cannot register a prefix")
 	}
 	manual := false
 	switch p.Clock {
@@ -208,63 +255,123 @@ func (st *serveState) addonStart(s *session, p serveAddonStartParams) (serveAddo
 	default:
 		return serveAddonHostState{}, fmt.Errorf("addon_start: clock %q: use real or manual", p.Clock)
 	}
-	if st.addon != nil {
-		// A host that died on its own leaves its prefixes on the session's list; a fresh start takes them off
-		// before registering its own.
-		_ = st.addon.unregister(s)
+	if err := st.addonGateWait(ctx); err != nil {
+		return serveAddonHostState{}, err
 	}
-	// The cursor goes in before anything the add-on does while loading: a frame the server delivers during the
-	// registration (or a plugin's own startup) is still fed, never skipped as already seen.
-	a := &serveAddonHost{dir: p.Dir, manual: manual, lastTick: time.Now(), cursor: s.EventLog().Seq(),
-		jobs: make(chan *addonJob, 1), results: make(chan addonJobResult, 1), quit: make(chan struct{}),
-		workerDone: make(chan struct{})}
+	defer st.addonGateFree()
+	ctx, cancel := context.WithTimeout(ctx, addonHostMethodBound)
+	defer cancel()
+
+	type addonPrep struct {
+		world  addonhost.World
+		cursor uint64
+	}
+	v, err := st.call(ctx, func(s *session) (any, error) {
+		if st.addon != nil && st.addon.h != nil {
+			return nil, errors.New("addon_start: the add-on host is already running (addon_stop first)")
+		}
+		if s.opts.AddonOff {
+			return nil, errors.New("addon_start: this session was started with the add-on off (--addon off), so it cannot register a prefix")
+		}
+		if st.addon != nil {
+			// A host that died on its own leaves its prefixes on the session's list; a fresh start takes them
+			// off before registering its own.
+			_ = st.addon.unregister(s)
+		}
+		// The cursor goes in before anything the add-on does while loading: a frame the server delivers during
+		// the load (or a plugin's own startup) is still fed, never skipped as already seen.
+		return addonPrep{world: addonWorldOf(s), cursor: s.EventLog().Seq()}, nil
+	})
+	if err != nil {
+		return serveAddonHostState{}, err
+	}
+	prep := v.(addonPrep)
+
+	h, err := addonhost.Start(p.Dir)
+	if err != nil {
+		return serveAddonHostState{}, err
+	}
+	res, outs, err := h.Load(prep.world, true)
+	if err != nil {
+		h.Close()
+		return serveAddonHostState{}, fmt.Errorf("addon_start: loading the add-on: %w", err)
+	}
+	a := &serveAddonHost{dir: p.Dir, manual: manual, lastTick: time.Now(), cursor: prep.cursor,
+		jobs: make(chan *addonJob, 1), results: make(chan addonJobResult, 1), idle: make(chan struct{}, 1),
+		quit: make(chan struct{}), workerDone: make(chan struct{})}
 	for _, prefix := range p.Prefixes {
 		if !slices.Contains(a.registered, prefix) {
 			a.registered = append(a.registered, prefix)
 		}
 	}
-	st.addon = a
-	h, err := addonhost.Start(a.dir)
-	if err != nil {
-		st.addon = nil
-		return serveAddonHostState{}, err
-	}
+	// The worker runs from here, before the install is queued, so a failed install still has one to wait for.
 	a.h = h
 	go a.work(h)
-	res, outs, err := h.Load(a.worldOf(s), true)
+	_, err = st.call(ctx, func(s *session) (any, error) {
+		st.addon = a
+		// The sends of the load (a plugin's hello) are the add-on's own: performed here, on the loop, with the
+		// host already installed so their prefixes register through it.
+		st.performAddonOuts(a, outs)
+		a.name, a.version, a.files = res.Name, res.Version, res.Files
+		for _, prefix := range res.Prefixes {
+			if !slices.Contains(a.registered, prefix) {
+				a.registered = append(a.registered, prefix)
+			}
+		}
+		if err := a.ensureRegistered(s); err != nil {
+			st.addon = nil
+			return nil, err
+		}
+		a.world = ""
+		if w, ok := a.worldCall(s); ok {
+			a.submit(&addonJob{calls: []addonCall{{kind: addonPushWorld, world: w}}})
+		}
+		return nil, nil
+	})
 	if err != nil {
 		a.stop()
-		st.addon = nil
-		return serveAddonHostState{}, fmt.Errorf("addon_start: loading the add-on: %w", err)
-	}
-	st.performAddonOuts(a, outs)
-	a.name, a.version, a.files = res.Name, res.Version, res.Files
-	for _, prefix := range res.Prefixes {
-		if !slices.Contains(a.registered, prefix) {
-			a.registered = append(a.registered, prefix)
-		}
-	}
-	if err := a.ensureRegistered(s); err != nil {
-		a.stop()
-		st.addon = nil
 		return serveAddonHostState{}, fmt.Errorf("addon_start: registering the add-on's prefixes: %w", err)
 	}
-	a.world = ""
-	if w, ok := a.worldCall(s); ok {
-		a.submit(&addonJob{calls: []addonCall{{kind: addonPushWorld, world: w}}})
+	return st.addonStateNow(ctx)
+}
+
+// addonStateNow reads the loop-owned state of the installed host on the loop, for the RPC goroutine's answer.
+func (st *serveState) addonStateNow(ctx context.Context) (serveAddonHostState, error) {
+	v, err := st.callDead(ctx, func(s *session) (any, error) { return st.addonHostState(s) })
+	if err != nil {
+		return serveAddonHostState{}, err
 	}
-	return st.addonHostState(s)
+	out, ok := v.(serveAddonHostState)
+	if !ok {
+		return serveAddonHostState{}, errors.New("addon_start: internal state type")
+	}
+	return out, nil
 }
 
 // addonStop ends the host and takes its prefixes off the session's list, leaving the other prefixes registered.
-func (st *serveState) addonStop(s *session) (serveAddonHostState, error) {
-	a := st.addon
-	if a == nil || a.h == nil {
-		return serveAddonHostState{Running: false}, errors.New("addon_stop: the add-on host is not running")
+// The close (bounded by the sidecar's own two seconds) runs off the session queue; only taking the host out and
+// unregistering its prefixes are queued.
+func (st *serveState) addonStop(ctx context.Context) (serveAddonHostState, error) {
+	if err := st.addonGateWait(ctx); err != nil {
+		return serveAddonHostState{}, err
 	}
-	st.addon = nil
+	defer st.addonGateFree()
+	ctx, cancel := context.WithTimeout(ctx, addonHostMethodBound)
+	defer cancel()
+	v, err := st.call(ctx, func(s *session) (any, error) {
+		a := st.addon
+		if a == nil || a.h == nil {
+			return nil, errors.New("addon_stop: the add-on host is not running")
+		}
+		st.addon = nil
+		return a, nil
+	})
+	if err != nil {
+		return serveAddonHostState{}, err
+	}
+	a := v.(*serveAddonHost)
 	a.stop()
-	if err := a.unregister(s); err != nil {
+	if _, err := st.call(ctx, func(s *session) (any, error) { return nil, a.unregister(s) }); err != nil {
 		// The host is stopped whatever the registration answer: say the prefixes may still be on the session's list.
 		return serveAddonHostState{Running: false, Error: fmt.Sprintf("addon_stop: the host stopped, but unregistering its prefixes failed: %v", err)}, nil
 	}
@@ -288,28 +395,74 @@ func (st *serveState) addonState(s *session) (serveAddonHostState, error) {
 }
 
 // addonTick advances the add-on's clock and runs OnUpdate. A manual clock moves only on this call, so it answers
-// with the tick's own result: it waits for the job (bounded by CallTimeout), while the daemon's own ticks never
-// wait for the add-on.
-func (st *serveState) addonTick(s *session, p serveAddonTickParams) (serveAddonTick, error) {
-	a := st.addon
-	if a == nil || a.h == nil {
-		return serveAddonTick{}, errors.New("addon_tick: the add-on host is not running (addon_start)")
+// with the tick's own result. The tick job is queued on the loop and waited for here, off the queue: a tick that
+// hangs in the sidecar cannot hold status, and the method has one overall bound (addonHostMethodBound).
+func (st *serveState) addonTick(ctx context.Context, p serveAddonTickParams) (serveAddonTick, error) {
+	if err := st.addonGateWait(ctx); err != nil {
+		return serveAddonTick{}, err
 	}
+	defer st.addonGateFree()
+	ctx, cancel := context.WithTimeout(ctx, addonHostMethodBound)
+	defer cancel()
 	ms := p.MS
 	if ms <= 0 {
 		ms = addonHostStepMS
 	}
-	if calls := a.harvest(s); len(calls) > 0 {
-		if _, ok := st.runAddonNow(a, calls); !ok {
-			return serveAddonTick{}, a.endError()
+	var job *addonJob
+	var hostQuit <-chan struct{}
+	for job == nil {
+		v, err := st.call(ctx, func(s *session) (any, error) {
+			a := st.addon
+			if a == nil || a.h == nil {
+				return nil, errors.New("addon_tick: the add-on host is not running (addon_start)")
+			}
+			hostQuit = a.quit
+			if a.busy {
+				return addonTickWait{idle: a.idle, quit: a.quit}, nil
+			}
+			a.lastTick = time.Now() // a manual tick counts as the clock's step, so a real host does not tick twice
+			j := &addonJob{calls: append(a.harvest(s), addonCall{kind: addonTick, ms: ms}), done: make(chan addonJobResult, 1)}
+			if !a.submit(j) {
+				return addonTickWait{idle: a.idle, quit: a.quit}, nil
+			}
+			return j, nil
+		})
+		if err != nil {
+			return serveAddonTick{}, err
+		}
+		switch x := v.(type) {
+		case *addonJob:
+			job = x
+		case addonTickWait:
+			select {
+			case <-x.idle:
+			case <-x.quit:
+				return serveAddonTick{}, errors.New("addon_tick: the add-on host ended")
+			case <-ctx.Done():
+				return serveAddonTick{}, ctx.Err()
+			case <-st.done:
+				return serveAddonTick{}, ErrLinkLost
+			}
+		default:
+			return serveAddonTick{}, errors.New("addon_tick: internal call type")
 		}
 	}
-	res, ok := st.runAddonNow(a, []addonCall{{kind: addonTick, ms: ms}})
-	if !ok {
-		return serveAddonTick{}, a.endError()
+	select {
+	case res := <-job.done:
+		if res.err != nil {
+			if errors.Is(res.err, addonhost.ErrThrottled) {
+				return serveAddonTick{}, &rpc.Error{Code: rpc.CodeGame, Message: "addon_tick: " + res.err.Error()}
+			}
+			return serveAddonTick{}, fmt.Errorf("the add-on host ended: %v", res.err)
+		}
+		return serveAddonTick{Clock: res.clock, Sent: sentRows(res.outs)}, nil
+	case <-hostQuit:
+		return serveAddonTick{}, errors.New("addon_tick: the add-on host ended")
+	case <-ctx.Done():
+		return serveAddonTick{}, ctx.Err()
+	case <-st.done:
+		return serveAddonTick{}, ErrLinkLost
 	}
-	a.lastTick = time.Now()
-	return serveAddonTick{Clock: res.clock, Sent: sentRows(res.outs)}, nil
 }
 
 // addonHostState is addon_state's answer from a running or ended host: what the last state read answered, plus
@@ -325,7 +478,8 @@ func (st *serveState) addonHostState(s *session) (serveAddonHostState, error) {
 		Registered: s.addonRegisteredPrefixes(),
 		// The RPC goroutine encodes the answer while the loop may feed the host again: the rows go out as copies.
 		Sent: append([]serveAddonSent(nil), a.sent...), Received: append([]serveAddonReceived(nil), a.received...),
-		Dropped: a.dropped, Error: a.errText(), Inbox: addonInboxOf(s),
+		Dropped: a.dropped, Throttled: a.throttled || (a.state != nil && a.state.Throttled),
+		Error: a.errText(), Inbox: addonInboxOf(s),
 	}
 	if a.manual {
 		out.Clock = "manual"
@@ -382,43 +536,45 @@ func (st *serveState) drainAddon() {
 		case res := <-a.results:
 			a.busy = false
 			st.applyAddon(a, res)
+			// A wait that runs off the loop (addon_tick) is handed the applied answer, and a tick waiting for a
+			// free worker is told the job is done.
+			if res.job != nil && res.job.done != nil {
+				res.job.done <- res
+			}
+			a.signalIdle()
 		default:
 			return
 		}
 	}
 }
 
-// runAddonNow runs one job and waits for its answer, applying it on the loop. Only addon_tick uses it, and only
-// because a manual clock answers from that tick's own result; the daemon's own steps never wait.
-func (st *serveState) runAddonNow(a *serveAddonHost, calls []addonCall) (addonJobResult, bool) {
-	if a.busy {
-		select {
-		case res := <-a.results:
-			a.busy = false
-			st.applyAddon(a, res)
-		case <-a.quit:
-			return addonJobResult{}, false
-		}
-	}
-	if !a.submit(&addonJob{calls: calls}) {
-		return addonJobResult{}, false
-	}
+// signalIdle tells a waiting addon_tick that the worker is free. The channel is buffered, so a signal nobody
+// waits for is dropped by the next wait.
+func (a *serveAddonHost) signalIdle() {
 	select {
-	case res := <-a.results:
-		a.busy = false
-		st.applyAddon(a, res)
-		return res, a.h != nil
-	case <-a.quit:
-		return addonJobResult{}, false
+	case a.idle <- struct{}{}:
+	default:
 	}
 }
 
 // applyAddon takes one finished job: its Outs are performed on this session (the add-on's send is the client's),
-// its state is kept for addon_state, and an error ends the host.
+// its state is kept for addon_state, and an error ends the host. An over-budget call is different: its allowed
+// Outs are still performed, the add-on is marked throttled, and the host stays up (the sidecar stops itself after
+// maxStrikes calls in a row).
 func (st *serveState) applyAddon(a *serveAddonHost, res addonJobResult) {
 	if res.err != nil {
-		a.fail(res.err)
-		return
+		if errors.Is(res.err, addonhost.ErrThrottled) {
+			a.throttled = true
+			a.lastErr = res.err.Error()
+		} else {
+			// The sidecar is gone, but its own record of a limit it hit is still readable: a host stopped for
+			// three calls in a row over a limit stays marked throttled in state.
+			if a.h != nil {
+				a.throttled = a.throttled || a.h.Throttled()
+			}
+			a.fail(res.err)
+			return
+		}
 	}
 	if res.state != nil {
 		a.state = res.state
@@ -467,6 +623,7 @@ func (a *serveAddonHost) work(h *addonhost.Host) {
 			return
 		case job := <-a.jobs:
 			res := runAddonJob(h, job)
+			res.job = job
 			select {
 			case a.results <- res:
 			case <-a.quit:
@@ -528,14 +685,6 @@ func (a *serveAddonHost) errText() string {
 		return a.err.Error()
 	}
 	return a.lastErr
-}
-
-// endError is the RPC error of a call whose host ended before it could answer.
-func (a *serveAddonHost) endError() error {
-	if msg := a.errText(); msg != "" {
-		return fmt.Errorf("the add-on host ended: %s", msg)
-	}
-	return errors.New("the add-on host ended")
 }
 
 // fail ends a host whose sidecar broke: a protocol error or a stuck call leaves nothing to talk to.
@@ -738,7 +887,7 @@ func (a *serveAddonHost) receive(ev Event) {
 
 // worldCall is the world to push when it changed since the last push: the units the add-on may ask about.
 func (a *serveAddonHost) worldCall(s *session) (addonhost.World, bool) {
-	w := a.worldOf(s)
+	w := addonWorldOf(s)
 	b, err := json.Marshal(w)
 	if err != nil || string(b) == a.world {
 		return addonhost.World{}, false
@@ -747,9 +896,10 @@ func (a *serveAddonHost) worldCall(s *session) (addonhost.World, bool) {
 	return w, true
 }
 
-// worldOf is what the session knows of the units a client exposes to add-ons: player, target, party1..4 (the
-// player's subgroup in a raid) and raid1..40. A class is known only where the roster names it.
-func (a *serveAddonHost) worldOf(s *session) addonhost.World {
+// addonWorldOf is what the session knows of the units a client exposes to add-ons: player, target, party1..4 (the
+// player's subgroup in a raid) and raid1..40. A class is known only where the roster names it. It reads session
+// fields, so it runs on the loop.
+func addonWorldOf(s *session) addonhost.World {
 	name := s.report.Character.Name
 	self := GUID(s.selfOrMover())
 	w := addonhost.World{

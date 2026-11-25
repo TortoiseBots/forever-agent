@@ -9,6 +9,13 @@
 // answer in CallTimeout kills the process, and a handler error is recorded (State.Errors) and the dispatch goes
 // on. The sidecar's address space is bounded too (MemoryLimit), so an add-on cannot exhaust the host's memory.
 //
+// A loaded add-on is untrusted code, and these are the bounds it runs under: its chunks are text only (a source
+// starting with ESC is bytecode and is refused, as is one holding a NUL byte); its environment is an explicit
+// allow-list with its own string functions and no route to the shared string table (lua/host.lua); its sends are
+// budgeted per call, per second and in the queue (lua/mock.lua, and Call's own cap); and maxStrikes calls in a
+// row over the send budget or the slow-call limit stop the sidecar. A call over its budget answers ErrThrottled
+// and the add-on is marked throttled (State.Throttled); the host keeps answering.
+//
 // The add-on's folder is read once, in this process, before the interpreter starts: every .toc and source path is
 // resolved and must stay beneath the folder's own resolved path, so neither a symlink nor a ".." line can make the
 // sidecar read or run a file outside it.
@@ -51,9 +58,48 @@ var CallTimeout = 3 * time.Second
 // starts (RLIMIT_AS on Linux); 0 leaves the sidecar unlimited.
 var MemoryLimit int64 = 256 << 20
 
-// maxAddonBytes bounds one add-on folder: its .toc and sources are read into this process before the sidecar
-// starts, so an add-on's whole code is a handful of megabytes, never an unbounded read.
-const maxAddonBytes = 8 << 20
+// The add-on folder's read bounds, checked before any interpreter starts: the whole folder (its .toc and every
+// source) is at most maxAddonBytes, one file at most maxAddonFileBytes, and every file must be regular. A FIFO
+// would block the read (and addon_start) until a writer appeared; a huge file would be read before a total check
+// could refuse it.
+const (
+	maxAddonBytes     = 8 << 20
+	maxAddonFileBytes = 2 << 20
+)
+
+// The outgoing budget of one add-on: lua/mock.lua enforces it, and Call enforces the per-call cap again so a
+// sidecar that broke the contract could still not flood the caller. An add-on is untrusted code, and a million
+// sends fit under its memory limit and cost no measurable time, while the daemon would send them all under the
+// character's name from its session goroutine.
+const (
+	MaxOutsPerCall   = 20  // one call's sends
+	MaxOutsPerSecond = 10  // every call's sends inside one wall-clock second
+	MaxOutQueue      = 100 // the sidecar's undrained outbox
+	// maxStrikes is how many calls in a row may hit a limit before the sidecar is stopped: an add-on that spins
+	// near the call timeout on every tick, or floods on every call, is not allowed to keep a host.
+	maxStrikes = 3
+)
+
+// ErrThrottled is the error of a call the add-on made produce more than its send budget allows. The host answers
+// the call with it and stays up; the add-on is marked throttled (State.Throttled, Throttled), and maxStrikes calls
+// in a row over a limit (the send budget or SlowCallLimit) stop the sidecar.
+var ErrThrottled = errors.New("add-on over its per-call limit")
+
+// SlowCallLimit is how long a call may take before it counts as using the whole per-call budget. Zero means half
+// of CallTimeout. maxStrikes such calls in a row stop the sidecar: a handler that burns most of every call's time
+// would otherwise keep one core busy forever without ever reaching CallTimeout.
+var SlowCallLimit time.Duration
+
+// slowCallLimit is the effective SlowCallLimit.
+func slowCallLimit() time.Duration {
+	if SlowCallLimit > 0 {
+		return SlowCallLimit
+	}
+	if d := CallTimeout / 2; d > 0 {
+		return d
+	}
+	return CallTimeout
+}
 
 // ErrStopped is returned by calls after the sidecar has exited or was stopped.
 var ErrStopped = errors.New("addon host stopped")
@@ -129,6 +175,8 @@ type State struct {
 	Errors   []LuaError `json:"errors"`
 	Chat     []ChatLine `json:"chat"`
 	Frames   int        `json:"frames"`
+	// Throttled is set by the host, not the sidecar: the add-on has hit a per-call limit at least once.
+	Throttled bool `json:"throttled,omitempty"`
 }
 
 // Host is one running sidecar. Calls are serialised.
@@ -146,6 +194,12 @@ type Host struct {
 	err      error // why the process ended
 	stderr   *tail
 	next     int
+	// strikes counts calls in a row that hit a limit (the send budget or the slow-call limit); throttled is
+	// sticky for the add-on's lifetime. Both are guarded by mu.
+	strikes   int
+	throttled bool
+	outWindow time.Time // the wall second outCount counts in
+	outCount  int       // Outs this second, the backstop for the sidecar's own budget
 }
 
 // addonTOC is one add-on folder read and checked before the interpreter starts: the .toc's title and version and
@@ -290,7 +344,7 @@ func readAddon(dir string) (addonTOC, error) {
 	if err != nil {
 		return a, fmt.Errorf("the .toc: %w", err)
 	}
-	raw, err := os.ReadFile(tocPath)
+	raw, err := readAddonFile(dir, tocPath, "the .toc", maxAddonFileBytes)
 	if err != nil {
 		return a, fmt.Errorf("the .toc: %w", err)
 	}
@@ -320,9 +374,18 @@ func readAddon(dir string) (addonTOC, error) {
 		if err != nil {
 			return a, fmt.Errorf("the .toc names %s: %w", name, err)
 		}
-		src, err := os.ReadFile(file)
+		src, err := readAddonFile(dir, file, name, maxAddonBytes-int64(total))
 		if err != nil {
 			return a, fmt.Errorf("the .toc names %s: %w", name, err)
+		}
+		// A chunk is loaded from text only. Bytecode starts with ESC: it is valid UTF-8 and survives the JSON
+		// trip, and 5.1's bytecode is a known way out of the sandbox to native code. A NUL byte is never source
+		// text either; host.lua checks the same bytes again before its own loadstring.
+		if len(src) > 0 && src[0] == 0x1b {
+			return a, fmt.Errorf("the .toc names %s, which is precompiled Lua bytecode: an add-on loads from text only", name)
+		}
+		if bytes.IndexByte(src, 0) >= 0 {
+			return a, fmt.Errorf("the .toc names %s, which holds a NUL byte: an add-on loads from text only", name)
 		}
 		if !utf8.Valid(src) {
 			// The source travels as JSON text; anything else would be replaced by U+FFFD on the way, so it is
@@ -336,6 +399,69 @@ func readAddon(dir string) (addonTOC, error) {
 		a.Files = append(a.Files, addonSource{Name: name, Source: string(src)})
 	}
 	return a, nil
+}
+
+// readAddonFile reads one file of the add-on under a bound: it must be a regular file (a FIFO would block the
+// open, a device would stream without end), no larger than maxAddonFileBytes or the folder's remaining budget,
+// and the read itself is limited, so a file that grew after the stat is still bounded.
+//
+// The path was resolved beneath root before this call, but a writer with access to the folder can replace the
+// file (or a parent directory) with a symlink after that resolution. The open therefore does not follow a final
+// symlink, and the opened file must be the one the path resolves to now, still beneath root: a swapped-in link is
+// refused instead of read.
+func readAddonFile(root, path, name string, budget int64) ([]byte, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", name)
+	}
+	if info.Size() > maxAddonFileBytes {
+		return nil, fmt.Errorf("%s is over %d bytes", name, maxAddonFileBytes)
+	}
+	if info.Size() > budget {
+		return nil, fmt.Errorf("the .toc and sources are over %d bytes", maxAddonBytes)
+	}
+	f, err := openNoFollow(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	defer f.Close()
+	if info, err = f.Stat(); err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file", name)
+	}
+	if info.Size() > maxAddonFileBytes {
+		return nil, fmt.Errorf("%s is over %d bytes", name, maxAddonFileBytes)
+	}
+	if info.Size() > budget {
+		return nil, fmt.Errorf("the .toc and sources are over %d bytes", maxAddonBytes)
+	}
+	now, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if !under(root, now) {
+		return nil, fmt.Errorf("%s resolves outside %s (%s)", name, root, now)
+	}
+	again, err := os.Stat(now)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if !os.SameFile(info, again) {
+		return nil, fmt.Errorf("%s changed while it was being read", name)
+	}
+	b, err := io.ReadAll(io.LimitReader(f, budget+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(b)) > budget {
+		return nil, fmt.Errorf("the .toc and sources are over %d bytes", maxAddonBytes)
+	}
+	return b, nil
 }
 
 // tocHeader is one .toc header line's value, trimmed; an empty value is not a header (as the client reads it).
@@ -355,11 +481,19 @@ func contained(root, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	rel, err := filepath.Rel(root, resolved)
-	if err != nil || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !under(root, resolved) {
 		return "", fmt.Errorf("%s resolves outside %s (%s)", name, root, resolved)
 	}
 	return resolved, nil
+}
+
+// under says whether resolved (a path with its symlinks resolved) stays beneath root.
+func under(root, resolved string) bool {
+	rel, err := filepath.Rel(root, resolved)
+	if err != nil || filepath.IsAbs(rel) || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 // Load runs the load op: the .toc's files, ADDON_LOADED, then PLAYER_LOGIN and PLAYER_ENTERING_WORLD when the
@@ -422,6 +556,9 @@ func (h *Host) State() (State, []Out, error) {
 	if err := json.Unmarshal(raw, &st); err != nil {
 		return st, outs, fmt.Errorf("state result: %w", err)
 	}
+	h.mu.Lock()
+	st.Throttled = h.throttled
+	h.mu.Unlock()
 	return st, outs, nil
 }
 
@@ -453,17 +590,20 @@ func (h *Host) Call(op string, params any) (json.RawMessage, []Out, error) {
 	if _, err := h.stdin.Write(append(b, '\n')); err != nil {
 		return nil, nil, h.stopped()
 	}
+	began := time.Now()
 	var outs []Out
+	overBudget := false
 	timer := time.NewTimer(CallTimeout)
 	defer timer.Stop()
 	for {
 		select {
 		case line := <-h.lines:
 			var m struct {
-				ID     int             `json:"id"`
-				Out    string          `json:"out"`
-				Result json.RawMessage `json:"result"`
-				Error  string          `json:"error"`
+				ID        int             `json:"id"`
+				Out       string          `json:"out"`
+				Result    json.RawMessage `json:"result"`
+				Error     string          `json:"error"`
+				Throttled bool            `json:"throttled"`
 			}
 			if err := json.Unmarshal(line, &m); err != nil {
 				// The protocol has lost its framing: nothing later on it can be trusted.
@@ -471,6 +611,18 @@ func (h *Host) Call(op string, params any) (json.RawMessage, []Out, error) {
 				return nil, outs, fmt.Errorf("%w: it wrote %q, not a JSON frame: %v", ErrStopped, truncate(string(line), 200), err)
 			}
 			if m.Out != "" {
+				// The sidecar enforces the budget before it writes an Out line; this is the same per-call and
+				// per-second bound in this process, so a sidecar that broke the contract (or a replaced script)
+				// still cannot hand the daemon more than the cap to perform.
+				now := time.Now()
+				if h.outWindow.IsZero() || now.Sub(h.outWindow) >= time.Second {
+					h.outWindow, h.outCount = now, 0
+				}
+				if len(outs) >= MaxOutsPerCall || h.outCount >= MaxOutsPerSecond {
+					overBudget, h.throttled = true, true
+					continue
+				}
+				h.outCount++
 				var o Out
 				json.Unmarshal(line, &o)
 				outs = append(outs, o)
@@ -479,9 +631,29 @@ func (h *Host) Call(op string, params any) (json.RawMessage, []Out, error) {
 			if m.ID != id {
 				continue // a reply to an earlier call that timed out cannot happen: that kills the process
 			}
-			if m.Error != "" {
+			slow := time.Since(began) > slowCallLimit()
+			if overBudget || m.Throttled || slow {
+				h.strikes++
+			} else {
+				h.strikes = 0
+			}
+			if h.strikes >= maxStrikes {
+				h.kill()
+				return nil, outs, fmt.Errorf("%w: %d calls in a row over its per-call limit, so it was stopped", ErrStopped, maxStrikes)
+			}
+			switch {
+			case overBudget || m.Throttled:
+				h.throttled = true
+				msg := m.Error
+				if msg == "" {
+					msg = "it asked the client to send more than its budget allows"
+				}
+				return nil, outs, fmt.Errorf("%w: %s", ErrThrottled, msg)
+			case m.Error != "":
 				return nil, outs, errors.New(m.Error)
 			}
+			// One slow call is answered as usual: it is only a strike, and maxStrikes of them in a row stop the
+			// sidecar (a handler that burns the budget on every tick must not keep a core forever).
 			return m.Result, outs, nil
 		case <-h.exited:
 			return nil, outs, h.stopped()
@@ -528,6 +700,14 @@ func (h *Host) Close() error {
 
 // Stderr is the tail of what the sidecar wrote to stderr.
 func (h *Host) Stderr() string { return h.stderr.String() }
+
+// Throttled says whether the add-on has hit a per-call limit at least once. It stays true after the sidecar was
+// stopped for it.
+func (h *Host) Throttled() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.throttled
+}
 
 // tail keeps the last max bytes written to it.
 type tail struct {

@@ -256,27 +256,42 @@ close before the response as fatal; it is not specific to add-on messages and wa
 functions over a world the daemon pushes (player, target, party1..4, raid1..40). The folder is read by the daemon,
 not the child: the `.toc` and every source it names are resolved and must stay beneath the folder's own resolved
 path (a symlinked `.toc` or Lua file pointing outside is refused, and so is an absolute or `..` line), then their
-text goes to the child in the `load` request. The child therefore never opens a file of the add-on's own, and the
-add-on's whole code is bounded (8 MiB of `.toc` and sources). The sources travel as JSON text, so each must be UTF-8:
-one that is not is refused by its name instead of being run with replacement characters. Each of its files gets its own environment: only the
-mocked API and the safe half of the Lua library reach it, so `io`, `os`, `loadfile`, `loadstring`, `require`,
-`package` and `debug` stay in the host, and the add-on has no way to a file, the protocol or the network beyond the
-mock. Requests and replies are JSON lines on stdin and file descriptor 3; nothing the add-on prints can pass for a
-frame.
+text goes to the child in the `load` request. The child therefore never opens a file of the add-on's own: each path is `stat`ed first (regular files only, so a
+FIFO cannot block the start), and one file is bounded at 2 MiB inside the folder's 8 MiB, with the read itself
+limited, and the read re-opens without following a final symlink and requires the opened file to be what the path
+resolves to now beneath the folder, so a symlink swapped in after the containment check is refused. The sources travel as JSON text, so each must be UTF-8: one that is not is refused by its name instead of
+being run with replacement characters. A source is loaded from text only: one whose first byte is ESC is
+precompiled Lua bytecode (5.1 bytecode can break out to native code) and one holding a NUL byte is refused too,
+both by the daemon before the child sees them and again in the child's own load. Each of its files gets its own
+environment: only the mocked API and the safe half of the Lua library reach it, so `io`, `os`, `loadfile`,
+`loadstring`, `require`, `package` and `debug` stay in the host, and the add-on has no way to a file, the protocol
+or the network beyond the mock. The environment's globals are an explicit allow-list (a test compares every one
+with the list in the test), its `string`/`table`/`math` are copies, and `getmetatable("")` answers nil: the add-on
+cannot write through the string metatable into the host's framing, the shared `string.dump` is removed before it
+runs (so `("").dump` is nil too), and the host captured every function it frames with in locals first. Requests and
+replies are JSON lines on stdin and file descriptor 3; nothing the add-on prints can pass for a frame.
 
 **Resource bounds.** The sidecar is another process, and the daemon treats it as untrusted: it is started under a
 kernel address-space limit (`RLIMIT_AS`, 256 MiB, set by `prlimit(1)` or `sh`'s `ulimit -v` before `exec`; a host
 with neither is refused rather than run unbounded), so an add-on that allocates without end gets Lua's
 "not enough memory" and cannot take the machine's memory. A call that does not answer within `CallTimeout` (3 s)
 kills the child, and that call's error says so. A handler that raises is recorded in the host's error list and the
-dispatch goes on.
+dispatch goes on. Its sends are budgeted too: 20 per call, 10 per wall-clock second and 100 queued, enforced in the
+mock before an `Out` is written (and capped again in the daemon's reader). Over the budget the client refuses the
+send (the add-on sees a Lua error), the call answers an error, and the add-on is marked `throttled` in
+`addon_state`; the host stays up. Three calls in a row over the send budget, or over the slow-call limit (half of
+`CallTimeout`, so a handler that burns 2.9 s of every tick is caught), stop the sidecar and the host is reported
+ended.
 
 **One goroutine, one job.** The sidecar's calls run on the host's own goroutine, not the session loop: each turn the
 loop prepares at most one job (the world pushes, the events to fire, the tick) and hands it over without waiting;
 the job's answer is applied on the loop, where the `Out`s are performed on the session. A looping `OnUpdate` or
 event handler therefore holds the add-on, never the session: packets keep being collected and RPCs keep answering
 while it runs, and when the budget kills the sidecar only the add-on host ends (`addon_state` reports it, and the
-daemon stays online). Only `addon_tick` waits for its own result, because a manual clock answers from that tick.
+daemon stays online). `addon_start`, `addon_tick` and `addon_stop` follow the same rule: their sidecar waits run
+on their own RPC goroutine, with one overall bound per method (10 s), and only their short session reads and writes
+are queued on the loop, so a stuck load or tick leaves `status` answering. `addon_tick` waits for its own job's
+answer off the queue, because a manual clock answers from that tick.
 
 **Registration.** The prefixes the add-on registers with `RegisterAddonMessagePrefix` (plus any `prefixes` argument
 of `addon_start`) are unioned with the list the session already holds and sent through `addonmsg`'s unregister-all +
@@ -320,10 +335,16 @@ a registered prefix, the login frame, `CHAT_MSG_ADDON` arguments, a raising hand
 a slash command's send, the clock and the visible-frame rule for `OnUpdate`, the sandbox, a stuck add-on killed by
 the call timeout, an allocation bomb stopped by the sidecar's address-space limit (read back from the kernel),
 `Start`'s one-`.toc` rule, a symlinked `.toc`, a symlinked Lua file, an absolute line and a `..` line all refused
-as outside the folder, and a source's bytes kept exact (multi-byte text included; a non-UTF-8 source refused).
+as outside the folder, a source's bytes kept exact (multi-byte text included; a non-UTF-8 source refused), bytecode
+and NUL sources refused from a file and from the sidecar's own load, the exact global allow-list, string.dump
+unreachable by every route with the host's frames intact after a forged `string.format`, the per-call send cap and
+the three-strike stop, a slow handler stopped after three calls, and a FIFO or oversize file refused by `stat`
+before the read.
 `internal/forever/world/serve_addon_host_test.go` runs the same kind of add-on against the fake world server: the
 registration packets the fake parses, the party frame it receives, a delivered
 guild frame reaching `CHAT_MSG_ADDON` with the add-on's guild echo going back out, a 300-byte frame refused with the
 255-byte error and no packet on the wire, a handler error that leaves the daemon online and serving, a looping
 handler that leaves `status` answering and `units` served while it spins (the call is killed and only the add-on
-host ends), the start/stop refusals, a manual clock, and an `--addon off` session that cannot start a host.
+host ends), a stuck load and a stuck tick that leave `status` answering within 2 s, a million-send flood capped at
+20 with the host still running and marked throttled, the start/stop refusals, a manual clock, and an `--addon off`
+session that cannot start a host.

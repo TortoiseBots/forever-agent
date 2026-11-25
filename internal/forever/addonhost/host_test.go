@@ -1,11 +1,15 @@
 package addonhost
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -431,5 +435,367 @@ func TestStartRequiresOneTOC(t *testing.T) {
 	}
 	if _, err := Start(dir); err == nil || !strings.Contains(err.Error(), "A.toc, B.toc") {
 		t.Fatalf("two .toc files: %v", err)
+	}
+}
+
+// ── the host's bounds on untrusted code ────────────────────────────────────
+
+// A source that is precompiled Lua bytecode is refused before any interpreter sees it: bytecode starts with ESC,
+// which is valid UTF-8 and survives the JSON trip, and 5.1 bytecode is a known way out to native code. A source
+// that holds a NUL byte is refused for the same reason (the JSON path would keep it, and it is never text).
+//
+// Mutations these tests catch: a loader that only checks UTF-8 (the dumped chunk is valid UTF-8), and a loader
+// that checks ESC but not NUL (the second source loads).
+func TestStartRefusesBinarySources(t *testing.T) {
+	requireLua(t)
+	dir := filepath.Join(t.TempDir(), "TinyAddon")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "TinyAddon.toc"), []byte("## Title: Tiny\nTiny.lua\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	dumped, err := exec.Command(DefaultLua, "-e", "io.write(string.dump(function() return 1 end))").Output()
+	if err != nil {
+		t.Fatalf("string.dump: %v", err)
+	}
+	if len(dumped) < 2 || dumped[0] != 27 || dumped[1] != 'L' {
+		t.Fatalf("string.dump wrote %q, not a 5.1 bytecode chunk", dumped[:min(len(dumped), 8)])
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Tiny.lua"), dumped, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Start(dir); err == nil || !strings.Contains(err.Error(), "bytecode") {
+		t.Fatalf("a bytecode chunk was accepted: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "Tiny.lua"), []byte("print('a\x00b')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Start(dir); err == nil || !strings.Contains(err.Error(), "NUL") {
+		t.Fatalf("a source holding a NUL byte was accepted: %v", err)
+	}
+}
+
+// The sidecar's own load op refuses the same bytes: the Go reader is the first gate, this is the second, so a
+// caller that hands the sidecar a chunk directly (the tests do) still cannot load bytecode.
+//
+// Mutation this test catches: the guard only in readAddon (the direct load answers a result, not an error).
+func TestSidecarLoadRefusesBinarySources(t *testing.T) {
+	requireLua(t)
+	dir := t.TempDir()
+	for _, name := range []string{"host.lua", "json.lua", "mock.lua"} {
+		b, err := luaFiles.ReadFile("lua/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	protoR, protoW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(DefaultLua, filepath.Join(dir, "host.lua"))
+	cmd.ExtraFiles = []*os.File{protoW}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	protoW.Close()
+	defer func() {
+		stdin.Close()
+		cmd.Wait()
+	}()
+	protoR.SetReadDeadline(time.Now().Add(10 * time.Second))
+	reader := bufio.NewReader(protoR)
+	ask := func(id int, source string) string {
+		t.Helper()
+		b, err := json.Marshal(map[string]any{"id": id, "op": "load", "world": map[string]any{},
+			"addon": map[string]any{"name": "X", "files": []map[string]string{{"name": "X.lua", "source": source}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fmt.Fprintf(stdin, "%s\n", b); err != nil {
+			t.Fatal(err)
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("no reply to the load: %v (stderr %s)", err, stderr.String())
+		}
+		return line
+	}
+	if reply := ask(1, "\x1bLuaQ\x00\x01\x04\x08"); !strings.Contains(reply, "bytecode") {
+		t.Fatalf("the sidecar answered a bytecode chunk: %s", reply)
+	}
+	if reply := ask(2, "print('a\x00b')\n"); !strings.Contains(reply, "NUL") {
+		t.Fatalf("the sidecar answered a source holding a NUL byte: %s", reply)
+	}
+}
+
+// An add-on cannot queue a million sends in one call: the client's budget (20 per call, 10 per second, 100
+// queued) refuses the send, the call answers an error and the host is marked throttled, not broken. The daemon
+// would otherwise hold every Out and send them all from the character's name on its session goroutine.
+//
+// Mutations these tests catch: no per-call cap (a million Outs come back), a cap that kills the host on the first
+// overrun (State no longer answers), and a cap whose error is not visible to the caller.
+func TestHostCapsOutsPerCall(t *testing.T) {
+	src := `
+SLASH_FLOOD1 = "/flood"
+SlashCmdList["FLOOD"] = function()
+    for i = 1, 1000000 do SendChatMessage("x", "SAY") end
+end
+`
+	h := startAddon(t, "Flood", src)
+	if _, _, err := h.Load(World{}, true); err != nil {
+		t.Fatal(err)
+	}
+	outs, err := h.Command("/flood")
+	if err == nil {
+		t.Fatal("a flood of a million sends answered without an error")
+	}
+	// The per-second cap is the stricter one inside one wall second; the per-call cap is the bound either way.
+	if len(outs) < MaxOutsPerSecond || len(outs) > MaxOutsPerCall {
+		t.Fatalf("the flood produced %d Outs, want between the per-second cap %d and the per-call cap %d", len(outs), MaxOutsPerSecond, MaxOutsPerCall)
+	}
+	if !strings.Contains(err.Error(), "send budget") {
+		t.Fatalf("the flood's error %q does not say it went over the send budget", err)
+	}
+	// The sidecar is still there, and the state says it is throttled.
+	st, _, err := h.State()
+	if err != nil {
+		t.Fatalf("the host did not survive one over-budget call: %v", err)
+	}
+	if !st.Throttled {
+		t.Fatalf("state %+v does not mark the add-on throttled", st)
+	}
+}
+
+// Three calls in a row over a limit stop the sidecar: a flood on every call must not keep a host alive to flood
+// again, while one over-budget call only marks it throttled (the test above).
+func TestHostStopsAddonThatKeepsHittingTheLimit(t *testing.T) {
+	src := `
+SLASH_FLOOD1 = "/flood"
+SlashCmdList["FLOOD"] = function()
+    for i = 1, 1000000 do SendChatMessage("x", "SAY") end
+end
+`
+	h := startAddon(t, "Flood", src)
+	if _, _, err := h.Load(World{}, true); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i <= 3; i++ {
+		if _, err := h.Command("/flood"); err == nil {
+			t.Fatalf("flood %d answered without an error", i)
+		}
+	}
+	if _, _, err := h.State(); err == nil {
+		t.Fatal("the add-on kept its host after three calls in a row over the send budget")
+	}
+}
+
+// A handler that burns most of the call budget on every call is stopped after three calls in a row: otherwise a
+// real-clock OnUpdate that spins 2.9 s of every 3 s keeps one core busy forever without ever tripping CallTimeout.
+//
+// Mutation this test catches: only the per-call timeout (every Tick answers, and the host lives on).
+func TestHostStopsAddonThatStaysSlow(t *testing.T) {
+	oldTimeout, oldSlow := CallTimeout, SlowCallLimit
+	CallTimeout, SlowCallLimit = 2*time.Second, 10*time.Millisecond
+	t.Cleanup(func() { CallTimeout, SlowCallLimit = oldTimeout, oldSlow })
+	src := `
+local hot = 0
+local f = CreateFrame("Frame", "SlowFrame")
+f:SetScript("OnUpdate", function()
+    for i = 1, 10000000 do hot = hot + i end
+end)
+`
+	h := startAddon(t, "Slow", src)
+	if _, _, err := h.Load(World{}, true); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	for i := 1; i <= 3 && err == nil; i++ {
+		_, _, err = h.Tick(100)
+	}
+	if err == nil || !strings.Contains(err.Error(), "per-call") {
+		t.Fatalf("three slow ticks answered without stopping the add-on: %v", err)
+	}
+	if _, _, err := h.State(); err == nil {
+		t.Fatal("the slow add-on kept its host")
+	}
+}
+
+// The add-on's environment is an explicit allow-list: a test compares every global it can see with the list the
+// host means to give it. Adding loadstring, getfenv or any other host function to the sandbox fails here.
+func TestHostEnvironmentAllowList(t *testing.T) {
+	src := `
+local names = {}
+for k in pairs(_G) do names[#names + 1] = tostring(k) end
+table.sort(names)
+print(table.concat(names, "\n"))
+`
+	h := startAddon(t, "Env", src)
+	if _, _, err := h.Load(World{}, true); err != nil {
+		t.Fatal(err)
+	}
+	st, _, err := h.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(st.Chat) != 1 {
+		t.Fatalf("chat %+v", st.Chat)
+	}
+	got := strings.Split(st.Chat[0].Text, "\n")
+	want := []string{
+		// the mocked client API
+		"CreateFrame", "UIParent", "Minimap", "UISpecialFrames", "SlashCmdList", "DEFAULT_CHAT_FRAME",
+		"GameTooltip", "GetTime", "time", "SendAddonMessage", "RegisterAddonMessagePrefix", "SendChatMessage",
+		"TargetUnit", "TargetByName", "UnitExists", "UnitName", "UnitIsPlayer", "UnitIsDead", "UnitIsGhost",
+		"UnitIsConnected", "UnitCanAttack", "UnitIsEnemy", "UnitLevel", "UnitClass", "GetNumPartyMembers",
+		"GetNumRaidMembers",
+		// the safe Lua library, copied
+		"assert", "error", "ipairs", "next", "pairs", "pcall", "xpcall", "select", "tonumber", "tostring",
+		"type", "unpack", "rawequal", "rawget", "rawset", "setmetatable",
+		"getmetatable", // the wrapper, never the host's own
+		"string", "table", "math",
+		// the client's short names
+		"getn", "tinsert", "tremove", "strfind", "strsub", "strlen", "strlower", "strupper", "strrep",
+		"format", "gsub", "gfind", "floor", "ceil", "abs", "min", "max", "mod", "random", "date", "print",
+		"_G",
+	}
+	sort.Strings(want)
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("the add-on's globals\n got %v\nwant %v", got, want)
+	}
+}
+
+// The add-on cannot reach string.dump by any route, and it cannot write through the string metatable into the
+// functions the host's framing uses: getmetatable("") answers nil, the shared dump is gone, and replacing the
+// add-on's own string.format leaves the host's JSON frames intact.
+//
+// Mutations these tests catch: getmetatable exposed (the metatable route answers a table), string.dump left in
+// the shared table (direct and method routes answer a function), and host framing that reads the add-on's globals
+// (the forged format corrupts a frame or a result).
+func TestHostStringsAreIsolated(t *testing.T) {
+	src := `
+local mt = getmetatable("")
+print("mt " .. tostring(mt))
+print("direct " .. tostring(string.dump))
+local shared = rawget(_G, "string")
+print("shared " .. tostring(shared and shared.dump))
+local s = ""
+print("method " .. tostring(s.dump))
+if mt and mt.__index then mt.__index.format = function() return "FORGED" end end
+string.format = function() return "FORGED" end
+SendAddonMessage("TINY", string.format("%d", 7) .. " " .. tostring(GetTime()), "PARTY")
+`
+	h := startAddon(t, "Strings", src)
+	_, outs, err := h.Load(World{Player: Unit{Name: "Tester", Player: true, Online: true}}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outs) != 1 || outs[0].Text != "FORGED 1" {
+		t.Fatalf("the add-on's send %+v, want its own format's text and the host's valid frame", outs)
+	}
+	st, _, err := h.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, c := range st.Chat {
+		lines = append(lines, c.Text)
+	}
+	for _, want := range []string{"mt nil", "direct nil", "shared nil", "method nil"} {
+		if !slicesContains(lines, want) {
+			t.Fatalf("chat %v does not hold %q: string.dump is reachable", lines, want)
+		}
+	}
+}
+
+func slicesContains(lines []string, want string) bool {
+	for _, line := range lines {
+		if line == want {
+			return true
+		}
+	}
+	return false
+}
+
+// A file the .toc names must be a regular file of bounded size: a FIFO would block addon_start (and the session
+// loop with it) until a writer appeared, and a huge file is read before any size check could refuse it.
+//
+// Mutations these tests catch: os.ReadFile without a stat (Start hangs on the FIFO; the oversize file is read
+// whole before the folder's total is checked).
+func TestStartRefusesNonRegularAndOversizeFiles(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "TinyAddon")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "TinyAddon.toc"), []byte("## Title: Tiny\nTiny.lua\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("mkfifo", filepath.Join(dir, "Tiny.lua")).CombinedOutput(); err != nil {
+		t.Skipf("mkfifo: %v (%s)", err, out)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Start(dir)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "regular file") {
+			t.Fatalf("a FIFO in the add-on folder: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Start blocked on a FIFO in the add-on folder")
+	}
+	if err := os.Remove(filepath.Join(dir, "Tiny.lua")); err != nil {
+		t.Fatal(err)
+	}
+	big := bytes.Repeat([]byte("a"), maxAddonFileBytes+1)
+	if err := os.WriteFile(filepath.Join(dir, "Tiny.lua"), big, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Start(dir); err == nil || !strings.Contains(err.Error(), "over") {
+		t.Fatalf("an oversize source file: %v", err)
+	}
+}
+
+// The add-on's folder is resolved once, but a writer can swap a validated file (or a parent directory) for a
+// symlink before the read. The read opens without following a final symlink and then requires the opened file to
+// be what the path resolves to now, still beneath the folder, so a swapped-in link is refused rather than read.
+//
+// Mutation this test catches: containment checked only before the read (a swapped symlink is followed and the
+// outside file is returned).
+func TestReadAddonFileRefusesSwappedSymlink(t *testing.T) {
+	root := t.TempDir()
+	outside := t.TempDir()
+	target := filepath.Join(outside, "Evil.lua")
+	if err := os.WriteFile(target, []byte("print('outside')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "Tiny.lua")
+	if err := os.WriteFile(path, []byte("print('inside')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readAddonFile(root, path, "Tiny.lua", maxAddonBytes); err != nil || !strings.Contains(string(got), "inside") {
+		t.Fatalf("the regular file read %q, %v", got, err)
+	}
+	// What a concurrent writer does between contained()'s resolution and the read.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readAddonFile(root, path, "Tiny.lua", maxAddonBytes); err == nil {
+		t.Fatalf("a source swapped for a symlink outside the folder was read: %q", got)
 	}
 }

@@ -217,6 +217,9 @@ type serveState struct {
 	// tbmGate serialises TBM exchanges: the module speaks one TBM client at a time. It is not the session queue, so
 	// a waiting exchange holds no other method behind it.
 	tbmGate chan struct{}
+	// addonGate serialises the add-on host's lifecycle and tick methods: their sidecar calls wait on their RPC
+	// goroutine, and one host mutation at a time keeps their short session sections in order.
+	addonGate chan struct{}
 	// cmdr is the commander method's controller, built for the first session and reset by every install (a
 	// re-entry drops what the old session knew about the module's packages). It belongs to the loop goroutine.
 	cmdr *commanderCtl
@@ -305,6 +308,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 		dir:          cfg.Dir,
 		preflight:    cfg.preflight,
 		tbmGate:      make(chan struct{}, 1),
+		addonGate:    make(chan struct{}, 1),
 	}
 	if st.plansDir == "" {
 		st.plansDir = "dungeons"

@@ -13,6 +13,35 @@ local named = {}       -- frames created with a name, visible to the add-on as g
 local outbox = {}      -- what the add-on asked the client to do, drained by host.lua
 local prefixes = {}    -- the add-on's registered prefixes, in registration order
 
+-- ── the send budget ─────────────────────────────────────────────────────────
+-- An add-on is untrusted code. A million sends fit under the sidecar's memory limit and cost no measurable time,
+-- and the daemon would then perform them all under the character's name on its session goroutine, so the client
+-- refuses a send past its budget: the add-on sees a Lua error, the call answers throttled, and three calls in a
+-- row over a limit stop the sidecar (host.go's maxStrikes).
+local OUT_PER_CALL, OUT_PER_SECOND, OUT_QUEUE = 20, 10, 100
+local sends, second, secondSends = 0, nil, 0
+local throttled = false
+
+-- addonhost_begin_op resets the per-call counter; host.lua calls it before every op.
+function addonhost_begin_op()
+    sends, throttled = 0, false
+end
+
+-- addonhost_throttled says whether the last op went over the budget.
+function addonhost_throttled() return throttled end
+
+local function pushOut(entry)
+    local now = os.time()
+    if now ~= second then second, secondSends = now, 0 end
+    if secondSends >= OUT_PER_SECOND or sends >= OUT_PER_CALL or #outbox >= OUT_QUEUE then
+        throttled = true
+        error("the client refused the send: the add-on is over its send budget (" .. OUT_PER_CALL .. " per call, "
+            .. OUT_PER_SECOND .. " per second, " .. OUT_QUEUE .. " queued)", 3)
+    end
+    sends, secondSends = sends + 1, secondSends + 1
+    outbox[#outbox + 1] = entry
+end
+
 local function pushBounded(list, item, max)
     list[#list + 1] = item
     while #list > max do table.remove(list, 1) end
@@ -120,8 +149,8 @@ function addonhost_on_chat(fn) chatSink = fn end
 -- ── what the add-on asks the client to do ───────────────────────────────────
 function SendAddonMessage(prefix, text, channel, target)
     prefix, text, channel = tostring(prefix or ""), tostring(text or ""), tostring(channel or "")
-    outbox[#outbox + 1] = { out = "addon", prefix = prefix, text = text, channel = channel,
-        to = target and tostring(target) or nil }
+    pushOut({ out = "addon", prefix = prefix, text = text, channel = channel,
+        to = target and tostring(target) or nil })
 end
 
 -- RegisterAddonMessagePrefix returns false for a prefix the client cannot register (empty or over the server's
@@ -135,16 +164,16 @@ function RegisterAddonMessagePrefix(prefix)
 end
 
 function SendChatMessage(text, chatType, language, target)
-    outbox[#outbox + 1] = { out = "chat", type = tostring(chatType or "SAY"), text = tostring(text or ""),
-        to = target and tostring(target) or nil }
+    pushOut({ out = "chat", type = tostring(chatType or "SAY"), text = tostring(text or ""),
+        to = target and tostring(target) or nil })
 end
 
 function TargetUnit(unit)
-    outbox[#outbox + 1] = { out = "target", name = tostring(unit or "") }
+    pushOut({ out = "target", name = tostring(unit or "") })
 end
 
 function TargetByName(name)
-    outbox[#outbox + 1] = { out = "target", name = tostring(name or "") }
+    pushOut({ out = "target", name = tostring(name or "") })
 end
 
 -- ── units ───────────────────────────────────────────────────────────────────

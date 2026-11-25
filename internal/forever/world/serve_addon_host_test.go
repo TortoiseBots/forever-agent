@@ -12,7 +12,9 @@ package world
 // events (the system-line test loses `sys welcome`), and a host that dies on a Lua error (the serve stops).
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -586,14 +588,177 @@ func TestServeAddonHostStartRefusals(t *testing.T) {
 }
 
 // A session started with --addon off cannot register a prefix, so addon_start says why before starting a host.
+// The session's own check is a short queued call, so this runs the method off the queue against a loop.
 func TestServeAddonHostOffSession(t *testing.T) {
-	s, _ := addonTestSession()
-	s.opts.AddonOff = true
-	st := &serveState{}
-	if _, err := st.addonStart(s, serveAddonStartParams{Dir: tinyAddonDir(t)}); err == nil || !strings.Contains(err.Error(), "add-on off") {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	st := &serveState{calls: make(chan *serveCall, 8), done: make(chan struct{}), addonGate: make(chan struct{}, 1)}
+	s := newSession(Options{AddonOff: true}, &Report{Counts: map[string]int{}}, ctx)
+	defer s.pumpCancel()
+	st.install(s, 1)
+	st.setState(serveOnline, "")
+	go func() {
+		for {
+			select {
+			case c := <-st.calls:
+				st.run(c)
+			case <-st.done:
+				return
+			}
+		}
+	}()
+	defer close(st.done)
+	if _, err := st.addonStart(ctx, serveAddonStartParams{Dir: tinyAddonDir(t)}); err == nil || !strings.Contains(err.Error(), "add-on off") {
 		t.Fatalf("addon_start on an add-on-off session: %v", err)
 	}
 	if st.addon != nil {
 		t.Fatal("an add-on-off session started a host")
 	}
+}
+
+// addonFileDir writes one Lua file and a .toc for it into a fresh folder.
+func addonFileDir(t *testing.T, name, src string) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), name)
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name+".toc"), []byte("## Title: "+name+"\nMain.lua\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Main.lua"), []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// addonCallAsync posts one RPC from a goroutine and hands its error back on the channel. It never fails the test
+// itself, so the test can hold a stuck call and still time another.
+func addonCallAsync(a *serveAgent, method string, params any) <-chan error {
+	ch := make(chan error, 1)
+	go func() {
+		_, rerr, err := a.tryCall(method, params)
+		switch {
+		case err != nil:
+			ch <- err
+		case rerr != nil:
+			ch <- fmt.Errorf("%s: %d %s", method, rerr.Code, rerr.Message)
+		default:
+			ch <- nil
+		}
+	}()
+	return ch
+}
+
+// A load that hangs in the sidecar must not hold the session queue: addon_start waits for it on its own
+// goroutine, so status answers at once and the daemon keeps collecting.
+//
+// Mutation this test catches: addon_start run as a queued method (status waits out the whole CallTimeout).
+func TestServeAddonHostStartWaitsOffQueue(t *testing.T) {
+	old := addonhost.CallTimeout
+	addonhost.CallTimeout = 2 * time.Second
+	t.Cleanup(func() { addonhost.CallTimeout = old })
+
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	hook := &addonHostWire{t: t}
+	a := startAddonHostServe(t, f, hook)
+	dir := addonFileDir(t, "HangAddon", `
+RegisterAddonMessagePrefix("HANG")
+while true do end
+`)
+	started := addonCallAsync(a, "addon_start", map[string]any{"dir": dir})
+	time.Sleep(200 * time.Millisecond)
+	began := time.Now()
+	if _, rerr, err := a.tryCall("status", nil); err != nil || rerr != nil {
+		t.Fatalf("status while an add-on load was stuck: %v %v", err, rerr)
+	}
+	if elapsed := time.Since(began); elapsed > time.Second {
+		t.Fatalf("status took %s while an add-on load was stuck: the session queue was held", elapsed)
+	}
+	if err := <-started; err == nil {
+		t.Fatal("the stuck load answered without an error")
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// A tick that hangs in the sidecar must not hold the session queue either: addon_tick waits for its job on its
+// own goroutine, and status keeps answering meanwhile.
+//
+// Mutation this test catches: addon_tick run as a queued method (status waits out the whole CallTimeout).
+func TestServeAddonHostTickWaitsOffQueue(t *testing.T) {
+	old := addonhost.CallTimeout
+	addonhost.CallTimeout = 2 * time.Second
+	t.Cleanup(func() { addonhost.CallTimeout = old })
+
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	hook := &addonHostWire{t: t}
+	a := startAddonHostServe(t, f, hook)
+	dir := addonFileDir(t, "SpinAddon", `
+RegisterAddonMessagePrefix("SPIN")
+local f = CreateFrame("Frame", "SpinFrame")
+f:SetScript("OnUpdate", function() while true do end end)
+`)
+	json.Unmarshal(a.mustCall(t, "addon_start", map[string]any{"dir": dir, "clock": "manual"}), &serveAddonHostState{})
+	tick := addonCallAsync(a, "addon_tick", map[string]any{"ms": 100})
+	time.Sleep(200 * time.Millisecond)
+	began := time.Now()
+	if _, rerr, err := a.tryCall("status", nil); err != nil || rerr != nil {
+		t.Fatalf("status while an add-on tick was stuck: %v %v", err, rerr)
+	}
+	if elapsed := time.Since(began); elapsed > time.Second {
+		t.Fatalf("status took %s while an add-on tick was stuck: the session queue was held", elapsed)
+	}
+	if err := <-tick; err == nil {
+		t.Fatal("the stuck tick answered without an error")
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// A flood of a million sends is capped at the source: the call answers an error, the add-on is marked throttled,
+// the host stays up, and the session loop still answers status while the daemon performs what was allowed.
+//
+// Mutations these tests catch: no cap in the sidecar (the daemon sends a million packets), and a cap that ends
+// the host on its first overrun (addon_state stops answering, Throttled stays false).
+func TestServeAddonHostCapsAddonFlood(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	hook := &addonHostWire{t: t}
+	a := startAddonHostServe(t, f, hook)
+	dir := addonFileDir(t, "FloodAddon", `
+RegisterAddonMessagePrefix("FLOD")
+local f = CreateFrame("Frame", "FloodFrame")
+f:RegisterEvent("CHAT_MSG_SYSTEM")
+f:SetScript("OnEvent", function()
+    if arg1 == "flood" then
+        for i = 1, 1000000 do SendChatMessage("x", "SAY") end
+    end
+end)
+`)
+	json.Unmarshal(a.mustCall(t, "addon_start", map[string]any{"dir": dir, "clock": "manual"}), &serveAddonHostState{})
+	waitRegistered(t, hook, "FLOD", true)
+	hook.connection(t).writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "flood"))
+	time.Sleep(200 * time.Millisecond)
+	began := time.Now()
+	if _, rerr, err := a.tryCall("status", nil); err != nil || rerr != nil {
+		t.Fatalf("status during the flood: %v %v", err, rerr)
+	}
+	if elapsed := time.Since(began); elapsed > time.Second {
+		t.Fatalf("status took %s during the flood", elapsed)
+	}
+	st := waitAddonState(t, a, hook, func(s serveAddonHostState) bool { return s.Throttled })
+	if !st.Running {
+		t.Fatalf("the host ended on one over-budget call: %+v", st)
+	}
+	if len(st.Sent) > addonhost.MaxOutsPerCall {
+		t.Fatalf("the daemon performed %d sends, want at most the per-call cap %d", len(st.Sent), addonhost.MaxOutsPerCall)
+	}
+	a.stop(t)
+	f.wait(t)
 }
