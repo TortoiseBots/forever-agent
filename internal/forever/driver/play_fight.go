@@ -81,6 +81,10 @@ const (
 	PlayAgentReachYd = 5.0
 	PlayTankEngageYd = 10.0
 	PlayAgentPullHP  = 40
+	// PlayAssistYd is the core's creature assistance radius (10 yd, the same number the fake models): a hostile within
+	// it of the unit the character hits is drawn into the fight too. A plan boss inside it of the mob the agent would
+	// pull is the boss's own pull, never a swing's neighbour: the agent does not pull there (agent_pull_skipped).
+	PlayAssistYd = 10.0
 )
 
 // pull is the pack in the way: the agent first walks to the plan's stand with the party beside it, then the skull goes
@@ -162,22 +166,30 @@ func (p *playRun) pull(ctx context.Context) string {
 			}
 		}
 	}
+	// A pull nobody answered and a pull whose skull died under the orders are told apart before the fallback: a pack
+	// with nothing left to pull (the bots killed it while the tank refused) walks the leg on rather than stopping on a
+	// cleared pack.
+	members = p.liveMembers(g)
+	if len(members) == 0 {
+		p.pulled[g.ID] = true
+		p.pack = -1
+		return StateLegWalk
+	}
 	if p.refusedOut {
 		// The tank never saw the skull through every try: the agent pulls it to the party itself, the way a leading
 		// player does, and the tank takes it once it stands beside them.
-		members = p.liveMembers(g)
 		skull, _ := p.skullAndCross(members)
 		why := "sight"
 		if p.reachedOut {
 			why = "reach"
 		}
-		if len(members) > 0 && !p.agentPulled[g.ID] {
-			if p.agentPull(ctx, g.ID, members, skull, why) {
-				return StateFight
-			}
-			if p.stopReason != "" {
-				return ""
-			}
+		if p.agentPulled[g.ID] {
+			p.agentPullFailed(g.ID, "already-pulled")
+		} else if p.agentPull(ctx, g.ID, members, skull, why) {
+			return StateFight
+		}
+		if p.stopReason != "" {
+			return ""
 		}
 		p.stop("pull-failed")
 		return ""
@@ -985,16 +997,31 @@ func (p *playRun) mobOnBots(u Unit) bool {
 // stands and tanks under PlayAgentPullHP of the agent's health or with that health unknown. At most one per group.
 // false means the pull failed: the caller stops pull-failed (a pack) or gives the stranger up.
 func (p *playRun) agentPull(ctx context.Context, group int, members []Unit, skull Unit, why string) bool {
-	if p.stopReason != "" || skull.GUID.IsZero() || skull.Dead || skull.Friendly {
+	if p.stopReason != "" {
+		return false
+	}
+	if skull.GUID.IsZero() || skull.Dead || skull.Friendly {
+		p.agentPullFailed(group, "gone")
+		return false
+	}
+	// A plan boss inside the core's assistance radius of the mob would join the fight on the agent's own hit: that is
+	// the boss's pull, not a leading player's, so the agent does not pull here (the caller stops as it would have).
+	if entry, yd, near := p.bossNear(skull.Pos, PlayAssistYd); near {
+		p.rec.Event(p.now(), "agent_pull_skipped", map[string]any{
+			"group": group, "reason": "boss-near", "target": skull.GUID.String(), "entry": skull.Entry,
+			"boss": entry, "boss_yd": yd,
+		})
 		return false
 	}
 	if group >= 0 {
 		if p.agentPulled[group] {
+			p.agentPullFailed(group, "already-pulled")
 			return false
 		}
 		p.agentPulled[group] = true
 	} else {
 		if p.agentPulledUnit[skull.GUID] {
+			p.agentPullFailed(group, "already-pulled")
 			return false
 		}
 		p.agentPulledUnit[skull.GUID] = true
@@ -1154,14 +1181,20 @@ func (p *playRun) agentReach(ctx context.Context, group int, skull Unit, wait Ve
 
 // agentBringBack walks the agent back to where the party waits, the mob following it, and orders the tank onto the mob
 // as soon as it stands within PlayTankEngageYd of the tank (its re-order re-sends the mark). It is bounded by
-// PlayPullBack. A mob the bots took (mobOnBots) or that died on the way is the party's already. A refused tank order is
-// not a stop in itself: the order goes again on the next poll while the bound lasts. A stop of the run's own is the
-// run's.
+// PlayPullBack and by the run's own clock. A mob the bots took (mobOnBots) or that died on the way is the party's
+// already. A refused tank order is not a stop in itself: the order goes again on the next poll while the bound lasts,
+// and an accepted one still waits (PlayLimits.TankTake) for the tank to actually take the mob, because a sight refusal
+// arrives as a whisper, not as the order's code. Under PlayAgentPullHP of health the agent keeps retreating to the
+// party on every poll, never standing and trading blows. A stop of the run's own is the run's.
 func (p *playRun) agentBringBack(ctx context.Context, wait Vec3, guid wire.GUID) bool {
 	deadline := p.now().Add(p.lim.PullBack)
-	walked, again := false, false
+	again := false
 	for {
 		if p.stopReason != "" {
+			return false
+		}
+		if p.timeUp() {
+			p.stop("time")
 			return false
 		}
 		p.refreshSelf()
@@ -1183,20 +1216,21 @@ func (p *playRun) agentBringBack(ctx context.Context, wait Vec3, guid wire.GUID)
 		if !p.now().Before(deadline) {
 			return false
 		}
-		// Back to the stand first, the mob following: the tank takes it once it stands beside the party (the module's
-		// line of sight from a body's reach passes there).
-		if !walked && dist3(p.self, wait) > PlayPullGatherYd {
+		// Back to the stand, the mob following: the tank takes it once it stands beside the party (the module's line of
+		// sight from a body's reach passes there). The walk goes out again on every poll while the agent stands off the
+		// party, so a low agent (whose chase pushes it out and which may not trade blows) keeps retreating instead of
+		// standing where it ended up.
+		if dist3(p.self, wait) > PlayPullGatherYd {
 			p.pullWalk = true
 			p.walkTo(ctx, wait, false, false)
 			p.pullWalk = false
 			if p.stopReason != "" {
 				return false
 			}
-			walked = true
 			continue
 		}
 		if p.tankNear(u.Pos, PlayTankEngageYd) {
-			if p.orderTank(ctx, guid) {
+			if p.orderTank(ctx, guid, deadline) {
 				p.rec.Event(p.now(), "agent_pull_back", map[string]any{
 					"target": guid.String(), "tank_yd": p.tankYdTo(u.Pos), "yd": dist3(p.self, wait),
 				})
@@ -1234,16 +1268,44 @@ func (p *playRun) agentBringBack(ctx context.Context, wait Vec3, guid wire.GUID)
 	}
 }
 
-// orderTank marks the skull and orders the tank onto it, reporting whether the module took the order (its own sight
-// passes from where the tank stands). A refusal is recorded by order; the caller is the one bounded.
-func (p *playRun) orderTank(ctx context.Context, guid wire.GUID) bool {
+// orderTank marks the skull and orders the tank onto it, reporting whether the tank TOOK it. The module's own answer is
+// no proof: a sight refusal arrives as its whisper ("I dont see my rti attack target"), never as the order's reply
+// code, so an accepted order waits up to PlayLimits.TankTake (never past the caller's deadline) for the mob to turn on
+// the tank or die. A refusal in that window, or the window's end with the mob still not the tank's, is false: the
+// caller's own bound is what re-orders once the mob stands nearer.
+func (p *playRun) orderTank(ctx context.Context, guid wire.GUID, until time.Time) bool {
 	if !p.mark(ctx, guid, party.MarkSkull) {
 		return false
 	}
+	before := p.sightRefusals()
 	if !p.order(ctx, p.cfg.Bots[0], guid) {
 		return false
 	}
-	return p.orderCode == ""
+	if p.orderCode != "" {
+		return false
+	}
+	deadline := p.now().Add(p.lim.TankTake)
+	if deadline.After(until) {
+		deadline = until
+	}
+	for {
+		u, ok := unitByGUID(p.ports.World.Units(), guid)
+		if !ok {
+			return false
+		}
+		if u.Dead || p.mobOnBots(u) {
+			return true
+		}
+		if p.sightRefusals() > before {
+			return false
+		}
+		if !p.now().Before(deadline) {
+			return false
+		}
+		if !p.sleep(ctx, p.lim.Poll) {
+			return false
+		}
+	}
 }
 
 // tankYdTo is the distance from where the tank stands to at, -1 when the tank's position is unknown.
@@ -1252,6 +1314,36 @@ func (p *playRun) tankYdTo(at Vec3) float64 {
 		return dist3(pos, at)
 	}
 	return -1
+}
+
+// bossNear is the plan boss within yd of at, with its distance: the boss's live unit where the view has it (a
+// patrolling boss is judged where it really stands) and the plan's own point where the view has not sent it yet. A boss
+// seen dead is no neighbour.
+func (p *playRun) bossNear(at Vec3, yd float64) (uint32, float64, bool) {
+	units := p.ports.World.Units()
+	for _, leg := range p.route.Legs {
+		if leg.Boss == nil || p.bossKilled[leg.Boss.Entry] {
+			continue
+		}
+		pos, alive := leg.Boss.Pos, true
+		for _, u := range units {
+			if u.Entry != leg.Boss.Entry {
+				continue
+			}
+			if u.Dead || u.Friendly {
+				alive = false
+				break
+			}
+			pos = u.Pos
+		}
+		if !alive {
+			continue
+		}
+		if d := dist3(pos, at); d <= yd {
+			return leg.Boss.Entry, d, true
+		}
+	}
+	return 0, 0, false
 }
 
 // agentPullPoint is where the agent's own pull walks to: inside the character's own reach of the mob along the navmesh
@@ -1532,7 +1624,7 @@ func (p *playRun) restWait(ctx context.Context) bool {
 			if window > 0 {
 				ev = "boss_rest_again"
 			}
-			p.rec.Event(started, ev, map[string]any{"leg": p.legName()})
+			p.rec.Event(started, ev, p.withGateBars(map[string]any{"leg": p.legName()}))
 			if err := p.ports.Player.Rest(ctx, p.lim.Rest); err != nil {
 				if errors.Is(err, ErrLinkLost) {
 					p.linkLost()
@@ -1565,7 +1657,9 @@ func (p *playRun) restWait(ctx context.Context) bool {
 					break
 				}
 				if len(deficient) == 0 && p.ready() {
-					p.rec.Event(p.now(), "boss_rest_end", map[string]any{"seconds": p.now().Sub(started).Seconds(), "window": window + 1})
+					p.rec.Event(p.now(), "boss_rest_end", p.withGateBars(map[string]any{
+						"seconds": p.now().Sub(started).Seconds(), "window": window + 1,
+					}))
 					return true
 				}
 				if p.timeUp() {
@@ -1583,7 +1677,9 @@ func (p *playRun) restWait(ctx context.Context) bool {
 				break
 			}
 			short = p.shortBars()
-			p.rec.Event(p.now(), "boss_rest_timeout", map[string]any{"seconds": p.now().Sub(started).Seconds(), "window": window + 1, "short": short})
+			p.rec.Event(p.now(), "boss_rest_timeout", p.withGateBars(map[string]any{
+				"seconds": p.now().Sub(started).Seconds(), "window": window + 1, "short": short,
+			}))
 		}
 		// A downed role is a death, not a short bar: the recovery, once, then the gate runs again on what it brought.
 		if !p.gateStats(ctx) {
@@ -1602,11 +1698,7 @@ func (p *playRun) restWait(ctx context.Context) bool {
 	if !p.gateStats(ctx) {
 		return false
 	}
-	gate := map[string]any{
-		"healer_mana": p.gatePct(p.cfg.Bots[1], true),
-		"tank_hp":     p.gatePct(p.cfg.Bots[0], false),
-		"short":       short,
-	}
+	gate := p.withGateBars(map[string]any{"short": short})
 	if deficient := p.bossGateShort(); len(deficient) > 0 {
 		gate["gate"] = deficient
 		p.rec.Event(p.now(), "boss_not_ready", gate)
@@ -1880,6 +1972,22 @@ func (p *playRun) gatePct(name string, mana bool) int {
 		return -1
 	}
 	return m.HP * 100 / m.MaxHP
+}
+
+// gateRolePct is gatePct of the i-th configured role: -1 when the configuration names none.
+func (p *playRun) gateRolePct(i int, mana bool) int {
+	if i >= len(p.cfg.Bots) {
+		return -1
+	}
+	return p.gatePct(p.cfg.Bots[i], mana)
+}
+
+// withGateBars adds the gate's own two readings to one of its events: the tank's health and the healer's mana in per
+// cent (-1 unknown), the numbers the gate decided on.
+func (p *playRun) withGateBars(d map[string]any) map[string]any {
+	d["tank_hp"] = p.gateRolePct(0, false)
+	d["healer_mana"] = p.gateRolePct(1, true)
+	return d
 }
 
 // boss is the leg's boss: the run walks to it (the plan's approach points first), waits for a patrolling boss that the

@@ -108,6 +108,10 @@ type PlayLimits struct {
 	// bringing it back to the party: the agent pulls the skull itself when the tank's sight never passes (#88).
 	PullReach time.Duration
 	PullBack  time.Duration
+	// TankTake is how long an accepted tank order may take to show the mob on the tank before the order counts as not
+	// taken: the module's sight refusal arrives as a whisper, never as the order's reply code, so an accepted order
+	// alone is no proof that the tank took the mob.
+	TankTake time.Duration
 	// BossHealMana and BossTankHP are the pre-boss gate's floors, per cent: a party still short after both rest windows
 	// may be pulled at the healer's mana and the tank's health, or not at all (`boss-not-ready`). The gate fails
 	// closed: a tank or healer missing from the roster, dead, a ghost, or without a readable bar is a deficiency too.
@@ -145,6 +149,7 @@ func DefaultPlayLimits() PlayLimits {
 		Loot:         10 * time.Second,
 		PullReach:    20 * time.Second,
 		PullBack:     20 * time.Second,
+		TankTake:     3 * time.Second,
 		BossHealMana: 50,
 		BossTankHP:   70,
 	}
@@ -233,6 +238,9 @@ func (l PlayLimits) withDefaults() PlayLimits {
 	}
 	if l.PullBack == 0 {
 		l.PullBack = d.PullBack
+	}
+	if l.TankTake == 0 {
+		l.TankTake = d.TankTake
 	}
 	if l.BossHealMana == 0 {
 		l.BossHealMana = d.BossHealMana

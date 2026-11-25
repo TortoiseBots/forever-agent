@@ -373,7 +373,8 @@ func (f *PlayFake) engage(guid wire.GUID, d time.Duration) {
 }
 
 // settle applies the packs whose aggro is due: every living unit of them that is not already fighting turns on the
-// party. A unit keeps the target it has (an add does not take a fighting pack's members).
+// party. A unit keeps a target that is already fighting for the party (an add does not take a fighting pack's member),
+// but the bots' order takes the mob off the character: the module's own threat, as the tank's order does on the server.
 func (f *PlayFake) settle() {
 	f.chase()
 	now := f.Clock.Now()
@@ -385,7 +386,7 @@ func (f *PlayFake) settle() {
 		}
 		for i := range f.units {
 			u := &f.units[i]
-			if u.Dead || u.Friendly || !slices.Contains(a.guids, u.GUID) || !u.Target.IsZero() {
+			if u.Dead || u.Friendly || !slices.Contains(a.guids, u.GUID) || (!u.Target.IsZero() && u.Target != f.selfGUID) {
 				continue
 			}
 			if n := f.NoAggro[u.GUID]; n > 0 {

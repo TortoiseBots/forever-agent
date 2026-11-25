@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -211,7 +212,7 @@ func TestAgentPullIsNotTheBossPull(t *testing.T) {
 }
 
 // TestAgentPullWaitsForTheTankOrder: a skull that already stands inside the agent's own reach is still the tank's
-// pull first (the Codex review of 2026-11-24): being near after the close-in walk is no fallback eligibility, so the
+// pull first (the review of 2026-11-24): being near after the close-in walk is no fallback eligibility, so the
 // tank is ordered, answers, and the agent never opens the pull itself.
 func TestAgentPullWaitsForTheTankOrder(t *testing.T) {
 	plan := sightWallPlan()
@@ -425,5 +426,168 @@ func TestAgentPullNeighbourAssists(t *testing.T) {
 	}
 	if u, ok := rig.fake.UnitOf(11321); !ok || !u.Dead {
 		t.Fatalf("the neighbour = %+v; want it brought by the agent's hit and killed at the stand", u)
+	}
+}
+
+// TestAgentPullBringBackNeedsTheTankToTake: the module answers the bring-back's tank order with no reply code but still
+// whispers its sight refusal (the refusal arrives as a whisper, never as the order's code). The accepted order is not
+// the tank's take: the agent waits a bounded window for the mob to turn on the tank, reads the whisper, and the
+// bring-back is not done while the mob stays on the agent. The pull fails bounded with the reason named, and the run
+// never enters the fight with the mob still on the agent.
+func TestAgentPullBringBackNeedsTheTankToTake(t *testing.T) {
+	rig := agentPullRig(t, func(Vec3, Vec3) bool { return false }, nil) // the tank never sees it, near or far
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed (the tank never took the mob)", res.Stop)
+	}
+	if slices.Contains(res.States, StateFight) {
+		t.Fatalf("the run entered the fight with the mob still on the agent (states %v)", res.States)
+	}
+	if n := playEventCount(t, rig, "agent_pull_back"); n != 0 {
+		t.Fatalf("agent_pull_back events = %d; want none: a sight refusal is no take", n)
+	}
+	if n := playEventCount(t, rig, "agent_pull_engaged"); n != 1 {
+		t.Fatalf("agent_pull_engaged events = %d; want the one pull", n)
+	}
+	failed := playEvents(t, rig)["agent_pull_failed"]
+	if failed.Ev == "" {
+		t.Fatalf("the trace has no agent_pull_failed event")
+	}
+	if why, _ := failed.D["reason"].(string); why != "bring-back" {
+		t.Fatalf("agent_pull_failed reason = %q; want bring-back", why)
+	}
+}
+
+// TestAgentPullFailedBringBackIsBounded: the bring-back's own failure cases, each ending pull-failed with the reason
+// and inside PullBack rather than spinning to the run's clock. The mob evades (it resets at its spawn with no target),
+// and a mob that never follows (it holds a target that brings it nowhere near the party). Both keep the skull alive
+// and away from the tank, so no tank order can land and the walk back runs out.
+func TestAgentPullFailedBringBackIsBounded(t *testing.T) {
+	cases := []struct {
+		name   string
+		script func(f *PlayFake, skull wire.GUID)
+	}{
+		{"evades", func(f *PlayFake, skull wire.GUID) {
+			for i := range f.units {
+				if f.units[i].GUID == skull {
+					f.units[i].Target = wire.GUID{}
+					f.units[i].Pos = Vec3{42, 22, 0}
+				}
+			}
+		}},
+		{"never follows", func(f *PlayFake, skull wire.GUID) {
+			other := fightGUID(99) // no party member: the mob holds a fight that is not the pull's
+			for i := range f.units {
+				if f.units[i].GUID == skull {
+					f.units[i].Target = other
+					f.units[i].Pos = Vec3{42, 22, 0}
+				}
+			}
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			skull := fightGUID(2) // entry 11319, the plan's kill-first skull
+			stand := Vec3{40, 5, 0}
+			triggered := false
+			rig := agentPullRig(t, func(Vec3, Vec3) bool { return false }, func(f *PlayFake) {
+				f.OnUnits = func(f *PlayFake) {
+					// The mob's own failure happens on the way back: the agent's swing first, then the walk to the
+					// party, and only then the mob evades or holds a fight that brings it nowhere.
+					if triggered || len(f.agentAttacks) == 0 || dist3(f.SelfPos, stand) > PlayPullGatherYd {
+						return
+					}
+					triggered = true
+					tc.script(f, skull)
+				}
+			})
+			res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+			if !triggered {
+				t.Fatalf("the agent never stood back at the party's stand; want the walk back before the mob's failure")
+			}
+			if res.Stop != "pull-failed" {
+				t.Fatalf("stop = %q; want pull-failed (the mob never came to the party)", res.Stop)
+			}
+			if n := playEventCount(t, rig, "agent_pull_back"); n != 0 {
+				t.Fatalf("agent_pull_back events = %d; want none: the mob never reached the tank", n)
+			}
+			ev := playEvents(t, rig)
+			failed := ev["agent_pull_failed"]
+			if why, _ := failed.D["reason"].(string); why != "bring-back" {
+				t.Fatalf("agent_pull_failed reason = %q; want bring-back", why)
+			}
+			// The bring-back is its own bound: the first refusals already spent the refusal phase.
+			took := time.Duration(failed.T-ev["agent_pull_engaged"].T) * time.Millisecond
+			if took > DefaultPlayLimits().PullBack+15*time.Second {
+				t.Fatalf("the bring-back took %v from the swing; want inside PullBack plus its polls", took)
+			}
+		})
+	}
+}
+
+// TestAgentPullLowHealthKeepsRetreating: the character's health drops under its floor after its own swing, and the mob's
+// chase pushes it off the party's stand. The agent does not stand where it was pushed to: it walks back to the party on
+// every poll while the tank does not have the mob, never swings again, and the pull fails at its bound.
+func TestAgentPullLowHealthKeepsRetreating(t *testing.T) {
+	stand := Vec3{40, 5, 0}
+	pushed := false
+	rig := agentPullRig(t, func(Vec3, Vec3) bool { return false }, func(f *PlayFake) {
+		f.OnUnits = func(f *PlayFake) {
+			if pushed || len(f.agentAttacks) == 0 || dist3(f.SelfPos, stand) > 1 {
+				return
+			}
+			// The mob's own push at the stand, and the health it took: the agent may not trade blows any more.
+			pushed = true
+			f.SetSelfHP(300, 1000)
+			f.SelfPos = Vec3{20, 5, 0}
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if !pushed {
+		t.Fatalf("the walk back to the stand never happened")
+	}
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed (the tank never took the mob)", res.Stop)
+	}
+	if d := dist3(rig.fake.SelfPos, stand); d > PlayPullGatherYd+1 {
+		t.Fatalf("the agent ended %.1f yd from the party's stand; want it retreating to the party, never standing", d)
+	}
+	if len(rig.fake.agentAttacks) != 1 {
+		t.Fatalf("the agent swung %d time(s); want only the pull's own swing under its health floor", len(rig.fake.agentAttacks))
+	}
+}
+
+// TestAgentPullSkipsABossNearTheSkull: a plan boss stands within the core's assistance radius of the marked mob, so the
+// agent's own hit would wake the boss with the pack. The agent does not pull it: the trace says agent_pull_skipped with
+// the reason, there is no swing, and the pull fails as it would have.
+func TestAgentPullSkipsABossNearTheSkull(t *testing.T) {
+	plan := sightWallPlan()
+	plan.Legs[0].Boss.Position = dungeon.Point{X: 45, Y: 25} // 3.6 yd from the skull at (42,22)
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 18, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 22, 0}})
+		f.SpawnBosses()
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		f.ModuleSight = func(Vec3, Vec3) bool { return false }
+	})
+	rig.ports.Sight = rig.fake
+	rig.ports.Refusals = rig.fake
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed (a boss beside the skull is not agent-pulled)", res.Stop)
+	}
+	skipped := playEvents(t, rig)["agent_pull_skipped"]
+	if skipped.Ev == "" {
+		t.Fatalf("the trace has no agent_pull_skipped event")
+	}
+	if why, _ := skipped.D["reason"].(string); why != "boss-near" {
+		t.Fatalf("agent_pull_skipped reason = %q; want boss-near", why)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 0 {
+		t.Fatalf("agent_pull events = %d; want none (the boss beside the skull refuses the fallback)", n)
+	}
+	if len(rig.fake.agentAttacks) != 0 {
+		t.Fatalf("the agent attacked %v; want no swing beside a plan boss", rig.fake.agentAttacks)
 	}
 }

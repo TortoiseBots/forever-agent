@@ -283,6 +283,30 @@ func TestPlayBossRestMinimumBarsPulls(t *testing.T) {
 	}
 }
 
+// TestPlayBossRestEventsCarryTheBars: the boss-rest windows and the gate name the two bars they decided on (the tank's
+// health and the healer's mana, in per cent), so a live run's gate says its numbers and not only its verdict.
+func TestPlayBossRestEventsCarryTheBars(t *testing.T) {
+	rig := playBossRestRig(t, 600, 0) // 60% mana: short of the rest's 70%, over the gate's 50%
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" || !res.Clear {
+		t.Fatalf("stop = %q clear = %v; want clear: the gate's floors held", res.Stop, res.Clear)
+	}
+	for _, name := range []string{"boss_rest", "boss_rest_timeout", "boss_pull_min_bars"} {
+		events := playTraceEvents(t, res, name)
+		if len(events) == 0 {
+			t.Fatalf("%s events = 0; want the gate's decision named", name)
+		}
+		for _, ev := range events {
+			if pct, _ := ev.D["healer_mana"].(float64); pct != 60 {
+				t.Fatalf("%s healer_mana = %v; want 60", name, ev.D["healer_mana"])
+			}
+			if pct, _ := ev.D["tank_hp"].(float64); pct != 100 {
+				t.Fatalf("%s tank_hp = %v; want 100", name, ev.D["tank_hp"])
+			}
+		}
+	}
+}
+
 // TestPlayBossRestBelowMinimumStops: both windows short and the healer under the gate's floor: the run does not pull
 // the boss half-empty, it stops boss-not-ready and says who was short.
 func TestPlayBossRestBelowMinimumStops(t *testing.T) {
