@@ -47,6 +47,19 @@ type fakeCall struct {
 	params json.RawMessage
 }
 
+// callCount is how many calls of a method the fake has served.
+func (f *fakeServe) callCount(method string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c.method == method {
+			n++
+		}
+	}
+	return n
+}
+
 func newFakeServe(t *testing.T) *fakeServe {
 	t.Helper()
 	f := &fakeServe{t: t, script: map[string][]any{}, errCodes: map[string][]int{}, errMsg: map[string]string{}}

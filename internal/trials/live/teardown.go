@@ -437,11 +437,13 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		if _, err := tb.Free(ctx, name); err != nil {
 			r.logf("%s: .tb order %s free: %v", trialID, name, err)
 		}
-		lines, err := tb.FreeTextLogout(ctx, name)
-		ev := "logout sent"
-		if err != nil {
-			ev = trimReason(tbErrText(err, lines))
-			r.logf("%s: .tb logout %s: %v", trialID, name, err)
+		// The module answers `.tb logout` before the character is gone: a
+		// teardown that returned on the answer left the hire online and the
+		// next trial's login found it "already logged in" (2026-11-25). The
+		// roster is the hire's identity, so wait for the name to leave it.
+		lines, ev, proved := r.logoutProved(ctx, rep.Client, tb, name)
+		if !proved {
+			r.logf("%s: .tb logout %s: %s", trialID, name, ev)
 			problems = append(problems, "logout of "+name+" not confirmed: "+ev)
 		}
 		rep.Ledger.Add(map[string]any{"kind": "logged_out", "bot": name, "reply": firstLines(lines),
@@ -452,6 +454,88 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		problems = append(problems, "forced role not cleared: "+trimReason(err.Error()))
 	}
 	return problems
+}
+
+// logoutProved sends `.tb logout` and waits for the hire to leave the party
+// roster. The module answers before the character is logged out, so the
+// answer alone is no proof: the roster is the hire's identity (setup logs it
+// in and groups it), and only its absence proves the logout landed. A refusal
+// is returned at once; a name still online after the wait gets one more send,
+// then the caller records the problem. It returns the last send's lines, the
+// evidence, and whether the logout was proved.
+func (r *Runner) logoutProved(ctx context.Context, client *Client, tb *tbcmd.Client, name string) ([]string, string, bool) {
+	var lines []string
+	for send := 1; send <= 2; send++ {
+		l, err := tb.FreeTextLogout(ctx, name)
+		lines = l
+		if err != nil {
+			// A second send can race the character's own logout: a refusal
+			// is no problem when the roster proves it left.
+			if send > 1 {
+				if online, rerr := r.rosterHas(ctx, client, name); rerr == nil && !online {
+					return lines, "logout sent; the party roster no longer lists " + name, true
+				}
+			}
+			return lines, trimReason(tbErrText(err, l)), false
+		}
+		online, err := r.rosterHas(ctx, client, name)
+		if err != nil {
+			return lines, "logout sent, the party roster is unreadable: " + trimReason(err.Error()), false
+		}
+		if !online {
+			return lines, "logout sent; the party roster no longer lists " + name, true
+		}
+		if send == 1 {
+			deadline := time.Now().Add(r.logoutWait())
+			for time.Now().Before(deadline) {
+				select {
+				case <-ctx.Done():
+					return lines, "logout sent; the wait ended with " + name + " still in the roster", false
+				case <-time.After(r.logoutPoll()):
+				}
+				online, err := r.rosterHas(ctx, client, name)
+				if err != nil {
+					return lines, "logout sent, the party roster is unreadable: " + trimReason(err.Error()), false
+				}
+				if !online {
+					return lines, "logout sent; the party roster no longer lists " + name, true
+				}
+			}
+		}
+	}
+	return lines, "still in the party roster after two logout sends", false
+}
+
+// rosterHas reads the party roster and reports whether name is still on it.
+func (r *Runner) rosterHas(ctx context.Context, client *Client, name string) (bool, error) {
+	tctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	info, err := client.Party(tctx)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range info.Members {
+		if strings.EqualFold(m.Name, name) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// logoutWait bounds the roster wait after `.tb logout` (0 is 20 s).
+func (r *Runner) logoutWait() time.Duration {
+	if r.LogoutWait > 0 {
+		return r.LogoutWait
+	}
+	return 20 * time.Second
+}
+
+// logoutPoll is the pause between roster reads during that wait.
+func (r *Runner) logoutPoll() time.Duration {
+	if r.TeardownPoll > 0 {
+		return r.TeardownPoll
+	}
+	return 500 * time.Millisecond
 }
 
 func listOrNone(list []string) string {

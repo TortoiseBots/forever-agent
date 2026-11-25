@@ -248,9 +248,22 @@ func (p *PlayerSetup) recordLevelUp(guid string, from, delta int) {
 		"line": fmt.Sprintf(".levelup %+d", delta)})
 }
 
-// playerLevel reads the session character's level from `status`, on its own
-// deadline. ok is false when it cannot be read: unknown is not level 0.
+// playerLevel reads the session character's level from the server's own unit
+// row first, then from `status`. Both are server reads; on this core `status`
+// is the level the character logged in with and keeps it after `.levelup`
+// (2026-11-25: a level-up read back at the old level although the world had
+// the new one), while the unit row carries the update. Each read has its own
+// deadline. ok is false when neither read carries a positive level: unknown
+// is not level 0.
 func (p *PlayerSetup) playerLevel(ctx context.Context) (int, bool) {
+	if guid := p.playerGUIDOf(ctx); guid != "" {
+		rctx, cancel := p.ctxOf(ctx)
+		u, err := p.Client.Unit(rctx, guid)
+		cancel()
+		if err == nil && u.Level >= 1 {
+			return u.Level, true
+		}
+	}
 	rctx, cancel := p.ctxOf(ctx)
 	defer cancel()
 	st, err := p.Client.StatusOf(rctx)

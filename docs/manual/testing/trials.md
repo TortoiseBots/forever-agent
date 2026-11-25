@@ -4,7 +4,7 @@ title: Trials
 description: "Run the behaviour test bench: hire a bot into a scripted fight, score each specified behaviour, and read the card."
 tags: [testing, trials, behaviour, verdicts]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T14:00:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T00:50:00Z }
 sources:
   - id: trials-cmd
     resource: cmd/forever-agent/trials_cmd.go
@@ -138,6 +138,12 @@ The command leases the slot, renews the lease while it runs, provisions the play
 A serve started from a `slot setup --forever` dir holds that slot's lease for its whole run, so `trials run` on
 the same slot is refused `held by <holder>` (exit `15`) while the serve runs. Run the bench against a bare
 `forever serve --dir` (a `slot.json` with no lease), or a slot no serve leases.
+
+# Setup read-backs and server gaps
+
+Every setup row is a read-back of the server, so a server capability the bench cannot read is never turned into a `PASS`: the row is `SKIPPED needs=<check>` and the trial ends `SKIPPED`. The spec kit is the current example: the kit's ids come from `specs.json` and the Forever overlay, and an id the server's own spell table does not hold is `SKIPPED needs=bot_spec` with the ids in the evidence, instead of a `.tb learn` the module can only answer `unknown`.
+
+Two reads are taken so that a live server's snapshots cannot fail a good setup. The player's level comes from the server's unit row before `status` (a core can keep the login level in `status` after `.levelup`), and the power set is polled in the units model for a moment before it is judged. Teardown sends `.tb logout` and waits for the hire to leave the party roster, so the next trial does not find it "already logged in".
 
 # Scoring a run folder
 

@@ -3,6 +3,7 @@
 ## 2026-11-26
 
 * **Update**: Documented in [dungeon plans](dungeons/plans.md) that a patrol's `path` is treated as a closed loop (closing leg included, empty `path` entry-only) in the watch and play drivers alike; `plan-scout --forever --live` level fill keys live units by `UnitSpawnKey` and `serve`'s `los` clears a previous said-aloud answer at the start of each call.
+* **Update**: Trial setup on ForeverCore in [trials](testing/trials.md): a spec kit whose ids the server's spell table does not hold is `SKIPPED needs=bot_spec` with the ids (never a learn the module answers `unknown`), the player's level is read from the server's unit row before `status` after a `.levelup`, the power set is polled in the units model before it is judged, and teardown waits for a hire to leave the party roster after `.tb logout`.
 
 ## 2026-11-25
 
