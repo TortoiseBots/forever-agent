@@ -1,0 +1,96 @@
+{
+  "fight": {
+    "id": "forever-druid-1",
+    "commander": "Testrun",
+    "commander_guid": 1,
+    "group": 1,
+    "map": 1,
+    "plan": "test",
+    "leg": "test",
+    "step": 1,
+    "kind": "pull",
+    "start": 1000000000,
+    "dur_ms": 40000,
+    "outcome": "kill",
+    "boss": 0,
+    "boss_name": "",
+    "planned": [],
+    "engaged": [
+      {
+        "e": 1,
+        "n": "Testmob",
+        "c": 1
+      }
+    ],
+    "bots": [
+      {
+        "name": "Tankbot",
+        "guid": 2,
+        "class": "warrior",
+        "role": "tank",
+        "sub": 0,
+        "dmg": 3200,
+        "heal": 0,
+        "over": 0,
+        "taken": 5400,
+        "casts": 15,
+        "heal_casts": 0,
+        "deaths": 0,
+        "spells": [
+          {
+            "n": "Sunder Armor",
+            "c": 8
+          },
+          {
+            "n": "Shield Slam",
+            "c": 2
+          },
+          {
+            "n": "Revenge",
+            "c": 2
+          },
+          {
+            "n": "Heroic Strike",
+            "c": 3
+          }
+        ],
+        "tail_spells": []
+      },
+      {
+        "name": "Druidbot",
+        "guid": 3,
+        "class": "druid",
+        "role": "healer",
+        "sub": 0,
+        "dmg": 200,
+        "heal": 0,
+        "over": 0,
+        "taken": 750,
+        "casts": 11,
+        "heal_casts": 0,
+        "deaths": 0,
+        "spells": [
+          {
+            "n": "Rejuvenation",
+            "c": 4
+          },
+          {
+            "n": "Healing Touch",
+            "c": 5
+          },
+          {
+            "n": "Swiftmend",
+            "c": 1
+          },
+          {
+            "n": "Rebirth",
+            "c": 1
+          }
+        ],
+        "tail_spells": []
+      }
+    ],
+    "deaths": []
+  },
+  "warnings": []
+}

@@ -19,8 +19,9 @@ status: draft
 
 # Combat CLI
 
-> **Turtle only commands.** `rotation`, `fight-score` and `pulltest` on this page run against the Turtle stack only;
-> against a Forever server use the replacement `forever-agent help` prints for each (some have none yet).
+> **Turtle commands.** `rotation` and `pulltest` on this page run against the Turtle stack only; against a Forever
+> server use the replacement `forever-agent help` prints (some have none yet). `fight-score` also scores a Forever
+> run's fight record with `--set spell_oracle=forever`, and warns in the reading that the record names no core.
 
 Three offline commands. None logs in; `rotation` and `pulltest` read files only. Exit 0 on success, 2 on bad flags, arguments or files.
 
@@ -65,8 +66,8 @@ usage: turtle-agent fight-score [--json] [--mt NAME] [--ot A,B] [--set check=val
 | `--json` | Print the reading as JSON | Off: human table | `turtle-agent fight-score --json combat-fight-1.json` |
 | `--mt NAME` | Main tank name | The first tank in the fight | `turtle-agent fight-score --mt <name> f.json` |
 | `--ot A,B` | Off-tank names, comma separated | The other tanks | `turtle-agent fight-score --ot <a>,<b> f.json` |
-| `--set check=value` | Change a threshold | `spell_oracle=20` | `turtle-agent fight-score --set spell_oracle=20 f.json` |
+| `--set check=value` | Change a threshold; `spell_oracle=forever` selects the Forever spell data | `spell_oracle=20` | `turtle-agent fight-score --set spell_oracle=20 f.json` |
 
-`--set` takes any known trace-score threshold (`rest_share`, `stale_party`, `walk_stops`, `threat_off_tank`, `order_refusals`, `feed_stalls`, `stuck`, `facing`, `idle_share`, `interrupt_cover`, `taunt_latency`, `cc_hold`, `pet_threat`, `spell_oracle`, `oom_in_fight`); only the oracle threshold changes a fight score, and an unknown id is refused (`--set: no threshold for check "x" (have ...)`). Warnings never fail: exit 0 with findings, 2 on usage.
+`--set` takes any known trace-score threshold (`rest_share`, `stale_party`, `walk_stops`, `threat_off_tank`, `order_refusals`, `feed_stalls`, `stuck`, `facing`, `idle_share`, `interrupt_cover`, `taunt_latency`, `cc_hold`, `pet_threat`, `spell_oracle`, `oom_in_fight`); only the oracle threshold changes a fight score, and an unknown id is refused (`--set: no threshold for check "x" (have ...)`). A numeric `spell_oracle` is the active-seconds threshold; the word `forever` selects the Forever spell data instead. No fight record names its core (both bot module builds write the same fight JSON), so the selected oracle is used as asked: an explicit `forever` adds a warning to the reading (a `warnings` array in the JSON, a `warning:` line in the text) that the record could not confirm its origin, and nothing is refused. Every reading names the oracle that produced it (`spell oracle <name>` in the header, `spell_oracle` in the JSON). Warnings never fail: exit 0 with findings, 2 on usage.
 
 Fight-score, like `trace-score`, `scenario`, and `pulltest`, uses plain flag parsing: put flags before the file names. On/off flags take `=` (`--json=true`); a space-separated value is read as the next file instead.

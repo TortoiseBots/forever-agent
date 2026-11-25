@@ -15,10 +15,10 @@ status: draft
 
 # Score a finished fight
 
-> **Turtle only.** `fight-score` reads Turtle dashboard recordings; a Forever server has no replacement
-> (`forever-agent help`).
-
 `turtle-agent fight-score` reads finished fights the way the dashboard's fight debugger reads them: the two tank readings with the debugger's exact rules, then one line per bot the spells oracle warns about. It reads files only and never logs in.
+
+The default spell data is the Turtle knowledge base. A Forever (Classic 1.60) run's fight record is scored against the
+Forever spell data with `--set spell_oracle=forever` (see §5).
 
 ## 1. Score a fight dump
 
@@ -26,7 +26,10 @@ status: draft
 turtle-agent fight-score cmd/turtle-agent/testdata/fights/combat-fight-5-3.json
 ```
 
-The input is `{fight, warnings}` as `GET /api/v1/combat/fight/<key>` returns it, or a bare fight. Output starts `fight <id> <commander> <s> s, <n> bots`, then one row per reading.
+The input is `{fight, warnings}` as `GET /api/v1/combat/fight/<key>` returns it, or a bare fight. Every reading names
+the oracle that produced it: the text header ends `spell oracle turtle` or `spell oracle forever`, and the JSON has
+`"spell_oracle":"turtle"|"forever"`. Output starts `fight <id> <commander> <s> s, <n> bots, spell oracle <name>`, then
+one row per reading.
 
 ## 2. Name the tanks
 
@@ -53,4 +56,36 @@ Every flag and its default:
 
 ## 4. Mind the exit code
 
-Exit 0 whatever the warnings say; 2 on usage. Warnings are readings, not failures.
+Exit 0 whatever the warnings say; 2 on usage only. A warning is part of the reading, not a failure.
+
+## 5. Score a Forever run's fight
+
+```sh
+forever-agent fight-score --set spell_oracle=forever <walk-dir>/combat-fight-1.json
+```
+
+`--set spell_oracle=forever` selects the oracle and common lists of the Forever spell data: the `oracle` rows judge each
+bot against its Forever class spec, and `ot_taunt` uses the Forever taunt list (Taunt, Mocking Blow, Challenging Shout,
+Growl, Challenging Roar: Hand of Reckoning is a Turtle spell and reads as no taunt). The input is the module's fight
+record in the forms it is stored in: the dashboard detail `{fight, warnings}`, the bare fight object, or the
+`COMBAT_FIGHT` datagram. A `--set spell_oracle=SECONDS` number still sets the seconds a bot must be active to be judged,
+so both may be given:
+
+```sh
+forever-agent fight-score --set spell_oracle=forever --set spell_oracle=30 <walk-dir>/combat-fight-1.json
+```
+
+No fight record names its core. Both builds of the bot module write the same fight JSON (the fight record writer is
+line-for-line the same in both, `boss_phase`, `dropped` and a bot's `tail_spells` included), the datagram's `v` is the
+protocol version (12 in both), the dashboard detail adds only its warnings, and a watch/play run's `forever-run`
+summary is a separate file. So the selected oracle is used as asked, and an explicitly selected `spell_oracle=forever`
+adds a warning to the reading:
+
+```
+fight 5-3 Glacienne 52 s, 39 bots, spell oracle forever
+warning: no provenance marker in the fight record (no core or build field): scored with the Forever spell data as selected (spell_oracle=forever); the record does not name its core
+```
+
+The warning is part of the result: the JSON has a `warnings` array (`[]` on a reading that needs none) beside
+`spell_oracle`, and the text reading prints one `warning:` line per warning. It does not fail the command (exit stays 0),
+and nothing is refused: without the option the Turtle data is read, as before, for every record shape.
