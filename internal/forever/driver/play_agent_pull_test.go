@@ -748,10 +748,17 @@ var (
 // refusal loop has walked it 20 yd toward the skull by then; the position is what the live events recorded).
 func livePullRig(t *testing.T, mut func(*PlayFake)) *playRig {
 	t.Helper()
+	return approachRig(t, livePullSkull, mut)
+}
+
+// approachRig is livePullRig with the skull put at skull: the same group, stand and pair, and the same moved-once reset
+// of the agent to the live fallback's position when the refusals are spent. mut runs after the rig's own script.
+func approachRig(t *testing.T, skull Vec3, mut func(*PlayFake)) *playRig {
+	t.Helper()
 	moved := false
 	rig := newPlayFightRig(t, livePullPlan(), func(f *PlayFake) {
 		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 29, 0}})
-		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: livePullSkull})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: skull})
 		f.SightFunc = func(Vec3, Vec3) bool { return true }
 		// The module sees the mobs once they come down to the party (the live tunnel floor), never at their spawn.
 		f.ModuleSight = spawnSight
@@ -1052,5 +1059,191 @@ func TestPullTankRetryWaitsForTheSkull(t *testing.T) {
 	}
 	if n := playEventCount(t, rig, "agent_pull_back"); n != 0 {
 		t.Fatalf("agent_pull_back events = %d; want none: the skull never reached the tank", n)
+	}
+}
+
+// approachFailure is the fallback's own failure event.
+func approachFailure(t *testing.T, rig *playRig) trace.Event {
+	t.Helper()
+	failed := playEvents(t, rig)["agent_pull_failed"]
+	if failed.Ev == "" {
+		t.Fatalf("the trace has no agent_pull_failed event")
+	}
+	return failed
+}
+
+// TestAgentPullInReachNeverTurnsTimesOut: the skull stands inside the agent's own reach and is hit, but it never turns
+// on a party member (it holds a stranger's pet). The pull is bounded by PlayLimits.PullReach like every other: its
+// failure records reach-timeout inside the pull's window and the run ends pull-failed instead of hanging in the wait.
+func TestAgentPullInReachNeverTurnsTimesOut(t *testing.T) {
+	pet := wire.GUID{High: 0xF140000000000000, Low: 0x9001}
+	rig := agentPullRig(t, spawnSight, func(f *PlayFake) {
+		for i := range f.units {
+			if f.units[i].Entry == 11319 {
+				f.units[i].Target = pet
+			}
+		}
+	})
+	// A wall-clock bound proves the wait ends on the pull's own clock, not on the test's: before the bound the run
+	// would spin in the attacking branch and end interrupt.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	res := Play(ctx, rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed (the pull's own bound ends the wait)", res.Stop)
+	}
+	if len(rig.fake.agentAttacks) == 0 {
+		t.Fatalf("the agent never attacked the in-reach skull")
+	}
+	failed := approachFailure(t, rig)
+	if why, _ := failed.D["reason"].(string); why != "reach-timeout" {
+		t.Fatalf("agent_pull_failed reason = %q; want reach-timeout", why)
+	}
+	pulled := playEvents(t, rig)["agent_pull"]
+	lim := DefaultPlayLimits()
+	if gap := time.Duration(failed.T-pulled.T) * time.Millisecond; gap > lim.PullReach+lim.Poll {
+		t.Fatalf("the wait ended %v after agent_pull; want within %v (the pull's window)", gap, lim.PullReach+lim.Poll)
+	}
+}
+
+// TestAgentPullLeaderIsInTheRoster: the roster the pull reads is this character included, so a mob that turns on the
+// leading player itself (a body pull) is a pulled mob. The roster names the leader, a playRun's partyMember answers it,
+// and the in-reach fallback (whose swing turns the skull on the agent, the leader) records its engage and the run
+// clears; a roster without the leader would have waited the pull out instead.
+func TestAgentPullLeaderIsInTheRoster(t *testing.T) {
+	rig := agentPullRig(t, spawnSight, nil)
+	lead := rig.ports.Group.Leader()
+	if lead.IsZero() {
+		t.Fatal("the group answered no leader")
+	}
+	inRoster := false
+	for _, m := range rig.ports.Group.Roster() {
+		if m.GUID == lead {
+			inRoster = true
+		}
+	}
+	if !inRoster {
+		t.Fatalf("the leader %s is not in the roster %v", lead, rig.ports.Group.Roster())
+	}
+	// The pull's own reading of a body pull: the leader's guid is a party member's.
+	run := &playRun{ports: PlayPorts{Group: rig.fake}}
+	if !run.partyMember(lead) {
+		t.Fatalf("the pull does not read the leader %s as a party member", lead)
+	}
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (the mob on the leader is a pull)", res.Stop)
+	}
+	ev := playEvents(t, rig)
+	if ev["agent_pull"].Ev == "" || ev["agent_pull_engaged"].Ev == "" {
+		t.Fatalf("the trace lacks the pull or its engage: %v", ev)
+	}
+	if yd, _ := ev["agent_pull_engaged"].D["yd"].(float64); yd > PlayAgentReachYd {
+		t.Fatalf("agent_pull_engaged yd = %v; want the in-reach swing", yd)
+	}
+}
+
+// TestAgentPullApproachPathLengthBound: a path to the skull longer than PlayAgentApproachPathYd is refused as no-path
+// with the path-length bound, before any walk or swing. The detour makes the walked path about 62 yd.
+func TestAgentPullApproachPathLengthBound(t *testing.T) {
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.PathFunc = func(from, to Vec3) navmesh.Route {
+			if dist3(to, livePullSkull) <= 0.5 {
+				return navmesh.Route{Kind: navmesh.RouteComplete, Points: []Vec3{from, {from[0] + 30, from[1], from[2]}, to}}
+			}
+			return navmesh.Route{Kind: navmesh.RouteComplete, Points: []Vec3{from, to}}
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed", res.Stop)
+	}
+	failed := approachFailure(t, rig)
+	if why, _ := failed.D["reason"].(string); why != "no-path" {
+		t.Fatalf("agent_pull_failed reason = %q; want no-path", why)
+	}
+	if detail, _ := failed.D["detail"].(string); detail != "path-length" {
+		t.Fatalf("agent_pull_failed detail = %q; want path-length", detail)
+	}
+	if n := playEventCount(t, rig, "agent_pull_engaged"); n != 0 {
+		t.Fatalf("agent_pull_engaged events = %d; want none", n)
+	}
+	if len(rig.fake.agentAttacks) != 0 {
+		t.Fatalf("the agent attacked %v; want no swing on a refused path", rig.fake.agentAttacks)
+	}
+}
+
+// TestAgentPullApproachPastStandBound: a mob whose pull position lies more than PlayAgentApproachPastYd past the
+// party's stand is refused as no-path with the past-stand bound, before any walk or swing. The skull at (58,44) is
+// 25.6 yd of path from the agent (inside the path bound) and about 40 yd from the stand.
+func TestAgentPullApproachPastStandBound(t *testing.T) {
+	skull := Vec3{58, 44, 0}
+	rig := approachRig(t, skull, nil)
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed", res.Stop)
+	}
+	failed := approachFailure(t, rig)
+	if why, _ := failed.D["reason"].(string); why != "no-path" {
+		t.Fatalf("agent_pull_failed reason = %q; want no-path", why)
+	}
+	if detail, _ := failed.D["detail"].(string); detail != "past-stand" {
+		t.Fatalf("agent_pull_failed detail = %q; want past-stand", detail)
+	}
+	if n := playEventCount(t, rig, "agent_pull_engaged"); n != 0 {
+		t.Fatalf("agent_pull_engaged events = %d; want none", n)
+	}
+	if len(rig.fake.agentAttacks) != 0 {
+		t.Fatalf("the agent attacked %v; want no swing past the stand bound", rig.fake.agentAttacks)
+	}
+}
+
+// TestAgentPullApproachPackBound: a live hostile no plan group claims (a patrol's stand-in) stands within
+// PlayAgentApproachPackYd of the approach's own path. The path cannot keep the clearance, so the pull fails no-path
+// with the pack-near bound and the agent never walks through or swings.
+func TestAgentPullApproachPackBound(t *testing.T) {
+	patrol := Unit{GUID: fightGUID(7), Entry: 11322, Pos: Vec3{52, 30, 0}}
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) { f.AddUnit(patrol) })
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed", res.Stop)
+	}
+	failed := approachFailure(t, rig)
+	if why, _ := failed.D["reason"].(string); why != "no-path" {
+		t.Fatalf("agent_pull_failed reason = %q; want no-path", why)
+	}
+	if detail, _ := failed.D["detail"].(string); detail != "pack-near" {
+		t.Fatalf("agent_pull_failed detail = %q; want pack-near", detail)
+	}
+	if n := playEventCount(t, rig, "agent_pull_engaged"); n != 0 {
+		t.Fatalf("agent_pull_engaged events = %d; want none", n)
+	}
+	if len(rig.fake.agentAttacks) != 0 {
+		t.Fatalf("the agent attacked %v; want no swing through a pack's clearance", rig.fake.agentAttacks)
+	}
+}
+
+// TestAgentPullApproachNoSightBound: the agent walks the checked path into its own reach, but the line to the mob never
+// clears, so the pull fails no-sight-after-approach after the walk (not on a stop of the run's own).
+func TestAgentPullApproachNoSightBound(t *testing.T) {
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.SightFunc = func(Vec3, Vec3) bool { return false }
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed", res.Stop)
+	}
+	failed := approachFailure(t, rig)
+	if why, _ := failed.D["reason"].(string); why != "no-sight-after-approach" {
+		t.Fatalf("agent_pull_failed reason = %q; want no-sight-after-approach", why)
+	}
+	if n := playEventCount(t, rig, "agent_pull_engaged"); n != 0 {
+		t.Fatalf("agent_pull_engaged events = %d; want none", n)
+	}
+	if len(rig.fake.agentAttacks) != 0 {
+		t.Fatalf("the agent attacked %v; want no swing without a line", rig.fake.agentAttacks)
+	}
+	if d := dist3(rig.fake.SelfPos, livePullSelf); d <= PlayArriveYd {
+		t.Fatalf("the agent stood %.1f yd from where the fallback began; want the approach's walk", d)
 	}
 }

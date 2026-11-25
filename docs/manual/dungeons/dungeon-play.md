@@ -77,12 +77,22 @@ would add no sight — the leading player pulls the mob itself:
    the attack it attacks with (the character's own auto attack, whose client chases into melee reach: `PlayAgentReachYd`
    less `PlayAgentPullMarginYd`, so the walk's arrival tolerance still lands in range) and in line of sight of the mob.
    The approach is bounded four ways: by `PlayLimits.PullReach` (the time), `PlayAgentApproachPathYd` (the path it may
-   walk), `PlayAgentApproachPastYd` (how far past the party's stand it may end) and `PlayAgentApproachPackYd` (it never
-   walks through another pack's radius). It never walks in under 40 per cent of its own health or with that health
-   unknown (the row is re-read every 3 s while it is missing); under the floor it keeps to the party and never trades
-   blows. An approach that cannot be made fails the fallback with `no-path` (the walker's path bound; its `detail` says
-   which bound: `path`, `path-length`, `past-stand` or `pack-near`), `no-sight-after-approach` (in range, the line never
-   cleared) or `approach-timeout` (the time ran out before the mob was in range and in sight).
+   walk), `PlayAgentApproachPastYd` (how far past the party's stand it may end) and `PlayAgentApproachPackYd` (the
+   clearance it keeps from every live hostile it is not pulling, 22 yd: proximity aggro at equal level is about 20 yd,
+   larger for a lower-level agent). That clearance is measured against another pack of the plan, a patrol no plan group
+   claims and a stranger alike, but not against the pull's own units, a unit already fighting the party, or one within
+   `PlayAssistYd` (10 yd) of the skull, which is the pull's own social add and comes with it. A hostile the view does
+   not carry (a pack out of view) is unknown and is not counted: the check fails open there. When the path cannot keep
+   the clearance, the approach walks the longest prefix of it that ends short of the first hostile, inside the other
+   bounds, and plans again from there; a prefix that does not move the agent is no path. It never walks through a pack.
+   The path it walks is the path it checked for those bounds, not a second query.
+   It never walks in under 40 per cent of its own health or with that health unknown (the row is re-read every 3 s
+   while it is missing); under the floor it keeps to the party and never trades blows. An approach that cannot be made
+   fails the fallback with `no-path` (the walker's path bound; its `detail` says which bound: `path`, `path-length`,
+   `past-stand` or `pack-near`), `no-sight-after-approach` (in range, the line never cleared) or `approach-timeout`
+   (the time ran out before the mob was in range and in sight). A navmesh route the approach cannot complete is
+   `no-path` with `detail: path`; only the retreat to the party and the walk back keep the run's own `walk`/`walk:<kind>`
+   stops on a route or walk error.
 3. `agent_pull_engaged` records the mob that turned on the agent (`target`, `entry`, `yd`).
 4. The agent walks back to where the party waits, the mob following. The tank is ordered onto it once the mob stands
    within 10 yd of the tank (a body beside the tank is inside the module's own line of sight), and an accepted order is
@@ -104,7 +114,7 @@ The fallback is bounded and it never becomes a second tank:
 | `PlayAgentPullMarginYd` | 2 yd | The approach stops this far inside the pull's range, so the walk's arrival tolerance lands in range. |
 | `PlayAgentApproachPathYd` | 40 yd | The longest navmesh path the approach may walk to the mob. |
 | `PlayAgentApproachPastYd` | 30 yd | How far past the party's pull stand the approach may end. |
-| `PlayAgentApproachPackYd` | 10 yd | The radius around another pack's live unit the approach never walks through (the core's assistance radius). |
+| `PlayAgentApproachPackYd` | 22 yd | The clearance the approach keeps from every live hostile it is not pulling: another pack, an unclaimed patrol or a stranger (proximity aggro is about 20 yd; the plan carries no aggro margin of its own). A pack out of view is unknown and is not counted. |
 | `PlayTankEngageYd` | 10 yd | How near the tank the brought-back mob must stand before the tank is ordered again. |
 | `PlayAgentPullHP` | 40 % | The character's health floor for pulling; unknown health fails closed. |
 | `PlayAssistYd` | 10 yd | The core's assistance radius: a plan boss inside it of the mob makes the pull the boss's. |
@@ -124,9 +134,10 @@ A failed fallback records `agent_pull_failed` with its reason:
 |---|---|
 | `gone` | The mob left the view or turned friendly before or during the approach. |
 | `already-pulled` | This group (or this unknown unit) already had its one agent pull. |
-| `no-path` | No walk to the mob inside the approach's bounds; `detail` says which: `path` (no navmesh route), `path-length` (past 40 yd), `past-stand` (past 30 yd from the stand) or `pack-near` (another pack's radius is in the way). |
+| `no-path` | No walk to the mob inside the approach's bounds; `detail` says which: `path` (no complete navmesh route), `path-length` (past 40 yd), `past-stand` (past 30 yd from the stand) or `pack-near` (another pack, an unclaimed patrol or a stranger is inside the 22 yd clearance, and the longest clear prefix was no path either). |
 | `no-sight-after-approach` | The approach reached the pull's range but the line to the mob never cleared. |
 | `approach-timeout` | `PlayLimits.PullReach` ran out before the agent stood in range and in sight. |
+| `reach-timeout` | The agent stood in its pull position and the wait for the mob to turn on it ran out (`PlayLimits.PullReach`); the mob evaded in place, held a non-party target, or the single swing did not land. |
 | `health-unknown` | The character's health row could not be read: it never walks in. |
 | `low-health` | The character stood under its 40 per cent floor. |
 | `bring-back` | The mob never came to the tank inside the 20 s walk back. |

@@ -143,11 +143,11 @@ Deaths, wipes and the end:
 | `time` | The run's own clock (`MaxMinutes`) ran out inside a wait. | Same as `budget`. |
 | `enter` | The entrance trigger or the map change failed. | Check the plan's entrance and the connection. |
 | `bot-not-entered` | A bot did not get into the instance, even after the summon. | Check the bot's placement and the summon cooldown. |
-| `walk`, `walk:<kind>`, `walk:mapchange` | A walk failed; `<kind>` is the navmesh route's answer. | Plan-check the point. |
+| `walk`, `walk:<kind>`, `walk:mapchange` | A walk failed; `<kind>` is the navmesh route's answer. The leading player's own approach is not one of these: a route it cannot complete fails the pull (`no-path` with `detail: path`), and only its retreat to the party and its walk back stop the run here. | Plan-check the point. |
 | `exact` | The character could not stand on an `exact` waypoint (1.5 yd). | Check the point's ground. |
 | `avoid` | The character stood in one of the plan's avoid boxes. | The point is wrong; fix the plan or the box. |
 | `straggler` | A bot fell behind a walk for 150 s. | Check the bot. |
-| `pull-no-sight` / `pull-failed` | The tank never saw the marked skull / nobody answered the pull. A leading player's own fallback pull that fails is followed by one more tank order (a `pull_retry` event with `after: agent-pull`); when that fails too the run stops `pull-failed`, never `pull-no-sight`. | Check the pack's distance and the geometry. The trace's `agent_pull_failed` names the fallback's reason (`gone`, `already-pulled`, `no-path` with its `detail`, `no-sight-after-approach`, `approach-timeout`, `health-unknown`, `low-health`, `bring-back`); `agent_pull_skipped` with reason `boss-near` means a plan boss stood within 10 yd of the mob, which is the boss's pull, not the agent's. |
+| `pull-no-sight` / `pull-failed` | The tank never saw the marked skull / nobody answered the pull. A leading player's own fallback pull that fails is followed by one more tank order (a `pull_retry` event with `after: agent-pull`); when that fails too the run stops `pull-failed`, never `pull-no-sight`. | Check the pack's distance and the geometry. The trace's `agent_pull_failed` names the fallback's reason (`gone`, `already-pulled`, `no-path` with its `detail`, `no-sight-after-approach`, `approach-timeout`, `reach-timeout`, `health-unknown`, `low-health`, `bring-back`); `agent_pull_skipped` with reason `boss-near` means a plan boss stood within 10 yd of the mob, which is the boss's pull, not the agent's. |
 | `fight` | The character's own fight tick failed. | Check the character's state. |
 | `fight-timeout` | A fight ran over 600 s. | Check the pack. |
 | `rest` | Resting failed. | Check the character's state. |
