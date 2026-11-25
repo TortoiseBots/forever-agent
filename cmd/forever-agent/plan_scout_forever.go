@@ -427,7 +427,7 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 		data.Notes = append(data.Notes, fmt.Sprintf("live sight: the module refused %d pack unit(s) (unknown-unit, not-in-world or different-maps); those units stay unanswered and the pass went on", sight.skipped))
 	}
 	if sight.noAccess > 0 {
-		data.Notes = append(data.Notes, fmt.Sprintf("live sight: the module answered no-access for %d pack unit(s) (a ground point against a creature guid needs no access of its own: the creature was gone and the caller is below GM); those units stay unanswered and the pass went on", sight.noAccess))
+		data.Notes = append(data.Notes, fmt.Sprintf("live sight: the module answered no-access for %d pack unit(s) (below GM a unit that did not resolve answers this code, so either the creature was gone or the session may read nothing); those units stay unanswered and the pass went on", sight.noAccess))
 	}
 	if sight.unread > 0 {
 		data.Notes = append(data.Notes, fmt.Sprintf("live sight: the module's answer was not understood for %d pack unit(s) (answer not understood); those units stay unanswered and the pass went on", sight.unread))
@@ -542,9 +542,9 @@ func foreverWalkRayAt(ctx context.Context, c scoutForeverClient, spot planscout.
 // scoutForeverSight is the module's own sight query over one live pass: whether the module still answers it, how long
 // it may keep asking, and how many stands and units it did not ask about. A refusal that is about the whole pass
 // (unsupported, a bad argument that would repeat for every unit, a rate refusal that survived the one retry) stops
-// the asking and is said once; a refusal about one unit (it despawned, died or changed map, or a no-access for a
-// creature that is gone when the caller is below GM) or an answer for one unit that is not understood skips that unit
-// alone.
+// the asking and is said once; a refusal about one unit (it despawned, died or changed map, or a no-access below
+// GM, where a unit that did not resolve and a query the caller may not read answer the same code) or an answer for
+// one unit that is not understood skips that unit alone.
 type scoutForeverSight struct {
 	ok       bool
 	said     bool
@@ -687,9 +687,9 @@ func foreverServerSightAt(ctx context.Context, c scoutForeverClient, spot plansc
 			// rest of the pack.
 			sight.skipped++
 		case sightcmd.NoAccess:
-			// The query is a ground point against a creature guid, which needs no access of its own: below GM the
-			// module answers no-access where it would answer unknown-unit, so this is the same "the creature is gone"
-			// for one unit, not the pass losing access.
+			// Below GM the module answers no-access where it would answer unknown-unit, and this query, a ground point
+			// against a creature guid, has no unit of the caller's own to be allowed on: the code cannot say which, so
+			// the unit stays unanswered and the note carries the count instead of the pass claiming a cause.
 			sight.noAccess++
 		case sightcmd.Rate:
 			give("live sight: the module refused the los query for rate twice; the sight answers are the navmesh ray's alone")
