@@ -28,8 +28,9 @@ status: draft
 
 # Dungeon shell commands
 
-> **Turtle only commands.** `pulltest`, `fight-score` and `tune-diff` on this page run against the Turtle stack only;
-> against a Forever server use the replacement `forever-agent help` prints for each (none yet).
+> **Turtle commands.** `pulltest` and `tune-diff` on this page run against the Turtle stack only; against a Forever
+> server use the replacement `forever-agent help` prints (none yet). `fight-score` also scores a Forever run's fight
+> record with `--set spell_oracle=forever`, and warns in the reading that the record names no core.
 
 These run in a shell, not through `rpc`. Exit code is 0 on success, 2 on bad flags or arguments (and 9 from `fleet` when a child failed).
 

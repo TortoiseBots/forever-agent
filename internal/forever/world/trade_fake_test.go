@@ -1051,14 +1051,14 @@ func TestTradeExpectTimesOut(t *testing.T) {
 	}
 }
 
-// TestTradeMethodsAreRegistered: the eight methods are in the table and out of the not-ported list.
+// TestTradeMethodsAreRegistered: the eight methods are in the table and out of the refused list.
 func TestTradeMethodsAreRegistered(t *testing.T) {
-	ported, notPorted := ServeRPCMethods()
+	ported, refused := ServeRPCMethods()
 	for _, name := range []string{"trade", "trade_open", "trade_expect", "trade_set_item", "trade_set_gold", "trade_accept", "trade_cancel", "trade_status"} {
 		if !slices.Contains(ported, name) {
 			t.Fatalf("%s is not registered", name)
 		}
-		if slices.Contains(notPorted, name) {
+		if slices.Contains(refused, name) {
 			t.Fatalf("%s is still listed as not ported", name)
 		}
 	}

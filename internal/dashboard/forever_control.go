@@ -437,8 +437,8 @@ func (c *Controller) foreverCommander(ac *actionContext, op, verb string, args m
 			"executed": okv, "message": res.Message, "reply": rep, "result": json.RawMessage(scrubOrNull(jsonBytes(out), cl.Token()))})
 		return
 	case isRPC:
-		// The daemon answered with an error (not-ported before C3, a
-		// refusal, a lost link): a failed control, not status "ok".
+		// The daemon answered with an error (a refusal with its reason, an
+		// unknown method, a lost link): a failed control, not status "ok".
 		writeAny(ac.w, 502, map[string]any{"status": "error", "action": ac.action, "verb": verb, "rpc": "commander",
 			"executed": false, "code": code, "message": redactMessage(res.Message, cl.Token())})
 		return

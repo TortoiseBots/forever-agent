@@ -103,7 +103,7 @@ func (e *Error) Is(target error) bool {
 }
 
 // CodeOf unwraps the RPC status code of an *Error, for callers that branch
-// on a code the retry policy does not own (a not-ported -32003, a -32601).
+// on a code the retry policy does not own (a refusal's -32003, a -32601).
 func CodeOf(err error) (int, bool) {
 	var e *Error
 	if errors.As(err, &e) {

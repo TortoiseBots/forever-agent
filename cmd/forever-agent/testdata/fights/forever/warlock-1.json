@@ -1,0 +1,100 @@
+{
+  "fight": {
+    "id": "forever-warlock-1",
+    "commander": "Testrun",
+    "commander_guid": 1,
+    "group": 1,
+    "map": 1,
+    "plan": "test",
+    "leg": "test",
+    "step": 1,
+    "kind": "pull",
+    "start": 1000000000,
+    "dur_ms": 40000,
+    "outcome": "kill",
+    "boss": 0,
+    "boss_name": "",
+    "planned": [],
+    "engaged": [
+      {
+        "e": 1,
+        "n": "Testmob",
+        "c": 1
+      }
+    ],
+    "bots": [
+      {
+        "name": "Tankbot",
+        "guid": 2,
+        "class": "warrior",
+        "role": "tank",
+        "sub": 0,
+        "dmg": 3200,
+        "heal": 0,
+        "over": 0,
+        "taken": 5400,
+        "casts": 15,
+        "heal_casts": 0,
+        "deaths": 0,
+        "spells": [
+          {
+            "n": "Sunder Armor",
+            "c": 8
+          },
+          {
+            "n": "Shield Slam",
+            "c": 2
+          },
+          {
+            "n": "Revenge",
+            "c": 2
+          },
+          {
+            "n": "Heroic Strike",
+            "c": 3
+          }
+        ],
+        "tail_spells": []
+      },
+      {
+        "name": "Warlockbot",
+        "guid": 3,
+        "class": "warlock",
+        "role": "dps",
+        "sub": 0,
+        "dmg": 5500,
+        "heal": 0,
+        "over": 0,
+        "taken": 900,
+        "casts": 18,
+        "heal_casts": 0,
+        "deaths": 0,
+        "spells": [
+          {
+            "n": "Corruption",
+            "c": 3
+          },
+          {
+            "n": "Curse of Agony",
+            "c": 2
+          },
+          {
+            "n": "Shadow Bolt",
+            "c": 10
+          },
+          {
+            "n": "Siphon Life",
+            "c": 2
+          },
+          {
+            "n": "Amplify Curse",
+            "c": 1
+          }
+        ],
+        "tail_spells": []
+      }
+    ],
+    "deaths": []
+  },
+  "warnings": []
+}

@@ -1,7 +1,7 @@
 package world
 
 // The serving daemon against the fake world server over real sockets: login, the read models, chat, movement,
-// combat, the command channel, party, the typed not-ported answers, a dropped world socket and a clean shutdown.
+// combat, the command channel, party, the typed refusals, a dropped world socket and a clean shutdown.
 
 import (
 	"bytes"
@@ -266,7 +266,14 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			}
 			if say := f.serveGMSay; say != nil && (strings.HasPrefix(said, ".") || strings.HasPrefix(said, "!")) {
 				if text, ok := say(said); ok {
-					c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", text))
+					// The core's ChatHandler::SendSysMessage sends one SMSG_CHAT per line
+					// (Chat.cpp:111-125), so a reply's lines arrive as separate packets, not one frame with
+					// newlines; ("", true) is a command that printed nothing at all.
+					if text != "" {
+						for _, ln := range strings.Split(text, "\n") {
+							c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", ln))
+						}
+					}
 					continue
 				}
 			}
@@ -1025,14 +1032,14 @@ func TestServePartyAndAddon(t *testing.T) {
 	f.wait(t)
 }
 
-func TestServeNotPortedAndUnknown(t *testing.T) {
+func TestServeRefusedAndUnknown(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
 	defer f.close()
 	steps := &stepLog{}
 	a := startServeDaemon(t, f, steps)
 
-	a.mustFail(t, "lfg_status", map[string]any{}, -32003, "not ported on this server")
+	a.mustFail(t, "lfg_status", map[string]any{}, -32003, reasonLFG)
 	// map_snapshot is ported: the daemon's own frame draws the character and the creature the fake sent.
 	var mapped ServeMapResult
 	json.Unmarshal(a.mustCall(t, "map_snapshot", nil), &mapped)
@@ -2069,9 +2076,9 @@ func TestServeCommanderViewRefused(t *testing.T) {
 	a := startServeDaemon(t, f, steps)
 	waitServeState(t, a, "online", steps)
 
-	a.mustFail(t, "commander", map[string]any{"op": "view"}, -32003, "commander view: not ported on this server")
+	a.mustFail(t, "commander", map[string]any{"op": "view"}, -32003, "commander view: the old perception frames have no Forever equivalent")
 	// The old view shape's flag is accepted, not an unknown field: the refusal is the port's, not -32602.
-	a.mustFail(t, "commander", map[string]any{"op": "view", "on": true}, -32003, "commander view: not ported on this server")
+	a.mustFail(t, "commander", map[string]any{"op": "view", "on": true}, -32003, "commander view: the old perception frames have no Forever equivalent")
 	a.mustFail(t, "commander", map[string]any{"op": "frobnicate"}, -32602, "bind, unbind, status, cmd, run or view")
 	if lines := f.serveTBLines(); len(lines) != 0 {
 		t.Fatalf("a refused call sent %q", lines)
@@ -2080,8 +2087,8 @@ func TestServeCommanderViewRefused(t *testing.T) {
 	f.wait(t)
 }
 
-func TestServeCommanderNotPortedList(t *testing.T) {
-	ported, notPorted := ServeRPCMethods()
+func TestServeCommanderMethodTable(t *testing.T) {
+	ported, refused := ServeRPCMethods()
 	found := false
 	for _, name := range ported {
 		if name == "commander" {
@@ -2091,9 +2098,9 @@ func TestServeCommanderNotPortedList(t *testing.T) {
 	if !found {
 		t.Fatal("commander is not in the ported method list")
 	}
-	for _, name := range notPorted {
+	for _, name := range refused {
 		if name == "commander" {
-			t.Fatal("commander is still in the not-ported list")
+			t.Fatal("commander is in the refused list")
 		}
 	}
 }

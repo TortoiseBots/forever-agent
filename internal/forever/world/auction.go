@@ -83,6 +83,8 @@ func (s *session) handleAuction(p worldconn.Packet) error {
 		}
 		w.hello = &h
 		w.helloSeq++
+		// SendAuctionHello starts the interaction on the auctioneer (AuctionHouseHandler.cpp:999).
+		s.bankInteractionAt(h.Auctioneer)
 		s.event(Event{Kind: events.KindAuctionHello, Source: s.eventName("", h.Auctioneer), SourceGUID: eventGUID(h.Auctioneer),
 			Data: map[string]any{"house_id": h.AuctionHouseID, "open": h.OpenForBusiness, "purchase_delay": h.PurchaseDeliveryDelay, "cancel_delay": h.CancelDeliveryDelay}})
 	case wire.SMSGAuctionCommandResult:

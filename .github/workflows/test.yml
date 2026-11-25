@@ -74,6 +74,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The automatic label rules and the label sync: the real rules files, a fake gh runner, no network. A rule change
+      # that breaks a boundary, an ownership check or the prune set fails here before it can relabel the repository.
+      - name: Python tool tests (labels)
+        run: make tools-test
+
       - name: differential table against the pinned reference
         timeout-minutes: 20
         run: |

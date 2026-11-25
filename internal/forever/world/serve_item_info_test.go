@@ -124,10 +124,10 @@ func TestServeItemInfoParams(t *testing.T) {
 	if len(fake.asked) != 0 {
 		t.Fatal("a refused call sent a query")
 	}
-	// The method is on the served table, not on the not-ported list.
-	ported, notPortedNames := ServeRPCMethods()
-	if slices.Contains(notPortedNames, "item_info") {
-		t.Fatal("item_info is listed as not ported")
+	// The method is on the served table, not on the refused list.
+	ported, refusedNames := ServeRPCMethods()
+	if slices.Contains(refusedNames, "item_info") {
+		t.Fatal("item_info is listed as refused")
 	}
 	if !slices.Contains(ported, "item_info") {
 		t.Fatal("item_info is not registered")

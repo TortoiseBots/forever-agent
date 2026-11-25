@@ -892,7 +892,7 @@ func TestMailResultsBoundAndSequence(t *testing.T) {
 }
 
 func TestServeMailMethodsAreRegistered(t *testing.T) {
-	ported, notPorted := ServeRPCMethods()
+	ported, refused := ServeRPCMethods()
 	for _, name := range []string{"mail_list", "mail_read", "mail_take_item", "mail_take_money", "mail_delete", "mail_return", "mail_send", "mail_status", "trainer_list", "train"} {
 		found := false
 		for _, n := range ported {
@@ -901,9 +901,9 @@ func TestServeMailMethodsAreRegistered(t *testing.T) {
 		if !found {
 			t.Fatalf("%s is not registered", name)
 		}
-		for _, n := range notPorted {
+		for _, n := range refused {
 			if n == name {
-				t.Fatalf("%s is still not ported", name)
+				t.Fatalf("%s is still refused", name)
 			}
 		}
 	}

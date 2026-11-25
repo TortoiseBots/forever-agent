@@ -15,7 +15,25 @@ import (
 
 const fightScoreUsage = "usage: forever-agent fight-score [--json] [--mt NAME] [--ot A,B] [--set spell_oracle=S] <combat-fight.json>...\n" +
 	"  scores finished fights the way the dashboard's fight debugger reads them (mt_sunder, ot_taunt) and judges each bot\n" +
-	"  against its KB spec's spell lists; exit 0 (warnings never fail), 2 on usage"
+	"  against its KB spec's spell lists; --set spell_oracle=forever reads the Forever spell data instead (the Turtle\n" +
+	"  knowledge base is the default; no fight record names its core, so an explicitly selected oracle is used as asked and\n" +
+	"  the reading warns that the record could not confirm it), and --set spell_oracle=SECONDS (any other number) still sets\n" +
+	"  the fight seconds a bot must be active to be judged; the reading names the oracle that produced it; exit 0 (warnings\n" +
+	"  never fail), 2 on usage"
+
+// The two oracles the reading can name: the Turtle knowledge base (the default) and the Forever spell data.
+const (
+	foreverOracle = "forever"
+	turtleOracle  = "turtle"
+)
+
+// A fight record has no provenance marker to decide its core from. Both builds of the bot module write the same fight
+// JSON (the fight record writer is line-for-line the same in both, including boss_phase, dropped, spells_cut/truncated
+// and a bot's tail_spells), the COMBAT_FIGHT envelope's v is the protocol version (12 in both), and the dashboard
+// detail adds only its own warnings. A Forever watch/play run's forever-run summary is a separate file, not part of a
+// fight file. So the selected oracle is used as asked; an explicit spell_oracle=forever on such a record warns in the
+// reading (the warning below) rather than pretending the record proved its origin. The no-option path keeps the Turtle
+// reading it has always had.
 
 // fightJSON is the fight the dashboard stores: the daemon's combat.Fight, or a bare one.
 type fightJSON struct {
@@ -47,17 +65,21 @@ type scoreRow struct {
 }
 
 type fightScore struct {
-	Fight     string             `json:"fight"`
-	Commander string             `json:"commander,omitempty"`
-	DURMS     int64              `json:"dur_ms"`
-	MT        *scoreRow          `json:"mt_sunder,omitempty"`
-	OTs       []scoreRow         `json:"ot_taunt"`
-	Oracle    []kbspells.Finding `json:"oracle"`
+	Fight       string             `json:"fight"`
+	Commander   string             `json:"commander,omitempty"`
+	SpellOracle string             `json:"spell_oracle"` // "turtle" or "forever": the data that produced the reading
+	DURMS       int64              `json:"dur_ms"`
+	MT          *scoreRow          `json:"mt_sunder,omitempty"`
+	OTs         []scoreRow         `json:"ot_taunt"`
+	Oracle      []kbspells.Finding `json:"oracle"`
+	// Warnings are the reading's own caveats (empty on a reading that needs none): they are part of the result, so a
+	// --json consumer sees them beside the findings, and the text reading prints one line per warning.
+	Warnings []string `json:"warnings"`
 }
 
-// fightScoreCmd reads finished fight JSON (the debugger's input: {fight, warnings} or a bare fight) and prints the fight
-// debugger's two tank checks with its exact rules, then one oracle line per bot with a warning. It reads files only and never
-// logs in.
+// fightScoreCmd reads finished fight JSON (the debugger's input: {fight, warnings}, a bare fight, or a COMBAT_FIGHT datagram)
+// and prints the fight debugger's two tank checks with its exact rules, then one oracle line per bot with a warning. It reads
+// files only and never logs in.
 func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("fight-score", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -65,7 +87,7 @@ func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 	mtName := fs.String("mt", "", "main tank name (default: the first tank in the fight)")
 	otNames := fs.String("ot", "", "off-tank names, comma separated (default: the other tanks)")
 	var sets thresholdFlags
-	fs.Var(&sets, "set", "change a threshold: check=value (spell_oracle)")
+	fs.Var(&sets, "set", "change a threshold: check=value (spell_oracle=SECONDS|forever)")
 	if err := fs.Parse(args); err != nil {
 		fmt.Fprintln(stderr, fightScoreUsage)
 		return exitUsage
@@ -76,10 +98,27 @@ func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 	}
 	cfg := tracecheck.Defaults()
 	cfg.SpellOracleActiveS = 20 // a fight is judged after 20 s of it, not a trace's minute
+	var oracle *kbspells.Oracle
+	oracleName := turtleOracle
 	for _, s := range sets {
 		k, v, ok := strings.Cut(s, "=")
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if !ok || k == "" || v == "" {
+			fmt.Fprintf(stderr, "--set %q: want check=number\n", s)
+			return exitUsage
+		}
+		if k == tracecheck.IDSpellOracle && strings.EqualFold(v, foreverOracle) {
+			o, err := kbspells.ForeverDefault()
+			if err != nil {
+				fmt.Fprintf(stderr, "--set spell_oracle=forever: %v\n", err)
+				return exitUsage
+			}
+			oracle = o
+			oracleName = foreverOracle
+			continue
+		}
 		n, err := strconv.ParseFloat(v, 64)
-		if !ok || err != nil {
+		if err != nil {
 			fmt.Fprintf(stderr, "--set %q: want check=number\n", s)
 			return exitUsage
 		}
@@ -88,14 +127,19 @@ func fightScoreCmd(args []string, stdout, stderr io.Writer) int {
 			return exitUsage
 		}
 	}
-	oracle := kbspells.Default()
+	if oracle == nil {
+		oracle = kbspells.Default()
+	}
 	for _, path := range fs.Args() {
 		f, err := readFightFile(path)
 		if err != nil {
 			fmt.Fprintf(stderr, "%s: %v\n", path, err)
 			return exitUsage
 		}
-		r := scoreFight(f, *mtName, *otNames, cfg, oracle)
+		// The record names no core (see the note above the type): the selected oracle decides the reading. An explicit
+		// Forever selection on a record that cannot confirm it is a Forever one is a reading caveat, not a refusal
+		// (scoreFight adds it).
+		r := scoreFight(f, *mtName, *otNames, cfg, oracle, oracleName)
 		if *asJSON {
 			_ = json.NewEncoder(stdout).Encode(r)
 			continue
@@ -126,8 +170,13 @@ func readFightFile(path string) (*fightJSON, error) {
 	return &f, nil
 }
 
-func scoreFight(f *fightJSON, mtName, otNames string, cfg tracecheck.Config, o *kbspells.Oracle) fightScore {
-	r := fightScore{Fight: f.ID, Commander: f.Commander, DURMS: f.DurMS}
+func scoreFight(f *fightJSON, mtName, otNames string, cfg tracecheck.Config, o *kbspells.Oracle, oracleName string) fightScore {
+	r := fightScore{Fight: f.ID, Commander: f.Commander, SpellOracle: oracleName, DURMS: f.DurMS, Warnings: []string{}}
+	if oracleName == foreverOracle {
+		// The record could not prove it is a Forever one (no marker exists); the user asked for this oracle, so it is
+		// used, and the reading says the origin was not checked.
+		r.Warnings = append(r.Warnings, "no provenance marker in the fight record (no core or build field): scored with the Forever spell data as selected (spell_oracle=forever); the record does not name its core")
+	}
 	mt := mainTank(f, mtName)
 	r.MT = sunderRow(f, mt, o.Common.Limits)
 	for _, b := range offTanks(f, mt, otNames) {
@@ -259,7 +308,10 @@ func tauntRow(b *fighter, taunts []string) scoreRow {
 }
 
 func printFightScore(w io.Writer, f *fightJSON, r fightScore) {
-	fmt.Fprintf(w, "fight %s %s %.0f s, %d bots\n", r.Fight, r.Commander, float64(f.DurMS)/1000, len(f.Bots))
+	fmt.Fprintf(w, "fight %s %s %.0f s, %d bots, spell oracle %s\n", r.Fight, r.Commander, float64(f.DurMS)/1000, len(f.Bots), r.SpellOracle)
+	for _, warning := range r.Warnings {
+		fmt.Fprintf(w, "warning: %s\n", warning)
+	}
 	if r.MT != nil {
 		printScoreRow(w, *r.MT)
 	}

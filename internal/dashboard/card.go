@@ -50,6 +50,9 @@ type Inputs struct {
 	// leg, phase, note or position change), tracked across polls by the
 	// poller. Zero means no progress is known yet: the card shows no stall.
 	ProgressSince time.Time
+	// LiveMap is the slot's own map_snapshot state (live_map.go), read from
+	// the poller's cache: the Forever card carries it as its live map panel.
+	LiveMap *LiveMapInfo
 }
 
 // Card is everything the page shows of one commander. It is built from an allow-list of fields (never from a raw reply), so no
@@ -91,6 +94,9 @@ type Card struct {
 	Trail     [][2]float64 `json:"trail,omitempty"`     // where the lead bot has been this run ([x, y] in the drawing's plane), oldest first
 	PlanCopy  *PlanCopy    `json:"plan_copy,omitempty"` // which plan file the map draws and which one the run reads
 	Events    []Event      `json:"events"`              // what happened this run (deaths, wipes, boss kills, doors and chests), oldest first; the poller fills it
+	// LiveMap is the Forever serve's own drawing of the party and the hostiles (map_snapshot): the facts here, the
+	// picture at /api/map/<id>. Nil on a turtle card.
+	LiveMap *LiveMapInfo `json:"live_map,omitempty"`
 
 	ev        evInputs     // what the event log reads of the report; never sent
 	tracePath string       // the trace file of the run, for the live digest; never sent

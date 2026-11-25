@@ -95,10 +95,10 @@ func TestServeInventoryUnknown(t *testing.T) {
 	if _, err := s.serveInventoryItems(serveInventoryParams{}); err == nil || !strings.Contains(err.Error(), "has not arrived") {
 		t.Fatalf("unknown inventory answered %v", err)
 	}
-	ported, notPortedNames := ServeRPCMethods()
+	ported, refusedNames := ServeRPCMethods()
 	for _, name := range []string{"inventory", "equipment", "equip", "use_item"} {
-		if slices.Contains(notPortedNames, name) {
-			t.Fatalf("%s is listed as not ported", name)
+		if slices.Contains(refusedNames, name) {
+			t.Fatalf("%s is listed as refused", name)
 		}
 		if !slices.Contains(ported, name) {
 			t.Fatalf("%s is not registered", name)

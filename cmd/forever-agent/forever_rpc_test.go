@@ -20,20 +20,20 @@ import (
 )
 
 // foreverServeTestAgent serves the REAL serve method table over the real
-// internal/rpc server: every not-ported name from the world package answers
-// the world's typed not-ported error, and three DONE methods answer canned
-// results. Mutation: wiring a hand-written name list passes the shape tests
-// but fails TestForeverRPCListMatchesServeTable; answering not-ported with a
-// bare error fails the message test.
+// internal/rpc server: every refused name from the world package answers its
+// documented refusal, and a few implemented methods answer canned results.
+// Mutation: wiring a hand-written name list passes the shape tests but fails
+// TestForeverRPCListMatchesServeTable; a refusal without its reason fails the
+// message test.
 func foreverServeTestAgent(t *testing.T, token string) *httptest.Server {
 	t.Helper()
 	srv := rpc.NewServer()
 	srv.SetToken(token)
-	_, notPorted := world.ServeRPCMethods()
-	for _, name := range notPorted {
+	_, refused := world.ServeRPCMethods()
+	for _, name := range refused {
 		name := name
 		srv.Register(name, func(_ context.Context, _ json.RawMessage) (any, error) {
-			return nil, world.ServeNotPortedError(name)
+			return nil, world.ServeRefusalError(name)
 		})
 	}
 	srv.Register("status", rpc.Typed(func(_ context.Context, _ struct{}) (map[string]any, error) {
@@ -98,24 +98,32 @@ func TestForeverRPCRawIsCompact(t *testing.T) {
 	}
 }
 
-// Every NOT-PORTED name answers `error: -32003 <name>: not ported on this
-// server` and exits 16, never an empty success.
-func TestForeverRPCNotPortedIsTypedError(t *testing.T) {
+// Every refused name answers `error: -32003 <name>: <its documented reason>` and exits 16, never an empty success
+// and never "not ported".
+func TestForeverRPCRefusalIsTypedError(t *testing.T) {
 	token := rpcCLITestToken(t)
 	ts := foreverServeTestAgent(t, token)
 	dir := foreverServeTestDir(t, rpcCLITestPort(t, ts), token)
-	_, notPorted := world.ServeRPCMethods()
-	if len(notPorted) == 0 {
-		t.Fatal("no not-ported methods")
+	_, refused := world.ServeRPCMethods()
+	if len(refused) == 0 {
+		t.Fatal("no refused methods")
 	}
-	for _, method := range notPorted {
+	for _, method := range refused {
+		why, ok := world.ServeRefusal(method)
+		if !ok || why == "" {
+			t.Errorf("%s: no documented reason", method)
+			continue
+		}
 		code, out, errOut := runCLI("forever", "rpc", dir, method)
 		if code != exitRPCError {
 			t.Errorf("%s: code %d stdout %q stderr %q, want %d", method, code, out, errOut, exitRPCError)
 			continue
 		}
-		if !strings.Contains(errOut, "error: -32003") || !strings.Contains(errOut, method+": not ported on this server") {
-			t.Errorf("%s: stderr %q is not the typed not-ported error", method, errOut)
+		if !strings.Contains(errOut, "error: -32003") || !strings.Contains(errOut, method+": "+why) {
+			t.Errorf("%s: stderr %q is not the typed refusal", method, errOut)
+		}
+		if strings.Contains(errOut, "not ported") {
+			t.Errorf("%s: stderr %q still says not ported", method, errOut)
 		}
 		if out != "" {
 			t.Errorf("%s: stdout %q, want empty", method, out)
@@ -143,8 +151,8 @@ func TestForeverRPCUnknownMethod(t *testing.T) {
 	}
 }
 
-// `forever rpc DIR list` prints every served method, one per line, with the
-// not-ported ones marked.
+// `forever rpc DIR list` prints every served method, one per line: implemented
+// names bare, refused names with their documented reason.
 func TestForeverRPCListMatchesServeTable(t *testing.T) {
 	token := rpcCLITestToken(t)
 	ts := foreverServeTestAgent(t, token)
@@ -153,26 +161,27 @@ func TestForeverRPCListMatchesServeTable(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("code %d stdout %q stderr %q", code, out, errOut)
 	}
-	ported, notPorted := world.ServeRPCMethods()
+	ported, refused := world.ServeRPCMethods()
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) != len(ported)+len(notPorted) {
-		t.Fatalf("list has %d lines, want %d", len(lines), len(ported)+len(notPorted))
+	if len(lines) != len(ported)+len(refused) {
+		t.Fatalf("list has %d lines, want %d", len(lines), len(ported)+len(refused))
 	}
 	got := make(map[string]bool, len(lines))
 	for _, l := range lines {
 		got[l] = true
+		if strings.Contains(l, "not ported") {
+			t.Errorf("list line %q still says not ported", l)
+		}
 	}
 	for _, name := range ported {
 		if !got[name] {
-			t.Errorf("list has no bare line for DONE method %q", name)
-		}
-		if got[name+" (not ported)"] {
-			t.Errorf("list marks DONE method %q not-ported", name)
+			t.Errorf("list has no bare line for implemented method %q", name)
 		}
 	}
-	for _, name := range notPorted {
-		if !got[name+" (not ported)"] {
-			t.Errorf("list has no not-ported mark for %q", name)
+	for _, name := range refused {
+		why, _ := world.ServeRefusal(name)
+		if !got[name+" (refused: "+why+")"] {
+			t.Errorf("list has no refusal line for %q", name)
 		}
 	}
 	if strings.Contains(out+errOut, token) {

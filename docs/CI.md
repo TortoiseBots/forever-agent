@@ -15,7 +15,7 @@ branch), as parallel jobs that end in one job named `test` (12 jobs a run, at mo
 
 | Job | What it runs |
 |---|---|
-| `lint` | `make fmt-check vet nocgo` (gofmt, `go vet`, a no-cgo build), the shard scripts' self-tests, `make cross`, the differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50 passed sub-tests fails the step, so the table cannot go green without Python), `staticcheck ./...` with the pinned release **2026.2.2**, then a cgo build |
+| `lint` | `make fmt-check vet nocgo`, the shard scripts' self-tests, `make cross`, the differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50 passed sub-tests fails the step, so the table cannot go green without Python), `make tools-test` (the automatic label rules and the label sync), `staticcheck ./...` with the pinned release **2026.2.2**, then a cgo build |
 | `race-shards` | `go test -race -count=1 -timeout 20m` for the whole module in 9 jobs, at most 6 running at once, matrix `group` (`cmd`, `world`, `rest`) x `shard` (`0`..`2`), see below |
 | `race-shards-check` | fails unless what the 3 shards of each group ran, together, is exactly the group's full list, each once |
 | `test` | `needs` all three jobs, runs with `if: always()` and fails unless every one of them succeeded; this is the check branch protection requires (a skipped or cancelled job fails it too). A draft PR skips every job, `test` included, as before |
@@ -179,3 +179,81 @@ Runs nightly at 03:17 UTC and by hand: `make fuzz FUZZTIME=2m` (2 minutes per `F
 `internal/objects` and `internal/tbm`), with a 60-minute job timeout. A crash fails the job and the new corpus files
 under `**/testdata/fuzz/**` are uploaded as the `fuzz-corpus` artifact (14 days) so the seed can be committed with the
 fix.
+
+## Automatic labels
+
+Two workflows label work by itself, one for pull requests and one for issues. Both only ADD, and the people-owned
+labels (the priority labels `Must have`, `Should have`, `Nice to have`, `Maybe later`, and `TortoiseBots`) are never
+touched. The labels the automation owns and their colours and descriptions are in `.github/labels.yml`;
+`tools/sync_labels.py` creates and updates them (it never deletes or renames one).
+
+| Workflow | Trigger | Rules | Labels |
+|---|---|---|---|
+| `label-pr.yml` | `pull_request_target`: opened, synchronize, reopened | `.github/labeler.yml` (changed files and branch name), through the official `actions/labeler` | the area labels, `bug` on `fix/*`, `enhancement` on `feat/*`, `documentation` on `docs/*`, `data` on `data/*`, `ci` on `ci/*` |
+| `label-issues.yml` | `issues`: opened only | `tools/label_issue.py` (`RULES`, whole words, case-insensitive) | e.g. "dungeon run" -> `dungeon`; "plan file" or "navmesh" -> `plans`; "vendor" -> `player-actions`; "live run" -> `live-check`; a bug word in the title -> `bug`; otherwise an `Agent:`/`[agent]` title -> `enhancement` |
+
+**Issue keyword labels are computed once, when the issue opens.** The workflow does not run on `edited`: a later title
+or body change neither re-adds a label a person removed nor refreshes the labels the new text no longer matches, so a
+person's correction stands (remove the stale label by hand). The script only adds, from its own rule table.
+
+**Pull-request labels run on every push** (opened, synchronize, reopened). `sync-labels: false` keeps the action
+add-only: it never removes a label, and a label a person removed comes back only if a later push still matches the
+rule that sets it.
+
+A keyword rule is matched on the **title** for `raid`, `battleground`, `dungeon`, `dashboard`, `guild` and
+`documentation`: those words turn up in bodies in ticket lists and field lists ("raids last", "a settings file
+(..., navmesh, plans)", "the docs say so") without making the issue about that area. `plans` needs a plan phrase —
+"dungeon plan", "plan file", "plan-check", "plan-probe", "plan tools", "route tools" or "navmesh" — not the bare word
+"plan"; `daemon` needs the word "daemon", not "serve", "rpc" or "method" alone. The other rules read the title and
+body.
+
+`label-pr.yml` runs on `pull_request_target` and never checks out the pull request's code: labeler reads the
+changed-file list from the event and `.github/labeler.yml` from the **base ref** through the API, then labels through
+the API. There is deliberately no `actions/checkout` step; a fork's branch cannot change what the job runs. Its
+permissions are `contents: read` and `pull-requests: write` only. `label-issues.yml` passes the title and body to the
+script as environment variables, never on the command line, so an issue text with shell syntax is only text; its only
+write permission is `issues: write` (`contents: read` is for checking out the script itself from the default branch).
+Both workflows pin their actions to a full commit SHA with the version in a trailing comment; update a pin only in a
+reviewed PR.
+
+### Adding a rule
+
+- **A path or branch rule:** add the label block to `.github/labeler.yml`. `any:` ORs its matchers, a plain list ANDs
+  them; `**/` spans zero or more directories and `*` never crosses `/`. The backfill reads the same file, so nothing else
+  changes.
+- **A keyword rule:** add `("<label>", r"<alternatives>", "both")` to `RULES` in `tools/label_issue.py` (`"title"` for
+  a word too common in bodies, as the five area rules above do). The alternatives are matched case-insensitively between
+  word boundaries (`braid` is not `raid`).
+- **A new label:** add its `name`/`color`/`description` block to `.github/labels.yml`, then run
+  `python3 -I tools/sync_labels.py`; the workflows pick it up from the rule files.
+
+### The backfill
+
+`tools/label_issue.py --backfill` labels every open issue (by its title and body, on each rule's scope) and every open
+pull request (by its changed files, with the path rules of `.github/labeler.yml`; branch-name rules apply only to new
+pushes, not to the backfill). It skips items that already have a label and only adds the missing ones:
+
+```sh
+python3 -I tools/label_issue.py --backfill --dry-run   # "issue 12: +dungeon,bug", changes nothing
+python3 -I tools/label_issue.py --backfill             # applies them
+python3 -I tools/sync_labels.py --dry-run              # the labels first: create/update, never delete
+```
+
+`--prune` (with `--backfill`) is the one-time clean-up after a rule is narrowed. Besides adding the missing labels, it
+removes from each open **issue** every label the automation can apply that the current rules no longer give. It only
+touches the labels the automation applies (the `RULES` labels and `bug`/`enhancement`), never a label outside
+`.github/labels.yml` (the people-owned priority labels and `TortoiseBots`), and never a label a rule still gives. The
+workflow never uses it:
+
+```sh
+python3 -I tools/label_issue.py --backfill --prune --dry-run   # "issue 115: -raid", changes nothing
+python3 -I tools/label_issue.py --backfill --prune             # applies the clean-up
+```
+
+Both scripts take `--repo OWNER/REPO` (default `$REPO`, else the current repository) and need the `gh` CLI with a token
+that can edit the repository. Their tests are part of `make tools-test` (`make test` runs it too) and of the `lint` job,
+so a rule change cannot merge without them:
+
+```sh
+python3 -m unittest tools/test_label_issue.py tools/test_sync_labels.py
+```

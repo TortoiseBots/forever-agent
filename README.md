@@ -54,6 +54,7 @@ write or child process. The Turtle packages and documents are listed in
 | Raid watcher (round #108 R3) | **Works against the scripted world; no live raid run yet** (`forever-agent forever raid-watch`: the dungeon watch over a raid plan's 10, 20 or 40 bots — the module's commander card checked for `raid` and the plan's size before PREPARE, one `convert_raid` when this character leads the group, a `--layout` applied with `raid_move`, and a `summary.json` in the Turtle tools' `tb-raid-walk` shape at every end; see [docs/forever/RAID-R3-NOTES.md](docs/forever/RAID-R3-NOTES.md)) |
 | Raid autopilot on Forever (round #108 R4) | **Wired against the fake binary; no live raid run yet** (`forever-agent raid-autopilot --forever`: Forever targets take their lease and slot dir from the slots file (`slot setup --forever`) and launch `forever raid-watch`, and the watch's missing placement/resume/GM-clear flags are refused at target load; see [docs/forever/RAID-R4-NOTES.md](docs/forever/RAID-R4-NOTES.md)) |
 | Run report card (round S7-B) | **Works against the scripted world** (`forever-agent forever dungeon-watch` writes a card after every run and `forever run-report RECORD` builds it offline from the saved record: per-leg time, pulls and re-pulls, deaths with the member's slot and step, wipes, pauses with reasons, flags with their evidence lines, a one-line verdict, and `--compare A B` for what got better or worse — see [docs/forever/REPORTCARD-R1-NOTES.md](docs/forever/REPORTCARD-R1-NOTES.md)) |
+| Tactics check on a watched run (T13) | **Works against the scripted world** (`forever dungeon-watch --module-tactics FILE` judges the plan's boss fight steps against the module's `ai_boss_tactic` rows after the run and names every step the module contradicts or does not carry; without the file the report says the check was not made — see [docs/forever/TACTICS-CHECK-NOTES.md](docs/forever/TACTICS-CHECK-NOTES.md)) |
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | **Works** (round 3 onward: objects, movement, inventory, chat, quests, vendors, trainers, flight paths, loot and game objects; each row says what has been proved live) |
@@ -99,14 +100,31 @@ works unchanged; without it the token file is `rpc-<port>.token` in the working 
 session that never registers an add-on prefix, so it never speaks TBM or a bot module and the server sees it as a
 player without the add-on (`status.addon` says `off`; any add-on command, `bot` included, is refused with
 `world: add-on is off for this session`). `status`,
-`inv`, `item_info`, `inventory`, `equipment`, `equip`, `use_item`, `vendor_list`, `buy`, `sell`, `gossip_hello`, `gossip_select`, the trade methods (`trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_set_gold`, `trade_accept`, `trade_cancel`, `trade_status`, and `cast` with `trade_slot`: [docs/forever/DAEMON-TRADE-NOTES.md](docs/forever/DAEMON-TRADE-NOTES.md)), `trainer_list`, `train`, the mail methods `mail_list`, `mail_read`, `mail_take_item`, `mail_take_money`, `mail_delete`, `mail_return`, `mail_send` and `mail_status` (parameters, answers and refusals in [docs/forever/WORLDLIFE-106-NOTES.md](docs/forever/WORLDLIFE-106-NOTES.md)), `quest_hello`, `quest_query`, `quest_accept`, `quest_complete`, `quest_reward`, `quest_abandon`, `quest_log`, `loot`, `loot_take`, `loot_close`, `open_object`, `use_object`, `gameobjects`, `roll`, `taxi`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
+`inv`, `item_info`, `inventory`, `equipment`, `equip`, `use_item`, `vendor_list`, `buy`, `sell`, `gossip_hello`, `gossip_select`, the trade methods (`trade`, `trade_open`, `trade_expect`, `trade_set_item`, `trade_set_gold`, `trade_accept`, `trade_cancel`, `trade_status`, and `cast` with `trade_slot`: [docs/forever/DAEMON-TRADE-NOTES.md](docs/forever/DAEMON-TRADE-NOTES.md)), `trainer_list`, `train`, the mail methods `mail_list`, `mail_read`, `mail_take_item`, `mail_take_money`, `mail_delete`, `mail_return`, `mail_send` and `mail_status` (parameters, answers and refusals in [docs/forever/WORLDLIFE-106-NOTES.md](docs/forever/WORLDLIFE-106-NOTES.md)), the bank methods `bank_list`, `bank_deposit`, `bank_withdraw` and `bank_buy_slot` (a banker must be open first; parameters, answers and refusals in [docs/forever/WORLDLIFE-220-BANK-NOTES.md](docs/forever/WORLDLIFE-220-BANK-NOTES.md)), `quest_hello`, `quest_query`, `quest_accept`, `quest_complete`, `quest_reward`, `quest_abandon`, `quest_log`, `loot`, `loot_take`, `loot_close`, `open_object`, `use_object`, `gameobjects`, `roll`, `taxi`, `units`, `unit`, `party`, `chat_log`, `event_log` (the session's one ordered stream, under the event keys the scenario runner and the dashboard read), `events`, `chat`, `gm`, `gm_revive`, `gm_kill`, `gm_set_hp`,
 `gm_aura`, `trial_units`, `bot`, `commander`, `invite`, `accept_invite`, `leave_group`, `accept_guild_invite`,
 `decline_guild_invite`, `guild_leave`, `convert_raid`, `raid_move`
 (with `guid`/`name` and `subgroup` 1-8, `swap_with` for a full subgroup; see
 [docs/forever/RAID-R2-NOTES.md](docs/forever/RAID-R2-NOTES.md)), `target`, `attack`,
 `stop_attack`, `cast`, `cancel_cast`, `cast_state` (the current cast, `gcd` / `gcd_known`, `last_cast`, `last_failure`, `failures`, `combo_points` / `combo_target`, active `cooldowns`), `spells` (the spellbook: `spell_id`, `name`, `rank`, `highest`, `meta`, `level`, `passive`, `cooldown_ms`, `category`, `category_cd_ms`, `gcd_ms`, `mechanic`, `dispel`, `class`; it filters on `spell_id`, `name` and `highest`, and hides passive spells unless `passive` is true), `dynamic_objects` (the ground spells in view, nearest the mover first: `guid`, `spell_id`, `caster`, `radius`, `x`, `y`, `z`, `distance`, the flat distance from the mover, `-1` while no packet gave the object a position), `face`, `walk_to`, `path_to`, `walk_path`, `walk_ray` (the navmesh walkability ray from the session, or from a given point, to a point: not true line of sight),
 `map_snapshot` (the picture of the run so far: `members`, `creatures`, `events`, `floors`, `notes`, `svg` and, with `html`, the single-file replay; `plan` draws a plan from `--plans-dir`, default `dungeons`, the same name rule `dungeon_run` uses; the navmesh background comes from `--navmesh`), `area_trigger`, the five death methods, `addon_send`, `join_channel`, `leave_channel`, `channel_list`, `teardown`, `mount`, `dismount`, `pet`, `pet_action`, `follow_start`,
-`follow_stop`, `follow_status` and `logout` are ported; `--navmesh` enables the two path methods and `walk_ray`. Every other old method answers a typed `not ported on this server` error. A `unit` row
+`follow_stop`, `follow_status` and `logout` are ported; `--navmesh` enables the two path methods and `walk_ray`. There is no "not ported" method left: every other old name is implemented here or answers a typed refusal naming its reason (the client brain and its tuning, the client dungeon finder, the add-on host and its buttons, the run's step verbs, the Turtle test toolkit: [docs/forever/METHOD-TABLE.md](docs/forever/METHOD-TABLE.md)). #216 added the last ones:
+`dungeon_run {plan, lead_bot?}` (`.tb run start <lead> <plan>`; before it sends, the daemon makes the CLI's start
+preflight through the same `internal/forever/fpreflight` functions `forever dungeon-watch` runs: the plan in the
+plans folder with `driver.LoadWatchRoute`, the serve slot `--dir` wrote and its lease, the module link
+(`.tb state party` over the command channel) and the lead through the serve character's own GM console (`.pinfo`,
+the same command the SOAP preflight runs). A failed check refuses the call with the failed lines and sends nothing;
+a daemon started without `--dir` refuses and points at `forever dungeon-watch`. The preflight waits off the session
+queue (its sends and 50 ms packet slices are separate short calls), so `status` and the other methods answer while a
+slow console or module is read), `dungeon_status` (`all` with no lead),
+`dungeon_stop {lead_bot?, reason?}`, `dungeon_pause`, `dungeon_resume` — the module's own run control, answered as
+`{sent, runs}` with the module's run records; `plan_check {name, from_leg?, from_pull_group?}`, the CLI's plan check
+over the serve's `--plans-dir` and `--navmesh` (unchecked with the reason in `skipped` without a navmesh);
+`bot_view {bots?, wait_ms?}`, the party roster joined to the world model (one row per bot: `in_party`, `online`,
+`dead`, `in_view` and the `unit` row while in view) instead of the old perception frames; and `tbm_handshake`,
+`tbm_send {command, transport?, wait_ms?}` and `tbm` (the same, under the old name and its `via`), the TBM client
+`forever tbm-check` runs. A TBM call waits for the module off the session queue (each send and each 50 ms packet
+slice is its own short queued call, and one exchange runs at a time), so `status` and the dungeon verbs answer while
+it waits; `wait_ms` defaults to 5 s and is capped at 15 s. A `unit` row
 carries the auras this client's model holds (`spell_id`, `caster`, `stacks`, `remaining_ms`) and `cc` (present and `true` while an aura crowd-controls the unit: the aura's spell has a sleep, freeze, knockout, polymorph, banish, shackle, turn or sapped mechanic in the generated spell data, or, without a mechanic, a crowd-control name such as Polymorph or Shackle Undead; Gouge never counts), and `status`
 carries `team`, `falling`, `z_unknown`, `teleport_seq`, `latency_ms`, `mono_ms`, `base_time`, `wall_offset_ms`, `combo_points`, `combo_target`, `gcd_ms`, `guild` (the character's own guild GUID, omitted while it has none), `guild_name` (the guild of the invite the last accept confirmed), `on_taxi` (true while on a flight), `locale` (the client language the session claims, from `--locale`) and `addon` (`on`, or `off` for a session started with `--addon off`, which never registers an add-on prefix), and a `unit` row carries `mount_display_id` (non-zero
 while that unit is mounted). `events` (`since`, `limit` up to 1,000,
@@ -125,6 +143,15 @@ what is hostile to the character and `false` only what is not. A `unit` row also
 `owner` GUID that keeps only the units whose owner is that one, which is how a party's hunter pets are listed.
 
 The auction house is served by `auction_hello`, `auction_browse`, `auction_items`, `auction_owned`, `auction_sell`, `auction_bid`, `auction_cancel`, `auction_quote` and `auction_buy` (parameters, answers and refusals in [docs/forever/WORLDLIFE-106-AH-NOTES.md](docs/forever/WORLDLIFE-106-AH-NOTES.md)).
+
+The character bank is served by `bank_list` (opens the banker with `CMSG_BANKER_ACTIVATE` and answers the tab bags in
+the player's slots 63-71 and what is inside them), `bank_deposit` and `bank_withdraw` (one item, by bag and slot or by
+entry, with its new place read back from the inventory model) and `bank_buy_slot`, which refuses before any packet: the
+core prices a tab from the character's own tab count, which this client does not read back, so it can neither check the
+price nor prove the purchase. A banker must be open — `bank_list` — before a deposit or a withdraw works, and any
+later NPC window (a vendor's list, a trainer's, a gossip menu) closes it: the core drops a bank command whose
+interaction is not on that banker. Details and the tab limit are in
+[docs/forever/WORLDLIFE-220-BANK-NOTES.md](docs/forever/WORLDLIFE-220-BANK-NOTES.md).
 
 A dropped world socket is logged in again with a fresh Battle.net login (the first login's join ticket is spent when
 the link drops), and every login attempt (the first login, each build the automatic selection probes, each reconnect's) waits for its turn in the same login rate the other
@@ -280,8 +307,9 @@ and absent on `unknown-verb`; P6 is present when `.tb cmd state <bot>` (one of t
 a P3-only module answers), and absent without a probe once P3 is known absent; PL is present when `.tb cmd place` without its shape answers `error code=missing-argument cmd=cmd` and absent on the order grammar's refusal (`invalid`, `unknown-verb`, `unsupported`; a module without PL refuses the word there). Only those definite answers are remembered, until the world link is re-entered; a
 timeout (the probe keeps its own 3 s budget, so a silent module never costs the caller's whole deadline), a deadline, `not-bound`, `not-in-world`, any other code or an unexpected reply is not remembered and
 answers `not-available: <verb>: the module's answer to the <package> probe is not known (...)`, and the next call
-probes again. `view` is the port's cut verb:
-`commander view: not ported on this server`. Every refusal is `-32003` with its code first in the message
+probes again. `view` is the cut op (the 1.12 module's
+perception frames have no Forever equivalent: `commander view: the old perception frames have no Forever equivalent;
+read the module's state with commander status or run status`). Every refusal is `-32003` with its code first in the message
 (`not-available`, `run-active`, `not-owned`, `lead-mismatch`, `refused`, `bind-refused`, or the module's own error code); a lost or
 re-entering link keeps `-32002`/`-32005`. `wait_ms` (clamped to 0..30000 before the conversion) polls `.tb state`
 every 500 ms for each queued order's per-bot line behind one overall deadline (the wait plus a 5 s read budget,
@@ -293,14 +321,15 @@ with the same account and character (up to 8 attempts, 2 s doubling to 60 s apar
 session that stayed up for a minute starts a fresh budget), and serves reads throughout. `status` reports the link
 state (`online`, `reconnecting`, `offline`); while `reconnecting` every action answers `-32005` and nothing is queued
 for after the re-entry. When the budget is spent the daemon is `offline` with the reason for `--disconnect-grace`
-(default 30 s) and then exits with a world error. `docs/forever/SERVE-R1-NOTES.md` has the method table.
+(default 30 s) and then exits with a world error. [docs/forever/METHOD-TABLE.md](docs/forever/METHOD-TABLE.md)
+has the method table.
 
 `forever-agent forever rpc [--timeout DUR] [--raw] <dir> <method|list> [<params-json>|-]` is the CLI client of
 that socket: one method call with a JSON object or array (or `-` for stdin, or nothing), printing the pretty JSON
 result (compact with `--raw`) or the typed `error: <code> <message>` with exit 16. `list` first calls the selected
-daemon's `status`, then prints every method the socket answers, with the ones this server does not port marked
-`(not ported)`; a stopped daemon fails `list` like any other call, so the table is never printed for a socket nobody
-answers. The dir is a serve `--dir`, opened with the same checks as the old `rpc` (slot.json asserted, the derived
+daemon's `status`, then prints every method the socket answers: an implemented name bare, a refused one with its
+reason (`name (refused: <why>)`), so one list says what the daemon does with every old name; a stopped daemon fails
+`list` like any other call, so the table is never printed for a socket nobody answers. The dir is a serve `--dir`, opened with the same checks as the old `rpc` (slot.json asserted, the derived
 token file, nothing but 127.0.0.1). A call the server refuses answers its typed error; a daemon that is not running
 is `forever rpc: cannot reach` with exit 15. Ctrl-C or an expired `--timeout` aborts the HTTP request (the connection
 is closed) and the command waits for the call to stop before exiting 1 with `cancelled:` or `timed out after ...`; no
@@ -731,6 +760,23 @@ next tick retries it, so no failure can skip rows the summary would call complet
 `combat_truncated` with `combat_bytes`, the size the file stopped at. The trace's events carry the watch's own
 anchors: `run_start` at the run-start action's reply time (the module's clock zero, which a map reader uses to place
 the module's `at_s` on the trace's clock) and one `wipe` at the module's own second for every wipe it reports.
+
+The report also judges the plan's fight steps. A plan's bosses[].tactics block is the agent's own (it is never
+exported: the module's bots fight by their own `ai_boss_tactic` rows), so a plan step the module's rows contradict or
+do not carry is a step nobody runs. With `--module-tactics FILE` — the module's `ai_boss_tactic` rows as a JSON array,
+one object per row with the table's column names (`map`, `boss_entry`, `kind`, `target_entry`, `spell_id`, `priority`,
+`param`, `hp_min`, `hp_max`; the health band is part of the table's key and is read but not compared, and an export of
+`SELECT map, boss_entry, kind, target_entry, spell_id, priority, param, hp_min, hp_max FROM ai_boss_tactic` gives it)
+— the watch's report checks every plan fight step (one interrupt entry, one kill_first or never_target entry,
+one move_out row) against those rows once the run ends: the interrupts a plan names, the kill order (the entries and
+their order by the module's priorities), a never_target the module kills first (one it has no row for is not checked:
+the table has no never_target kind), and a move_out whose spell the module has no avoid_cast row for or whose yards
+are smaller than the widest row's (a name's every id is checked). Each disagreement is one `tactics:` line naming
+the leg, the boss, the plan's step and the module's answer, and the lines are written beside the record as
+`<run_id>.tactics-check.txt`. A plan step no module row can answer (a dispel or no_dispel step, a ground rule, a boss
+the file does not name) is listed as not checked, and without the flag the report says the check was not made: the
+section never reads as an agreement it did not test. The module's command link has no command that returns
+`ai_boss_tactic`, which is why the rows arrive as a file. See [docs/forever/TACTICS-CHECK-NOTES.md](docs/forever/TACTICS-CHECK-NOTES.md).
 
 `forever-agent forever raid-watch --leader NAME --plan RAID.json --character NAME [--layout FILE] [flags of dungeon-watch]`
 watches a raid plan (kind `raid`, 10, 20 or 40 bots) the module's own run leads; every dungeon-watch flag, budget and

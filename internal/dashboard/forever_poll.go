@@ -49,7 +49,11 @@ func (p *Poller) pollForeverOne(ctx context.Context, a Agent, cl *serveclient.Cl
 	in := Inputs{Agent: a, Now: now}
 	st, err := cl.Status(ctx)
 	if err != nil {
-		in.StatusErr = err.Error()
+		// The token never reaches the card (its error is served on /api/state) nor the live map's reason.
+		in.StatusErr = scrubText(cl.Token(), err.Error())
+		// The serve answers nothing at all: the card's live map says so, with the serve's own words.
+		p.markLiveMapGone(a.ID, in.StatusErr)
+		in.LiveMap = p.liveMapInfo(a.ID, now)
 		return BuildForeverCard(in), nil
 	}
 	statusRaw, _ := json.Marshal(st)
@@ -102,6 +106,7 @@ func (p *Poller) pollForeverOne(ctx context.Context, a Agent, cl *serveclient.Cl
 		in.Units, _ = json.Marshal(units)
 	}
 	in.ProgressSince = p.markForeverProgress(a.ID, foreverProgressKey(st, cmd, cmdOK), now)
+	in.LiveMap = p.liveMapInfo(a.ID, now)
 	card := BuildForeverCard(in)
 	if !card.Online {
 		return card, nil

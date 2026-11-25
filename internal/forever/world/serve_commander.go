@@ -343,7 +343,10 @@ func (s *session) serveCommander(ctx context.Context, st *serveState, p serveCom
 		// checks are the module's own grammar's.
 		return commanderAnswer(c.Run(ctx, verb, lead, strings.Join(p.Args, " ")))
 	case "view":
-		return ServeCommander{}, &rpc.Error{Code: rpc.CodeGame, Message: "commander view: not ported on this server"}
+		// The old view op read the 1.12 module's TBM:VIEW perception frames. The Forever module has no such
+		// feed: its bots report their own state through the card and the run records, which status and the
+		// run verbs read.
+		return ServeCommander{}, &rpc.Error{Code: rpc.CodeGame, Message: "commander view: the old perception frames have no Forever equivalent; read the module's state with commander status or run status"}
 	default:
 		return ServeCommander{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "commander op must be bind, unbind, status, cmd, run or view"}
 	}

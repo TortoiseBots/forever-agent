@@ -3,7 +3,7 @@
 // real sockets, the same way the live steps do. A fake on-disk tree would
 // only pin the argument parsing; this pins the wire: DONE results print,
 // NOT-PORTED answers exit 16 with the typed text, and `list` marks the
-// not-ported remainder.
+// refused remainder.
 package world
 
 import (
@@ -60,9 +60,9 @@ func TestServeCLITableContract(t *testing.T) {
 	a := startServeDaemon(t, f, steps)
 	defer a.stop(t)
 
-	ported, notPorted := ServeRPCMethods()
-	if len(ported) == 0 || len(notPorted) == 0 {
-		t.Fatalf("table: %d ported, %d not-ported", len(ported), len(notPorted))
+	ported, refused := ServeRPCMethods()
+	if len(ported) == 0 || len(refused) == 0 {
+		t.Fatalf("table: %d implemented, %d refused", len(ported), len(refused))
 	}
 	for _, name := range []string{"status", "units", "chat"} {
 		found := false
@@ -74,7 +74,7 @@ func TestServeCLITableContract(t *testing.T) {
 		}
 	}
 	seen := map[string]bool{}
-	for _, n := range append(append([]string{}, ported...), notPorted...) {
+	for _, n := range append(append([]string{}, ported...), refused...) {
 		if seen[n] {
 			t.Fatalf("duplicate method %q", n)
 		}
@@ -83,9 +83,14 @@ func TestServeCLITableContract(t *testing.T) {
 	if _, code, _ := serveCLIPost(t, a.addr, a.token, "no_such_method_xyz", nil); code != -32601 {
 		t.Fatalf("unknown method code %d, want -32601", code)
 	}
+	// A refused name answers its documented reason, never "not ported" and never an empty success.
+	why, ok := ServeRefusal("lfg_status")
+	if !ok || why == "" {
+		t.Fatal("lfg_status has no documented refusal")
+	}
 	res, code, msg := serveCLIPost(t, a.addr, a.token, "lfg_status", nil)
-	if code != -32003 || !strings.Contains(msg, "lfg_status: not ported on this server") || res != nil {
-		t.Fatalf("lfg_status: code %d msg %q result %s, want the typed not-ported error and no result", code, msg, res)
+	if code != -32003 || msg != "lfg_status: "+why || res != nil {
+		t.Fatalf("lfg_status: code %d msg %q result %s, want the typed refusal and no result", code, msg, res)
 	}
 	res, code, _ = serveCLIPost(t, a.addr, a.token, "status", nil)
 	if code != 0 {

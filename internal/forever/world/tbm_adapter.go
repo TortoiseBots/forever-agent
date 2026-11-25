@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
@@ -22,94 +23,228 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
-// tbmAdapter satisfies tbmclient.Conn on top of one session. The chat feed is the same cmdFeed the command runner
-// uses: while a TBM check runs, every chat line the session receives is queued here for the client's Next.
+// tbmAdapter satisfies tbmclient.Conn on top of one session: the session's chat-line tap (cmdTaps) queues every
+// delivered line for the client's Next, and the add-on inbox is drained the same way.
+//
+// The CLI's `forever tbm-check` runs the adapter on the session goroutine itself (st nil). The daemon's TBM methods
+// run their handler off that goroutine, so they set st and every session effect (the send, the tap install and each
+// pump slice) is posted to the session goroutine as its own short call: the queue keeps answering status and the
+// dungeon verbs between slices, while packet access stays serialized.
 type tbmAdapter struct {
-	s    *session
-	feed []chat.Line
-	prev func(chat.Line)
+	st      *serveState     // nil for the CLI's in-session adapter
+	s       *session        // the session the tap was installed on
+	ctx     context.Context // the daemon exchange's deadline (nil for the CLI)
+	mu      sync.Mutex
+	feed    []chat.Line         // appended on the session goroutine, read by pump
+	pending []tbmproto.Incoming // the messages the last slice delivered, taken by Next
+	closed  bool                // close has run: the tap stops queueing even if its removal had to wait
 	// raw, when set, receives every accepted message as a case recv record for a live capture.
-	raw io.Writer
+	raw    io.Writer
+	remove func() // the tap's remover, session goroutine only
 }
 
-// newTBMAdapter builds the adapter and takes over the session's chat feed. close restores the previous feed.
+// newTBMAdapter builds the adapter on the session goroutine (the CLI's tbm-check) and registers its tap.
 func newTBMAdapter(s *session) *tbmAdapter {
-	a := &tbmAdapter{s: s, prev: s.cmdFeed}
-	s.cmdFeed = func(line chat.Line) {
-		a.feed = append(a.feed, line)
-		if a.prev != nil {
-			a.prev(line)
-		}
-	}
+	a := &tbmAdapter{s: s}
+	a.tap(s)
 	return a
 }
 
-func (a *tbmAdapter) close() { a.s.cmdFeed = a.prev }
+// newServeTBMAdapter builds the adapter the daemon's TBM methods use: open installs its tap, close removes it, and
+// every session effect goes through the queue.
+func newServeTBMAdapter(st *serveState) *tbmAdapter { return &tbmAdapter{st: st} }
+
+// tap registers the chat-line tap on s. Session goroutine only.
+func (a *tbmAdapter) tap(s *session) {
+	a.s = s
+	a.remove = s.addChatTap(a.deliver)
+}
+
+// deliver queues one chat line for Next. It runs on the session goroutine.
+func (a *tbmAdapter) deliver(line chat.Line) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.closed {
+		return
+	}
+	a.feed = append(a.feed, line)
+}
+
+// open installs the tap on the current session and takes the exchange's context for its sends (the daemon's
+// adapter only).
+func (a *tbmAdapter) open(ctx context.Context) error {
+	a.ctx = ctx
+	_, err := a.st.call(ctx, func(s *session) (any, error) {
+		a.tap(s)
+		return nil, nil
+	})
+	return err
+}
+
+// close removes the tap: directly on the session goroutine (the CLI), or as one queued call (the daemon). A session
+// that was replaced by a reconnect is not touched: its tap died with it, and its slice belongs to nobody now.
+func (a *tbmAdapter) close() {
+	a.mu.Lock()
+	a.closed = true
+	a.feed = nil
+	a.mu.Unlock()
+	if a.st == nil {
+		if a.remove != nil {
+			a.remove()
+			a.remove = nil
+		}
+		return
+	}
+	s := a.s
+	if s == nil || a.remove == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), serveTBMCloseWait)
+	defer cancel()
+	_, _ = a.st.call(ctx, func(cur *session) (any, error) {
+		if cur != s {
+			return nil, nil
+		}
+		a.remove()
+		a.remove = nil
+		return nil, nil
+	})
+}
+
+// session runs fn on the session the adapter belongs to: directly on the session goroutine for the CLI, or as one
+// queued call for the daemon. A call that lands on another session means the link was re-entered: the exchange is
+// over, so this answers the link-lost error instead of sending through a session the tap is not on.
+func (a *tbmAdapter) session(ctx context.Context, fn func(*session) error) error {
+	if a.st == nil {
+		return fn(a.s)
+	}
+	_, err := a.st.call(ctx, func(cur *session) (any, error) {
+		if cur != a.s {
+			return nil, ErrLinkLost
+		}
+		return nil, fn(cur)
+	})
+	return err
+}
+
+// exchangeCtx is the context a send waits on: the exchange's own (set by open), bounded by its deadline.
+func (a *tbmAdapter) exchangeCtx() context.Context {
+	if a.ctx == nil {
+		return context.Background()
+	}
+	return a.ctx
+}
 
 // RegisterAddonPrefixes sends the prefix registration packets for the TBM prefix.
 func (a *tbmAdapter) RegisterAddonPrefixes(prefixes ...string) error {
-	return a.s.RegisterAddonPrefixes(prefixes...)
+	return a.session(a.exchangeCtx(), func(s *session) error { return s.RegisterAddonPrefixes(prefixes...) })
 }
 
 // SendAddon sends one add-on message through the session's add-on path.
 func (a *tbmAdapter) SendAddon(ch addonmsg.Channel, target, prefix, text string, logged bool) error {
-	return a.s.SendAddon(ch, target, prefix, text, logged)
+	return a.session(a.exchangeCtx(), func(s *session) error { return s.SendAddon(ch, target, prefix, text, logged) })
 }
 
 // SendAddonSelf sends one add-on whisper to this character's own name, the
 // add-on whisper transport the ungrouped hello uses.
 func (a *tbmAdapter) SendAddonSelf(prefix, text string) error {
-	name := a.s.report.Character.Name
-	if name == "" {
-		return fmt.Errorf("tbm: the character's name is not known yet")
-	}
-	return a.s.SendAddon(addonmsg.Whisper, name, prefix, text, false)
+	return a.session(a.exchangeCtx(), func(s *session) error {
+		name := s.report.Character.Name
+		if name == "" {
+			return fmt.Errorf("tbm: the character's name is not known yet")
+		}
+		return s.SendAddon(addonmsg.Whisper, name, prefix, text, false)
+	})
 }
 
 // WhisperSelf sends the chat command as a whisper to this character's own name. The chat transport has no other
 // way to reach the module, and the core delivers a self whisper back to the sender.
 func (a *tbmAdapter) WhisperSelf(text string) error {
-	name := a.s.report.Character.Name
-	if name == "" {
-		return fmt.Errorf("tbm: the character's name is not known yet")
-	}
-	lang, err := a.s.chatLanguage()
-	if err != nil {
-		return err
-	}
-	return a.s.Send(wire.CMSGChatMessageWhisper, chat.BuildWhisper(lang, name, text))
+	return a.session(a.exchangeCtx(), func(s *session) error {
+		name := s.report.Character.Name
+		if name == "" {
+			return fmt.Errorf("tbm: the character's name is not known yet")
+		}
+		lang, err := s.chatLanguage()
+		if err != nil {
+			return err
+		}
+		return s.Send(wire.CMSGChatMessageWhisper, chat.BuildWhisper(lang, name, text))
+	})
 }
 
 // Next returns the next message for the client: a delivered add-on message first, then a chat line. It drives the
-// session's packet pump for a short slice so the queues actually fill.
+// session's packet pump for one short slice (serveTBMPump) per pass so the queues actually fill, and each slice is
+// its own queued call in the daemon, so the wait between slices leaves the session queue to every other method.
 func (a *tbmAdapter) Next(ctx context.Context) (tbmproto.Incoming, error) {
-	a.s.initAddon()
 	for {
-		if m, ok := a.s.addon.Next(); ok {
-			if !tbmAcceptAddon(m, a.s.report.Character.GUID) {
-				continue
-			}
-			in := tbmproto.Incoming{Kind: "addon", Channel: addonChannelName(m), Prefix: m.Prefix, Text: m.Text}
-			a.record(in)
+		if in, ok := a.take(); ok {
 			return in, nil
 		}
-		if len(a.feed) > 0 {
-			line := a.feed[0]
-			a.feed = a.feed[1:]
-			if !tbmAcceptChat(line) {
-				continue
-			}
-			in := tbmproto.Incoming{Kind: "system", Text: line.Text}
-			a.record(in)
-			return in, nil
+		var err error
+		if a.st == nil {
+			err = a.pump(a.s, ctx)
+		} else {
+			err = a.session(ctx, func(s *session) error { return a.pump(s, ctx) })
 		}
-		if err := a.s.collect(ctx, 50*time.Millisecond); err != nil {
+		if err != nil {
 			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 				return tbmproto.Incoming{}, tbmclient.ErrTimeout
 			}
 			return tbmproto.Incoming{}, err
 		}
 	}
+}
+
+// pump drives the session's packets for one slice and queues every message that arrived. It runs on the session
+// goroutine (directly for the CLI, inside the queued call for the daemon).
+func (a *tbmAdapter) pump(s *session, ctx context.Context) error {
+	s.initAddon()
+	own := s.report.Character.GUID
+	var got []tbmproto.Incoming
+	for {
+		m, ok := s.addon.Next()
+		if !ok {
+			break
+		}
+		if !tbmAcceptAddon(m, own) {
+			continue
+		}
+		got = append(got, tbmproto.Incoming{Kind: "addon", Channel: addonChannelName(m), Prefix: m.Prefix, Text: m.Text})
+	}
+	a.mu.Lock()
+	feed := a.feed
+	a.feed = nil
+	a.mu.Unlock()
+	for _, line := range feed {
+		if tbmAcceptChat(line) {
+			got = append(got, tbmproto.Incoming{Kind: "system", Text: line.Text})
+		}
+	}
+	for _, in := range got {
+		a.record(in)
+	}
+	if len(got) > 0 {
+		a.mu.Lock()
+		a.pending = append(a.pending, got...)
+		a.mu.Unlock()
+	}
+	if err := s.collect(ctx, serveTBMPump); err != nil {
+		return err
+	}
+	return nil
+}
+
+// take pops one queued message.
+func (a *tbmAdapter) take() (tbmproto.Incoming, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if len(a.pending) == 0 {
+		return tbmproto.Incoming{}, false
+	}
+	in := a.pending[0]
+	a.pending = a.pending[1:]
+	return in, true
 }
 
 // tbmAcceptAddon keeps only what the module sends: the contract's replies arrive as add-on whispers whose sender

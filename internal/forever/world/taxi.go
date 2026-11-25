@@ -126,6 +126,8 @@ func (s *session) handleTaxi(p worldconn.Packet) error {
 		}
 		s.taxi.nodes = &n
 		if n.HasWindow {
+			// SendTaxiMenu starts the interaction on the flight master (TaxiHandler.cpp:100).
+			s.bankInteractionAt(n.WindowUnit)
 			s.opts.logf("world: taxi window: current node %d, %d known, %d usable",
 				n.CurrentNode, n.CanLand.Count(), n.CanUse.Count())
 		}

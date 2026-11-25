@@ -385,3 +385,10 @@ button.ctl:disabled { opacity: .5; cursor: default; }
 .ctllog[hidden] { display: none; }
 .ctllog summary { cursor: pointer; color: var(--muted); }
 .ctllog .ctllogpre { margin: 4px 0 0; white-space: pre-wrap; font: 11px/1.4 ui-monospace, monospace; color: var(--muted); }
+/* The Positions panel's live map (controls.js): the serve's own drawing of the party and the hostiles. */
+.livemap { margin: 4px 0 8px; }
+.livemap[hidden] { display: none; }
+.livemap .lmimg { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 4px; background: #fff; }
+.livemap .lmimg[hidden] { display: none; }
+.livemap .lmcap, .livemap .lmlin, .livemap .lmerr, .livemap .lmnotes { font-size: 12px; margin-top: 3px; }
+.livemap .lmlin[hidden], .livemap .lmerr[hidden], .livemap .lmnotes[hidden] { display: none; }

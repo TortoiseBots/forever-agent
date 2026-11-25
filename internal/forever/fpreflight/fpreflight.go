@@ -3,9 +3,11 @@
 // on the command line. It is the Forever side of walk-preflight (internal/preflight, the Turtle raid walk's check) and is
 // read-only: nothing here writes a lease, a file or a server setting.
 //
-// The server side is read over SOAP, never over ssh and never through the Turtle toolkit. The setup allow-list of the
-// SOAP client has no command that prints a config key, so the console check proves the endpoint answers and
-// authenticates (a `.pinfo` read) and the bots check reads each bot the same way.
+// The console check runs one `.pinfo NAME` read per character and per bot through Deps.Console. The CLI's console is
+// the server's SOAP endpoint (never ssh, never the Turtle toolkit): its setup allow-list has no command that prints a
+// config key, so the check proves the endpoint answers and authenticates. A serve daemon has no SOAP endpoint, so it
+// hands the same check its own GM console over the session's command channel: the same command and the same parser
+// run there.
 //
 // The export check reads the exported migration FILE (present, parses, names the plan with its map and legs). No console
 // or module command reads back which plan rows the server holds, so a file that was never applied, or rows left from an
@@ -23,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/driver"
 	"github.com/pjerra/forever-agent/internal/forever/serveclient"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/slotdir"
@@ -36,8 +39,10 @@ const (
 	CheckPlan   = "plan"
 	CheckExport = "export"
 	CheckModule = "module"
-	CheckSoap   = "soap"
-	CheckBots   = "bots"
+	// CheckConsole is the server console read (a `.pinfo NAME` per character): the CLI's SOAP endpoint, or the
+	// serving daemon's own GM command channel.
+	CheckConsole = "console"
+	CheckBots    = "bots"
 )
 
 // The run commands the preflight serves. Play needs the bots owned by the player's account; a watch or a run names bots
@@ -134,7 +139,8 @@ type Deps struct {
 	Now        func() time.Time
 	Probe      slots.Probe
 	OpenModule func(dir string) (Module, error)
-	// Console is nil when no SOAP endpoint is configured.
+	// Console is the server console the character and bot reads run through. The CLI passes the SOAP endpoint; a
+	// serving daemon passes its own GM command channel. Nil skips both checks with a warning.
 	Console Console
 }
 
@@ -151,6 +157,18 @@ func DefaultDeps(console Console) Deps {
 			return c, nil
 		},
 		Console: console,
+	}
+}
+
+// PlanLoader adapts a route loader to the plan check: the CLI's --plan and the daemon's plan name in its plans
+// folder are both read by the loader their run command uses, so the check cannot drift from the run.
+func PlanLoader(load func(string) (*driver.Route, error), path string) func() (string, uint32, error) {
+	return func() (string, uint32, error) {
+		r, err := load(path)
+		if err != nil {
+			return "", 0, err
+		}
+		return r.Name, r.Map, nil
 	}
 }
 
@@ -189,7 +207,7 @@ func Run(ctx context.Context, o Options, d Deps) *Report {
 			checkModule(ctx, abs, d, add)
 		}
 	}
-	checkSoapAndBots(ctx, o, d, add)
+	checkConsoleAndBots(ctx, o, d, add)
 	return r
 }
 
@@ -343,29 +361,39 @@ func checkModule(ctx context.Context, dir string, d Deps, add func(string, Statu
 var accountRe = regexp.MustCompile(`(?i)\baccount:\s*(\S+)`)
 
 // pinfoRow is what a `.pinfo NAME` reply says about one character. The core prints `Player[ (offline)] NAME (GUID: N)`
-// and `Account: NAME (ID: N), GMLevel: ...`, and `Player not found!` for an unknown name.
+// and `Account: NAME (ID: N), GMLevel: ...`, and `Player not found!` for an unknown name. A found character always
+// gets both lines, so a reply with only one of them did not finish (the console dropped or the read was cut off)
+// and is reported as such rather than read as an answer.
 type pinfoRow struct {
 	found, online bool
+	cutOff        bool
 	account       string
 }
 
 func parsePinfo(text string) pinfoRow {
 	low := strings.ToLower(text)
-	row := pinfoRow{found: strings.Contains(low, "guid:") && !strings.Contains(low, "not found")}
+	row := pinfoRow{}
+	if strings.Contains(low, "not found") {
+		return row
+	}
+	hasPlayer := strings.Contains(low, "guid:")
+	account := accountRe.FindStringSubmatch(text)
+	row.found = hasPlayer
+	row.cutOff = (hasPlayer || account != nil) && !(hasPlayer && account != nil)
 	if !row.found {
 		return row
 	}
 	row.online = !strings.Contains(low, "(offline)")
-	if m := accountRe.FindStringSubmatch(text); m != nil {
-		row.account = strings.ToLower(m[1])
+	if account != nil {
+		row.account = strings.ToLower(account[1])
 	}
 	return row
 }
 
-func checkSoapAndBots(ctx context.Context, o Options, d Deps, add func(string, Status, string, string)) {
+func checkConsoleAndBots(ctx context.Context, o Options, d Deps, add func(string, Status, string, string)) {
 	if d.Console == nil {
-		add(CheckSoap, Warn, "no SOAP endpoint configured: the server is not read", "pass --soap-user and a password file")
-		add(CheckBots, Warn, "the bots are not checked without SOAP", "")
+		add(CheckConsole, Warn, "no console configured: the server is not read", "pass --soap-user and a password file")
+		add(CheckBots, Warn, "the bots are not checked without a console", "")
 		return
 	}
 	read := func(name string) (pinfoRow, error) {
@@ -381,21 +409,26 @@ func checkSoapAndBots(ctx context.Context, o Options, d Deps, add func(string, S
 		subject = o.Bots[0]
 	}
 	if subject == "" {
-		add(CheckSoap, Warn, "nothing to read: no character and no bots named", "")
+		add(CheckConsole, Warn, "nothing to read: no character and no bots named", "")
 		return
 	}
 	player, err := read(subject)
 	if err != nil {
-		add(CheckSoap, Fail, "the SOAP console does not answer: "+err.Error(), "check --soap-host, --soap-port and the account")
-		add(CheckBots, Warn, "the bots are not checked: SOAP does not answer", "")
+		add(CheckConsole, Fail, "the console does not answer: "+err.Error(), "check the console's endpoint and account")
+		add(CheckBots, Warn, "the bots are not checked: the console does not answer", "")
+		return
+	}
+	if player.cutOff {
+		add(CheckConsole, Fail, fmt.Sprintf("the console's reply for %s is cut off (no player/account line): the reply did not finish", subject), "check the console connection and read the character again")
+		add(CheckBots, Warn, "the bots are not checked: the console's reply is cut off", "")
 		return
 	}
 	if o.Character != "" && !player.found {
-		add(CheckSoap, Fail, fmt.Sprintf("SOAP answers but character %s does not exist", o.Character), "check --character")
+		add(CheckConsole, Fail, fmt.Sprintf("the console answers but character %s does not exist", o.Character), "check the character")
 		add(CheckBots, Warn, "the bots are not checked: the character is unknown", "")
 		return
 	}
-	add(CheckSoap, OK, "SOAP answers", "")
+	add(CheckConsole, OK, "the console answers", "")
 	if len(o.Bots) == 0 {
 		add(CheckBots, OK, "no bots named", "")
 		return
@@ -408,6 +441,9 @@ func checkSoapAndBots(ctx context.Context, o Options, d Deps, add func(string, S
 			return
 		}
 		switch {
+		case row.cutOff:
+			add(CheckBots, Fail, fmt.Sprintf("reading %s: the console's reply is cut off (no player/account line)", b), "read the bot again")
+			return
 		case !row.found:
 			missing = append(missing, b)
 		default:

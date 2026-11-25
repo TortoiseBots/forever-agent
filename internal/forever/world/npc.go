@@ -25,6 +25,9 @@ func (s *session) handleNPC(p worldconn.Packet) error {
 			return nil
 		}
 		s.actMenu = &m
+		// SendGossipMenu starts the interaction on this unit (GossipDef.cpp:220-222): a bank opened elsewhere is no
+		// longer the server's interaction (bank.go).
+		s.bankInteractionAt(m.Unit)
 		s.eventGossip(events.KindGossip, m.Unit, map[string]any{"menu_id": m.MenuID, "options": len(m.Options)})
 		// The spirit healer's flow (handleDeath) waits on its own copy of the menu.
 		if s.death != nil {
@@ -38,6 +41,8 @@ func (s *session) handleNPC(p worldconn.Packet) error {
 			return nil
 		}
 		s.actQuest = &l
+		// SendQuestGiverQuestListMessage starts the interaction on the giver (GossipDef.cpp:420).
+		s.bankInteractionAt(l.Giver)
 	case wire.SMSGGossipComplete:
 		if _, err := npc.ParseGossipComplete(p.Payload); err != nil {
 			s.noteParseError(p, err)
@@ -45,10 +50,14 @@ func (s *session) handleNPC(p worldconn.Packet) error {
 		}
 		s.eventGossip(events.KindGossipComplete, wire.EmptyGUID, nil)
 	case wire.SMSGGossipOptionNPCInteract:
-		if _, err := npc.ParseGossipOptionInteraction(p.Payload); err != nil {
+		g, err := npc.ParseGossipOptionInteraction(p.Payload)
+		if err != nil {
 			s.noteParseError(p, err)
 			return nil
 		}
+		// OnGossipSelect starts the interaction on the source unit and answers this packet when the option has no
+		// NPC interaction id (Player.cpp:15434-15460); the open result above is the other answer.
+		s.bankInteractionAt(g.GossipGUID)
 	case wire.SMSGNPCInteractionOpenResult:
 		r, err := npc.ParseInteractionOpenResult(p.Payload)
 		if err != nil {
@@ -58,6 +67,9 @@ func (s *session) handleNPC(p worldconn.Packet) error {
 		// Round R3: the vendor flow waits on it (vendor_act.go); it is the only answer the first
 		// CMSG_LIST_INVENTORY gets (F2).
 		s.vendor.open = &r
+		// Issue #220: a banker interaction is the bank's open (bank.go): bank_list sends CMSG_BANKER_ACTIVATE and the
+		// bank commands are refused until its answer opened the window.
+		s.recordBankOpen(r)
 	}
 	return nil
 }

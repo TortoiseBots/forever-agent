@@ -109,7 +109,7 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 			fmt.Fprintln(stderr, err)
 			return exitUsage
 		}
-		if stop, code := runPreflight(ctx, "forever dungeon-play", fpreflight.KindPlay, &pf, planLoader(driver.LoadPlayRoute, *plan), common.character, names[:], stdout, stderr); stop {
+		if stop, code := runPreflight(ctx, "forever dungeon-play", fpreflight.KindPlay, &pf, fpreflight.PlanLoader(driver.LoadPlayRoute, *plan), common.character, names[:], stdout, stderr); stop {
 			return code
 		}
 		budget := *maxMinutes
