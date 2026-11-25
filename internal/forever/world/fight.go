@@ -423,6 +423,12 @@ func (f *fightLog) castFail(spellID int32, castID wire.GUID, reason, arg1 int32,
 	if len(f.casts) < maxFightRows {
 		f.casts = append(f.casts, FightRow{SpellID: spellID, Result: f.castResult, At: f.elapsed()})
 	}
+	if combat.SilentSpellResult(f.castResult) {
+		// The core's "no message" result is the accepted cast it holds for the trade (Spell.cpp:3826-3841), not a
+		// failure: the row keeps the packet's own result, the line says what it was.
+		f.add("cast", fmt.Sprintf("spell %d answered the silent result (%s)", spellID, f.castResult), 0)
+		return
+	}
 	f.add("cast", fmt.Sprintf("spell %d failed: %s", spellID, f.castResult), 0)
 }
 

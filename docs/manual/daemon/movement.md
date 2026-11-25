@@ -4,7 +4,7 @@ title: Movement
 description: Move the character with straight walks, navmesh routes and follow loops, ask the navmesh what ground is walkable, and check a walk live.
 tags: [daemon, movement, navmesh, follow, pathing]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T04:40:00Z }
 sources:
   - id: serve-movement
     resource: internal/forever/world/serve_session.go
@@ -58,6 +58,22 @@ Without `--navmesh`, `path_to`, `walk_path`, `walk_ray` and `follow_start` answe
 One straight run: the character faces the point, starts forward and stops within 0.5 yards of it. It does not
 avoid walls, cliffs or water — use `walk_path` for that. The call answers `{}` when the character arrives.
 
+A walk that ends in a map change — the route steps into an instance portal, whose area trigger the walk fires
+itself (see [area triggers](travel.md#area_trigger_watch)) — is a success, not an error. The answer then carries
+where the character landed:
+
+| Field | Meaning |
+|---|---|
+| `changed_map.map` | The map the walk ended on. |
+| `changed_map.x`, `y`, `z` | The position the server put the character at on that map. |
+
+The only between-maps error is a walk the server leaves between maps until the call's own deadline (or the
+session's 60-second map-change limit): it ends with `objects: the character is between maps: the character is
+still between maps at the walk's deadline`. A walk started while a map change is already under way never moves
+and is refused with `objects: the character is between maps: the walk did not start`. A walk whose route crosses
+an instance-portal volume the plans name arms that volume for the walk's own duration and removes it when the walk
+ends ([travel](travel.md#area_trigger_watch) says which volumes).
+
 Refusals: no mover (the character's create block never arrived), the character is airborne or falling, or a
 map change is in progress. No navmesh is needed.
 
@@ -102,7 +118,9 @@ walk_path: no full route to 12.3 45.6 7.8 (partial)
 |---|---|---|
 | `x`, `y`, `z` | float | Destination. |
 
-Result: the same fields as `path_to`. Refusals also cover a missing mover and a link that dropped mid-walk.
+Result: the same fields as `path_to`. Refusals also cover a missing mover and a link that dropped mid-walk. A
+map change ends the walk with `objects: the character is between maps` and no route; the instance-portal volumes
+the route crosses are armed for the walk like `walk_to`'s and removed when it ends.
 
 # walk_ray
 

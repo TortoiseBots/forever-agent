@@ -72,3 +72,47 @@ func (s *session) castTradeSlot(ctx context.Context, spellID int32, slot uint8) 
 		}
 	}
 }
+
+const (
+	// tradeStoredSpellWait bounds the wait for the trade data to name a trade-slot cast's spell: the core sends the
+	// update at the moment it stores the spell (TradeData::SetSpell, TradeData.cpp:84-101), so it arrives with the
+	// silent result, or one turn after it.
+	tradeStoredSpellWait = time.Second
+	// tradeStoredSpellPoll is one wait inside that bound: the session answers the server's packets in it.
+	tradeStoredSpellPoll = 50 * time.Millisecond
+)
+
+// tradeStoredSpell reports whether the trade data named spellID as this side's exchange spell after the cast that
+// started at sequence since: the core stored the trade-slot cast instead of casting it (Spell.cpp:3826-3841) and sent
+// the update naming it (TradeData.cpp:84-101). The sequence matters: within one window the previous cast's spell stays
+// in the trade data, so a later cast that only got the silent cooldown answer (:6090) would otherwise read as stored.
+// The silent result alone is not that proof: the core answers it for casts that never happened as well. The wait is
+// real time: it bounds a packet that may arrive late, not the character's clock.
+func (s *session) tradeStoredSpell(ctx context.Context, spellID int32, since uint64) bool {
+	stored := func() bool {
+		return s.trade.mineUpdates > since && s.trade.mine != nil && s.trade.mine.spell == spellID
+	}
+	if stored() {
+		return true
+	}
+	deadline := time.Now().Add(tradeStoredSpellWait)
+	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return stored()
+		}
+		ev, err := s.nextCtx(ctx, "the trade update", tradeStoredSpellPoll)
+		if err != nil {
+			if errors.Is(err, errWaitTimeout) {
+				continue
+			}
+			return stored()
+		}
+		if err := s.handle(ctx, ev); err != nil {
+			return stored()
+		}
+		if stored() {
+			return true
+		}
+	}
+	return stored()
+}

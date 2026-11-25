@@ -208,6 +208,11 @@ type serveState struct {
 	nav *navmesh.Planner
 	// plansDir is where map_snapshot reads a plan (--plans-dir; the same folder dungeon_run's plans live in).
 	plansDir string
+	// planTriggers is the trigger-volume index of the plans folder, built on the first walk that needs it
+	// (trigger_plan.go): a walk arms the volumes its route crosses, and reading the folder once is cheaper than on
+	// every walk.
+	planTriggersOnce sync.Once
+	planTriggers     map[uint32][]srvTrigger
 	// dir is the `forever serve --dir` the daemon wrote its slot.json, pid and token file into (ServeConfig.Dir):
 	// dungeon_run's start preflight checks the slot, its lease and the module link against it.
 	dir string

@@ -589,6 +589,10 @@ type session struct {
 	// is inside each: a volume entered from outside sends CMSG_AREA_TRIGGER once, and leaving re-arms it.
 	triggers   []srvTrigger
 	triggersIn map[int32]bool
+	// trigSends is the last send per trigger id while the character still stands in the armed volume it went out
+	// from (triggerSendHold at most; trigger.go): the watch's crossing and the explicit call that follows it are
+	// one send, not two.
+	trigSends map[int32]triggerSend
 	// echoOwed is set by each CMSG_MOVE_KNOCK_BACK_ACK we send: the server's echo of it (SMSG_MOVE_UPDATE_KNOCK_BACK to
 	// the mover) is owed until it arrives or echoOwedUntil passes, whether or not the takeoff has landed meanwhile.
 	echoOwed      bool

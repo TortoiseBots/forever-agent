@@ -9,12 +9,14 @@ package world
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/events"
+	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/items"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/trade"
@@ -53,10 +55,12 @@ type tradeWorld struct {
 	swapOnAcc     bool   // ... by swapping its item for a worse instance of the same entry and count
 	staleIdx      bool   // the bot's side has changed since the character last heard of it
 	bound         map[int32]bool
-	// castRefusal answers CMSG_CAST_SPELL with this SMSG_CAST_FAILED pair (reason, arg1) instead of the go.
-	castRefusal  *[2]int32
-	tooFar       bool // an accept finds the players too far apart
-	cancelAnswer bool // a refused item answers cancelled
+	// castRefusal answers CMSG_CAST_SPELL with this SMSG_CAST_FAILED pair (reason, arg1) instead of the go, and
+	// storesTradeSpell makes a silent result store the spell in the trade data first, as the core does (TradeData.cpp:84-101).
+	castRefusal      *[2]int32
+	storesTradeSpell bool
+	tooFar           bool // an accept finds the players too far apart
+	cancelAnswer     bool // a refused item answers cancelled
 	// The core's state.
 	open        bool
 	sets        map[uint8]wire.GUID
@@ -125,7 +129,7 @@ func tradeStatusBytes(m trade.StatusMsg) []byte {
 }
 
 // tradeUpdatedBytes writes SMSG_TRADE_UPDATED as the core does (TradePackets.cpp:88-136); every row is unwrapped.
-func tradeUpdatedBytes(which uint8, idx uint32, gold uint64, rows []trade.Item) []byte {
+func tradeUpdatedBytes(which uint8, idx uint32, gold uint64, spell int32, rows []trade.Item) []byte {
 	b := wire.NewWriter()
 	b.WriteU8(which)
 	b.WriteU32(1)
@@ -134,7 +138,7 @@ func tradeUpdatedBytes(which uint8, idx uint32, gold uint64, rows []trade.Item) 
 	b.WriteU64(gold)
 	b.WriteI32(0)
 	b.WriteI32(0)
-	b.WriteI32(0)
+	b.WriteI32(spell)
 	b.WriteU32(uint32(len(rows)))
 	for _, r := range rows {
 		b.WriteU8(r.Slot)
@@ -186,7 +190,7 @@ func (w *tradeWorld) openWindow() {
 	}
 	if len(w.offer) != 0 || w.offerGold != 0 {
 		w.botIdx = 0xA5A5
-		w.deliverTrade(wire.SMSGTradeUpdated, tradeUpdatedBytes(1, w.botIdx, w.offerGold, w.offer))
+		w.deliverTrade(wire.SMSGTradeUpdated, tradeUpdatedBytes(1, w.botIdx, w.offerGold, 0, w.offer))
 	}
 }
 
@@ -298,7 +302,7 @@ func (w *tradeWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 			} else {
 				w.offer = append(w.offer, botItem(1, 4540, 2))
 			}
-			w.deliverTrade(wire.SMSGTradeUpdated, tradeUpdatedBytes(1, w.botIdx, w.offerGold, w.offer))
+			w.deliverTrade(wire.SMSGTradeUpdated, tradeUpdatedBytes(1, w.botIdx, w.offerGold, 0, w.offer))
 			w.unaccept()
 			return
 		}
@@ -327,6 +331,11 @@ func (w *tradeWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 		r.ReadI32()
 		spell := r.ReadI32()
 		if refusal := w.castRefusal; refusal != nil {
+			if combat.SpellFailSilent == refusal[0] && w.storesTradeSpell {
+				// TradeData::SetSpell stores the spell and sends the update before the cast is cleaned up silently
+				// (TradeData.cpp:84-101; Spell.cpp:3826-3841).
+				w.deliverTrade(wire.SMSGTradeUpdated, tradeUpdatedBytes(0, 1, 0, spell, nil))
+			}
 			w.server(wire.SMSGCastFailed, buildCastFailedArgs(castID, spell, refusal[0], refusal[1], 0))
 			return
 		}
@@ -1249,5 +1258,124 @@ func TestCastOnTradeSlotNamesAMissingTool(t *testing.T) {
 		if !strings.Contains(outcome, want) {
 			t.Fatalf("the refusal %q does not name %q", outcome, want)
 		}
+	}
+}
+
+// TestCastOnTradeSlotTakesTheStoredSpellAsSuccess: the core does not cast a trade-slot spell while the trade is open.
+// It stores the spell in the trade data and answers SPELL_FAILED_DONT_REPORT (32, "do not report"; Spell.cpp:3826-3841
+// calls it "silently ignore"), and the spell goes off when both players accept (the live 2026-11-25 row: the trade
+// status named the spell, then the spell-go fired and the lockbox read unlocked). That answer is the accepted cast,
+// so the call must answer success and say the cast completes on the trade's accept — never "the server refused the
+// spell: do not report".
+func TestCastOnTradeSlotTakesTheStoredSpellAsSuccess(t *testing.T) {
+	w := newTradeWorld(t)
+	w.s.mover = &objects.Mover{Sender: w, ClientTime: func(time.Time) uint32 { return 0 }, RunSpeed: 5.5}
+	w.castRefusal = &[2]int32{combat.SpellFailSilent, 0}
+	w.storesTradeSpell = true
+	ctx := context.Background()
+	if _, err := w.s.serveTradeOpen(ctx, serveTradeOpenParams{To: tradeBotName}); err != nil {
+		t.Fatal(err)
+	}
+	slot := uint8(trade.SlotNonTraded)
+	ans, err := w.s.serveCast(ctx, serveCastParams{SpellID: 1804, TradeSlot: &slot})
+	if err != nil {
+		t.Fatalf("the core's silent answer was reported as a refusal: %v", err)
+	}
+	if ans.SpellID != 1804 || ans.TradeSlot == nil || *ans.TradeSlot != uint8(trade.SlotNonTraded) {
+		t.Fatalf("answer %+v does not name the cast", ans)
+	}
+	if !ans.Silent || ans.Completes != CastCompletesTradeAccept {
+		t.Fatalf("answer %+v does not say the cast completes on trade accept", ans)
+	}
+}
+
+// TestSecondCastOfAStoredTradeSpellNeedsItsOwnUpdate: within one window the previous cast's spell stays in the trade
+// data. A second cast of the same spell that only got the silent cooldown answer (:6090) did not store anything, so it
+// must fail like any other silent answer without the trade naming the spell — never report the earlier stored cast.
+func TestSecondCastOfAStoredTradeSpellNeedsItsOwnUpdate(t *testing.T) {
+	w := newTradeWorld(t)
+	w.s.mover = &objects.Mover{Sender: w, ClientTime: func(time.Time) uint32 { return 0 }, RunSpeed: 5.5}
+	w.castRefusal = &[2]int32{combat.SpellFailSilent, 0}
+	w.storesTradeSpell = true
+	ctx := context.Background()
+	if _, err := w.s.serveTradeOpen(ctx, serveTradeOpenParams{To: tradeBotName}); err != nil {
+		t.Fatal(err)
+	}
+	slot := uint8(trade.SlotNonTraded)
+	if _, err := w.s.serveCast(ctx, serveCastParams{SpellID: 1804, TradeSlot: &slot}); err != nil {
+		t.Fatalf("the stored first cast failed: %v", err)
+	}
+	w.storesTradeSpell = false
+	_, err := w.s.serveCast(ctx, serveCastParams{SpellID: 1804, TradeSlot: &slot})
+	if err == nil {
+		t.Fatal("a second cast answered success from the previous cast's stored spell")
+	}
+	if !strings.Contains(err.Error(), "the trade names no such spell") {
+		t.Fatalf("the error %q does not name the missing stored spell", err)
+	}
+}
+
+// TestCastPlainSuccessKeepsTheEmptyAnswer: a successful cast still answers the empty object every caller already gets
+// (the answer gains its fields only for the stored trade-slot spell).
+func TestCastPlainSuccessKeepsTheEmptyAnswer(t *testing.T) {
+	w := newTradeWorld(t)
+	w.s.mover = &objects.Mover{Sender: w, ClientTime: func(time.Time) uint32 { return 0 }, RunSpeed: 5.5}
+	ctx := context.Background()
+	if _, err := w.s.serveTradeOpen(ctx, serveTradeOpenParams{To: tradeBotName}); err != nil {
+		t.Fatal(err)
+	}
+	slot := uint8(trade.SlotNonTraded)
+	ans, err := w.s.serveCast(ctx, serveCastParams{SpellID: 1804, TradeSlot: &slot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := json.Marshal(ans)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "{}" {
+		t.Fatalf("a plain success answered %s, want {}", body)
+	}
+}
+
+// TestCastNeverCallsTheSilentAnswerARefusal: the core also answers SPELL_FAILED_DONT_REPORT for a cast that did not
+// happen at all (:6090 answers it for a spell on its event cooldown), so a silent result outside the trade's stored
+// spell is no cast and no refusal: the call fails saying the server answered its silent result and no spell-go came.
+func TestCastNeverCallsTheSilentAnswerARefusal(t *testing.T) {
+	w := newTradeWorld(t)
+	w.s.mover = &objects.Mover{Sender: w, ClientTime: func(time.Time) uint32 { return 0 }, RunSpeed: 5.5}
+	w.castRefusal = &[2]int32{combat.SpellFailSilent, 0}
+	_, err := w.s.serveCast(context.Background(), serveCastParams{SpellID: 1804})
+	if err == nil {
+		t.Fatal("a silent answer with no spell-go answered success")
+	}
+	for _, want := range []string{"no-message", "nothing was cast"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the error %q does not say %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "refused") {
+		t.Fatalf("the silent answer was reported as a refusal: %q", err)
+	}
+}
+
+// TestCastTradeSlotSilentWithoutTheStoredSpellIsNoCast: the same result on a trade-slot cast is the stored spell only
+// when the trade data names that spell (the core's SetSpell sends it, TradeData.cpp:84-101). Without it the cast did
+// not happen, and the answer says so without calling it a refusal.
+func TestCastTradeSlotSilentWithoutTheStoredSpellIsNoCast(t *testing.T) {
+	w := newTradeWorld(t)
+	w.s.mover = &objects.Mover{Sender: w, ClientTime: func(time.Time) uint32 { return 0 }, RunSpeed: 5.5}
+	w.castRefusal = &[2]int32{combat.SpellFailSilent, 0}
+	ctx := context.Background()
+	if _, err := w.s.serveTradeOpen(ctx, serveTradeOpenParams{To: tradeBotName}); err != nil {
+		t.Fatal(err)
+	}
+	slot := uint8(trade.SlotNonTraded)
+	_, err := w.s.serveCast(ctx, serveCastParams{SpellID: 1804, TradeSlot: &slot})
+	if err == nil {
+		t.Fatal("a silent trade-slot answer with no stored spell answered success")
+	}
+	if !strings.Contains(err.Error(), "the trade names no such spell") || strings.Contains(err.Error(), "refused") {
+		t.Fatalf("the error %q does not name the missing stored spell", err)
 	}
 }
