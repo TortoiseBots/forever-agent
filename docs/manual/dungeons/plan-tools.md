@@ -4,7 +4,7 @@ title: Plan tools
 description: Check, lint, probe, stage, export, scout and compare a dungeon plan offline, before it costs a run.
 tags: [dungeons, tools, checks, export]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T19:45:00Z }
 sources:
   - id: plan-check
     resource: cmd/forever-agent/plan_check_cmd.go
@@ -279,6 +279,11 @@ pass goes on with the rest of the pack. A server whose module build has no query
 sides would be read the same way for every unit), or that answers `rate` twice is said once in the notes and the pass
 goes on with the ray alone. When the query pass's bound or such a stop leaves stands unasked, one note says how many
 were not asked.
+
+A walked hop whose `walk_path` answers `no full route (partial)` is recorded as a partial walk: the step's `live_walk`
+check is a skip naming the server's answer, its `reached_yd` says how far the session stood from the hop's origin when
+the answer came, and the pass goes on to the next stand instead of stopping. One note (`live walks: N stand(s)
+partial`) counts them. Any other walk error still stops the pass part-way with its own row.
 
 # plan-diff
 

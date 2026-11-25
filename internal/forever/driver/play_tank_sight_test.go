@@ -116,6 +116,7 @@ type sightPort struct {
 
 func (s *sightPort) TankSees(string, wire.GUID) (bool, float64, bool) { s.calls++; return s.answer() }
 func (s *sightPort) PointSees(Vec3, wire.GUID) (bool, float64, bool)  { s.calls++; return s.answer() }
+func (s *sightPort) Unsupported() string                              { return "" }
 
 // TestPlayTankSightPickSharesTheSearchBudget: the pick and the stand walk spend one budget, so a large all-NO pack
 // stops at PlayTankSightSpots queries and hands the pull back to the navmesh flow instead of asking one query per
@@ -146,6 +147,7 @@ type standSightPort struct{ tankIn, pointIn bool }
 
 func (s *standSightPort) TankSees(string, wire.GUID) (bool, float64, bool) { return s.tankIn, 0, true }
 func (s *standSightPort) PointSees(Vec3, wire.GUID) (bool, float64, bool)  { return s.pointIn, 0, true }
+func (s *standSightPort) Unsupported() string                              { return "" }
 
 // TestPlayTankSightSpentBudgetIsUnknown: a budget that runs out mid-search is UNKNOWN, never "the server sees from no
 // point" — the second reads as an answer and hands a pack to the fallback agent pull at once, while the doc comment
@@ -505,6 +507,48 @@ func TestPlayTankSightUnknownKeepsTodaysFlow(t *testing.T) {
 	}
 	if n := playEventCount(t, rig, "pull_tank_sight"); n != 0 {
 		t.Fatalf("%d pull_tank_sight events with every answer unknown; want none", n)
+	}
+}
+
+// TestPlayTankSightSaidAloudRecordsOneEventAndGoesOn: a module that does not answer sight for this account (its
+// answer came back as the player's own say) is recorded once, with the reason, and every pull keeps the older flow
+// for the rest of the run: the run goes on and its orders still go out.
+func TestPlayTankSightSaidAloudRecordsOneEventAndGoesOn(t *testing.T) {
+	plan := tankSightPlan()
+	plan.Legs[0].Boss = nil // the pack's pull is what asks the sight port
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{42, 22, 0}})
+		f.SrvUnknown = true
+		f.SrvUnsupported = "said-aloud"
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		f.ModuleSight = func(Vec3, Vec3) bool { return true }
+	})
+	rig.ports.ServerSight, rig.ports.Refusals = rig.fake, rig.fake
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (the unknown sight keeps the older flow)", res.Stop)
+	}
+	evs := playEventList(t, rig)
+	n := 0
+	for _, ev := range evs {
+		if ev.Ev != "pull_sight_unsupported" {
+			continue
+		}
+		n++
+		if reason, _ := ev.D["reason"].(string); reason != "said-aloud" {
+			t.Fatalf("pull_sight_unsupported reason = %v; want said-aloud", ev.D["reason"])
+		}
+	}
+	if n != 1 {
+		names := make([]string, 0, len(evs))
+		for _, ev := range evs {
+			names = append(names, ev.Ev)
+		}
+		t.Fatalf("%d pull_sight_unsupported events; want one for the run (events %v)", n, names)
+	}
+	if len(rig.fake.Lines(".bot attack ")) == 0 {
+		t.Fatal("the run sent no attack order after the module stopped answering sight")
 	}
 }
 

@@ -107,6 +107,11 @@ func (p *playScript) sys(text string) {
 	p.serverEvent(wire.SMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", text))
 }
 
+// say queues one say line as this character's own: the core's fall-through echo of a command it did not run.
+func (p *playScript) say(text string) {
+	p.serverEvent(wire.SMSGChat, buildServerChat(chat.TypeSay, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "Agent", "", "", "", text))
+}
+
 // newPlaySession is a session without sockets whose transport is the script. The character is a human named Agent.
 func newPlaySession(t *testing.T) (*session, *playScript) {
 	t.Helper()
@@ -1161,5 +1166,101 @@ func TestPlayServerSightRemembersAnOlderModule(t *testing.T) {
 				t.Fatalf("sent %d line(s); want no query after the module said it has no sight command", len(asks))
 			}
 		})
+	}
+}
+
+// TestPlayServerSightEchoSaidAloudKeepsTheGuardOff: a module that does not answer the sight query for this account
+// says the line aloud as the player's own chat. That is the sight port's answer (no sight for the run), not a command
+// falling through: the run remembers it, asks nothing more, records the reason, and the say-echo guard stays off so
+// the next order still goes out.
+func TestPlayServerSightEchoSaidAloudKeepsTheGuardOff(t *testing.T) {
+	s, sc := newPlaySession(t)
+	prev := PlayLosQueryEvery
+	PlayLosQueryEvery = time.Millisecond
+	t.Cleanup(func() { PlayLosQueryEvery = prev })
+	target := unitGUID(3)
+	var asks []string
+	sc.onSay = func(text string) {
+		switch {
+		case strings.HasPrefix(text, ".tb los "):
+			asks = append(asks, text)
+			sc.say(text)
+		case text == ".bot attack Bottank":
+			sc.sys("TortoiseBots: attack Bottank: ok attacking your selected unit")
+		}
+	}
+	st := newPlayServerSight(s)
+	if in, _, known := st.TankSees("Bottwo", target); known || in {
+		t.Fatalf("the said-aloud answer = (%v, %v); want unknown", in, known)
+	}
+	if got := st.Unsupported(); got != "said-aloud" {
+		t.Fatalf("Unsupported() = %q; want said-aloud", got)
+	}
+	if s.gmStop != nil {
+		t.Fatalf("the sight echo tripped the say-echo guard: %v", s.gmStop)
+	}
+	if len(asks) != 1 {
+		t.Fatalf("sent %d sight line(s), want 1", len(asks))
+	}
+	// The rest of the run asks the module nothing more for sight.
+	if in, _, known := st.PointSees(driver.Vec3{1, 2, 3}, target); known || in {
+		t.Fatalf("a later sight query = (%v, %v); want unknown", in, known)
+	}
+	if len(asks) != 1 {
+		t.Fatalf("sent %d sight line(s); want no query after the module said the query aloud", len(asks))
+	}
+	// And the next order is sent: the echo is no command fall-through.
+	if _, err := newPlayOwner(s).Attack(context.Background(), "Bottank"); err != nil {
+		t.Fatalf("the order after the said-aloud sight query: %v", err)
+	}
+	says := 0
+	for _, core := range sc.cores() {
+		if core == wire.CMSGChatMessageSay {
+			says++
+		}
+	}
+	if says != 2 {
+		t.Fatalf("%d say line(s) sent, want the sight query and the order", says)
+	}
+	// The next run on the same session starts clean: the memo and the lines are the run's, so it asks the module
+	// again and reads its answer instead of inheriting the first run's said-aloud state.
+	asks = nil
+	sc.onSay = func(text string) {
+		if !strings.HasPrefix(text, ".tb los ") {
+			return
+		}
+		asks = append(asks, text)
+		sc.sys(losAnswer(text, "los a=Bottwo b=Bael%27Gar%20the%20Bound map=389 los=1 dist=17.4 same_map=1 in_world=1"))
+	}
+	second := newPlayPorts(context.Background(), s).ServerSight
+	if in, dist, known := second.TankSees("Bottwo", target); !in || !known || dist != 17.4 {
+		t.Fatalf("the next run's sight query = (%v, %v, %v); want the module's answer", in, dist, known)
+	}
+	if len(asks) != 1 {
+		t.Fatalf("the next run sent %d sight line(s), want 1", len(asks))
+	}
+}
+
+// TestPlayServerSightUnrelatedSayStillStops: a self say that is not a sight line this run sent is still the guard's
+// own case (the account's commands fall through as chat): the guard stops, and no order goes out.
+func TestPlayServerSightUnrelatedSayStillStops(t *testing.T) {
+	s, sc := newPlaySession(t)
+	sc.say(".bot who")
+	select {
+	case ev := <-s.events:
+		if err := s.handle(context.Background(), ev); err != nil {
+			t.Fatalf("the say line: %v", err)
+		}
+	default:
+		t.Fatal("the say line was not queued")
+	}
+	if s.gmStop == nil {
+		t.Fatal("an unrelated say line of a command did not trip the guard")
+	}
+	if _, err := newPlayOwner(s).Attack(context.Background(), "Bottank"); err == nil {
+		t.Fatal("an order was sent after the guard stopped the channel")
+	}
+	if n := sc.count(wire.CMSGChatMessageSay); n != 0 {
+		t.Fatalf("%d say line(s) sent; want none after the guard stopped the channel", n)
 	}
 }

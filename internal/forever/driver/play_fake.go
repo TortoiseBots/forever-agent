@@ -215,6 +215,10 @@ type PlayFake struct {
 	SrvUnknown bool
 	SrvGone    map[wire.GUID]bool
 	SrvQueries []string
+	// SrvUnsupported, when set, is the module's reason for answering no sight query at all, as the session's port
+	// reports it once ("said-aloud" when the query came back as the player's own say, "no-command" for a build
+	// without it); every answer is unknown and the run keeps its older flow.
+	SrvUnsupported string
 	// WhisperOnce scripts the live module's one whisper for a mark it cannot find: the order is still refused, but the
 	// Refusals count stands at one, as it did live (three orders, one whisper, 2026-11-24).
 	WhisperOnce bool
@@ -773,6 +777,9 @@ func (f *PlayFake) PointSees(at Vec3, target wire.GUID) (in bool, dist float64, 
 	d := dist3(at, u.Pos)
 	return f.SrvSight(at, u.Pos) && d <= PlayModuleSightYd, d, true
 }
+
+// Unsupported is the ServerSight port's reason for answering no sight query: "" while the module answers.
+func (f *PlayFake) Unsupported() string { return f.SrvUnsupported }
 
 // Summon is `.bot summon`: the bot moves to the agent's map and side.
 func (m *PlayModule) Summon(ctx context.Context, name string) (botcmd.Reply, error) {

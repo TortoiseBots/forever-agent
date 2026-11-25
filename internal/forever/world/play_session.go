@@ -78,6 +78,9 @@ func playPortErr(err error) error {
 // newPlayPorts binds one session to the player run's six ports. ctx is the run's own context: the group commands
 // and the death calls take none in the ports' signatures, so they run on it.
 func newPlayPorts(ctx context.Context, s *session) driver.PlayPorts {
+	// The sight memo is the run's, like the port's own unsupported flag: a serve hosts one run after another on the
+	// same session, and one run's said-aloud answer (or the lines it sent) is not the next run's.
+	s.sightSent, s.sightSaid = nil, false
 	return driver.PlayPorts{
 		Owner:  newPlayOwner(s),
 		Group:  &playGroup{ctx: ctx, s: s, zoneMap: map[uint16]uint32{}},
@@ -133,17 +136,21 @@ func (w playSight) InSight(from, to driver.Vec3) (in, known bool) {
 // shared reader's, the same ones the daemon's los method uses.
 //
 // A reply the module did not give — no line in the quiet window, a say echo (the account may not ask), a module
-// without the command — is unknown, and the pull keeps its older flow. A module that cannot find the unit (it left
-// the view) answered the question: that is a NO, so the pull's pick skips that member and asks about the next one
-// instead of turning the server's sight off. The module allows five queries a second and one more every 200 ms per
-// caller, so two queries are never sent closer than PlayLosQueryEvery, and a rate refusal is retried once.
+// without the command — is unknown, and the pull keeps its older flow. A say echo and a missing command are the same
+// answer for the rest of the run: the module cannot be asked, so the port says why once and every later pull reads
+// unknown at once. A module that cannot find the unit (it left the view) answered the question: that is a NO, so the
+// pull's pick skips that member and asks about the next one instead of turning the server's sight off. The module
+// allows five queries a second and one more every 200 ms per caller, so two queries are never sent closer than
+// PlayLosQueryEvery, and a rate refusal is retried once.
 type playServerSight struct {
 	s       *session
 	last    time.Time
 	spacing time.Duration
-	// unsupported says the module already answered that it has no sight command (an older build): it is asked no more
-	// for the rest of the run, so each later pull and refusal does not pay a quiet wait for the same answer.
+	// unsupported says the module answers no sight query at all (an older build without the command, or an account
+	// the core says the line aloud for): it is asked no more for the rest of the run, so each later pull and refusal
+	// does not pay a quiet wait for the same answer. reason is what the port reports to the run's one event.
 	unsupported bool
+	reason      string
 }
 
 var _ driver.ServerSight = (*playServerSight)(nil)
@@ -179,14 +186,25 @@ func (w *playServerSight) ask(ctx context.Context, a, b string) (in bool, dist f
 	if w.unsupported {
 		return false, 0, false
 	}
+	// A sight line the feed saw said aloud (it arrived after the call's own window) is the same answer: the module
+	// does not answer sight for this account, and the run asks nothing more.
+	if w.s.sightSaid {
+		w.stop("said-aloud")
+		return false, 0, false
+	}
 	for attempt := 0; ; attempt++ {
 		if err := w.rate(ctx); err != nil {
 			return false, 0, false
 		}
 		rep, err := w.los(ctx, a, b)
 		if err != nil {
-			if errors.Is(err, tbcmd.ErrLOSUnsupported) {
-				w.unsupported = true
+			switch {
+			case errors.Is(err, tbcmd.ErrLOSUnsupported):
+				w.stop("no-command")
+			case errors.Is(err, command.ErrNoPermission):
+				// The line came back as this character's own say chat: a player account the module does not answer
+				// sight for. It is remembered like a build without the command, and the pull keeps its older flow.
+				w.stop("said-aloud")
 			}
 			return false, 0, false
 		}
@@ -198,6 +216,18 @@ func (w *playServerSight) ask(ctx context.Context, a, b string) (in bool, dist f
 		}
 	}
 }
+
+// stop remembers that the module answers no sight query at all, with the reason the run records once.
+func (w *playServerSight) stop(reason string) {
+	w.unsupported = true
+	if w.reason == "" {
+		w.reason = reason
+	}
+}
+
+// Unsupported is why the module answers no sight query: "" while it answers, "said-aloud" when the line came back as
+// the caller's own say chat, "no-command" when the build has no sight command.
+func (w *playServerSight) Unsupported() string { return w.reason }
 
 // los is one `.tb los` call over the player run's channel.
 func (w *playServerSight) los(ctx context.Context, a, b string) (tbcmd.LOSReport, error) {
@@ -237,10 +267,35 @@ func (w *playServerSight) rate(ctx context.Context) error {
 
 // --- Owner: bot-commands v1 over the command channel ---
 
+// playSightEchoes is how many sight query lines the session keeps for the feed's echo check: a query and its echo
+// are one round trip apart, and a late echo of an earlier query must not be read as a command falling through.
+const playSightEchoes = 8
+
+// noteSightSent remembers one sight line the port is about to send, so a self say of it is read as the module's
+// answer (the line said aloud), not as a command falling through.
+func (s *session) noteSightSent(line string) {
+	s.sightSent = append(s.sightSent, strings.TrimSpace(line))
+	if n := len(s.sightSent); n > playSightEchoes {
+		s.sightSent = s.sightSent[n-playSightEchoes:]
+	}
+}
+
+// sightLineSaid reports whether a chat line is one of the sight query lines this run sent.
+func (s *session) sightLineSaid(text string) bool {
+	t := strings.TrimSpace(text)
+	for _, sent := range s.sightSent {
+		if t == sent {
+			return true
+		}
+	}
+	return false
+}
+
 // playLink is the player run's command transport: the session's own pump, and a send that admits one thing, a line
 // of the contract (`.bot <verb> ...`). A player is not a GM, so the GM guard is not asked for; the say-echo watch is
 // still on (feedCommand), and a line the server said aloud as chat stops every later send the way it does for the GM
-// channel.
+// channel, except the sight query's own echo: that is the module's answer for the account, not a command falling
+// through, and feedCommand reads it as such.
 type playLink struct {
 	cmdLink
 }
@@ -311,7 +366,14 @@ func (l *playLink) SendCommand(ctx context.Context, text string) error {
 	if !playLineAllowed(text) {
 		return fmt.Errorf("world: a player run sends only bot-commands v1 lines, not %q", chat.Sanitise(text, 64))
 	}
-	return l.s.SendCommandCtx(ctx, text)
+	if err := l.s.SendCommandCtx(ctx, text); err != nil {
+		return err
+	}
+	// The line left: remember it, so the feed can tell the module's say echo of it from a command said aloud.
+	if playSightQuery(text) {
+		l.s.noteSightSent(text)
+	}
+	return nil
 }
 
 // playOwner is the Owner port over botcmd.Client on the session's command channel.

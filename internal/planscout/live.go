@@ -57,6 +57,11 @@ type WalkResult struct {
 	Skipped string
 	// Length is the module's path length at the walk's start (the walk wait's bound).
 	Length float64
+	// Partial is set when the server planned no full route (walk_path answers no full route): the walk never starts,
+	// Stop is where the session stood when the answer came, and Reached is its ground distance from the walk's origin.
+	Partial bool
+	// Reached is how far the session stood from the walk's origin when a partial answer ended it.
+	Reached float64
 }
 
 // ScoutCfg is the live server's run-leader rules (TBM:SCOUT_CFG).
@@ -655,6 +660,14 @@ func liveWalkCheck(st *StepResult, wk WalkResult, anchorHop bool, anchor dungeon
 	if wk.Skipped != "" {
 		c.Verdict = VerdictSkip
 		c.Reason = wk.Skipped
+		return c
+	}
+	if wk.Partial {
+		// The server planned no full route, so the walk never started: this is not a measured shortfall, and the
+		// pass moved on to the next stand. The distance the session reached is kept for the report.
+		c.Verdict = VerdictSkip
+		c.Reason = fmt.Sprintf("walk_path had no full route: the walk did not start (%.1f yd from its origin)", wk.Reached)
+		c.Data = map[string]float64{"reached_yd": wk.Reached}
 		return c
 	}
 	point := dungeon.Point{X: st.X, Y: st.Y, Z: st.Z}

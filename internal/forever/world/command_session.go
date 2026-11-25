@@ -117,19 +117,24 @@ func (l *cmdLink) Pump(ctx context.Context, feed func(chat.Line), done func() bo
 // module's markers, refusals, tokens and order acknowledgements) and makes its own display copy; the chat log gets
 // a separately sanitised copy afterwards. It also watches every self say line: a command text said aloud (now, between runs, or long
 // after the probe) means the account's commands fall through as chat, so the guard is reset and every later send
-// is refused.
+// is refused. The one exception is a sight query line this run sent: the core saying it aloud is the module's answer
+// that it does not answer sight for this account (a player run), so the memo is set and the guard stays off.
 func (s *session) feedCommand(line chat.Line) {
 	if line.Type == chat.TypeWhisper {
 		s.fbRememberWhisper(line)
 		s.noteSightRefusal(line)
 	}
 	if line.Type == chat.TypeSay && s.isSelf(line) && command.IsCommandText(line.Text) {
-		s.gmConfirmed = false
-		if s.report != nil {
-			s.report.GMConfirmed = false
-		}
-		if s.gmStop == nil {
-			s.gmStop = fmt.Errorf("%w (the server said %q as ordinary say chat)", command.ErrNoPermission, chat.Sanitise(line.Text, command.MaxLineBytes))
+		if s.sightLineSaid(line.Text) {
+			s.sightSaid = true
+		} else {
+			s.gmConfirmed = false
+			if s.report != nil {
+				s.report.GMConfirmed = false
+			}
+			if s.gmStop == nil {
+				s.gmStop = fmt.Errorf("%w (the server said %q as ordinary say chat)", command.ErrNoPermission, chat.Sanitise(line.Text, command.MaxLineBytes))
+			}
 		}
 	}
 	if s.cmdFeed == nil && len(s.cmdTaps) == 0 {
