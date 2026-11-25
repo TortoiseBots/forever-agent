@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>forever-agent 3D view</title>
+<link rel="stylesheet" href="view3d.css">
+</head>
+<body>
+<header id="bar">
+  <a class="back" href="/" title="Back to the dashboard">Dashboard</a>
+  <h1>3D view</h1>
+  <label>Mode
+    <select id="mode" aria-label="Live from a serve, or a recorded run">
+      <option value="live">Live</option>
+      <option value="replay">Replay</option>
+    </select>
+  </label>
+  <span id="agentbox"><label>Agent <select id="agent" aria-label="Which serve slot to follow"></select></label></span>
+  <span id="recordbox" hidden><label>Record <select id="record" aria-label="Which recorded run to replay"></select></label></span>
+  <span id="timelinebox" hidden>
+    <button id="play" type="button">Pause</button>
+    <input id="timeline" type="range" min="0" max="0" step="0.05" value="0" aria-label="Timeline">
+    <label>Speed <select id="speed" aria-label="Playback speed">
+      <option value="0.5">0.5x</option>
+      <option value="1" selected>1x</option>
+      <option value="2">2x</option>
+      <option value="4">4x</option>
+      <option value="8">8x</option>
+    </select></label>
+    <span id="clock" class="muted">0.0 / 0.0 s</span>
+  </span>
+  <span class="spacer"></span>
+  <label class="check"><input id="follow" type="checkbox" checked> Follow</label>
+  <span id="status" class="v3d-status"></span>
+</header>
+<main>
+  <canvas id="view"></canvas>
+  <div id="overlay" class="v3d-overlay" aria-live="polite"></div>
+</main>
+<footer class="muted">
+  Drag to orbit, wheel to zoom, right-drag to pan. Stage 1 draws the walkable surface: no walls and no textures yet.
+  The controls, the limits and the data format are in the manual: <code>docs/manual/bots-and-raids/3d-view.md</code> and
+  <code>docs/manual/developers/view3d-data-format.md</code>.
+</footer>
+<script src="core.js"></script>
+<script src="overlay.js"></script>
+<script type="module" src="view3d.js"></script>
+</body>
+</html>

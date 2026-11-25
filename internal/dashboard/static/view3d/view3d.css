@@ -1,0 +1,83 @@
+/* The 3D view's page: the canvas, the bar above it and the HTML overlay that sits over the canvas. Colours follow
+   the dashboard's dark reading surface; nothing here needs a network font or an image. */
+:root {
+  color-scheme: dark;
+  --bg: #0c1116;
+  --panel: rgba(14, 20, 26, 0.86);
+  --fg: #e6edf3;
+  --muted: #93a1ad;
+  --border: #2b3a46;
+  --accent: #ffd257;
+  --hp: #57d98a;
+  --power: #5fb3ff;
+  --cast: #f0a85e;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  display: flex; flex-direction: column;
+  background: var(--bg); color: var(--fg);
+  font: 14px/1.35 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+#bar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 8px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+}
+#bar h1 { font-size: 15px; margin: 0 8px 0 0; font-weight: 600; }
+#bar label { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+#bar select, #bar button, #bar input[type="range"] {
+  font: inherit; color: var(--fg); background: #16202a; border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px;
+}
+#bar button { cursor: pointer; }
+#bar input[type="range"] { width: 180px; padding: 0; }
+#timelinebox { display: inline-flex; align-items: center; gap: 8px; }
+.back { color: var(--accent); text-decoration: none; border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px; }
+.spacer { flex: 1; }
+.muted { color: var(--muted); }
+.check { cursor: pointer; }
+.v3d-status { min-width: 160px; color: var(--muted); }
+.v3d-status.bad { color: #ff8a8a; }
+
+main { position: relative; flex: 1; min-height: 0; }
+#view { display: block; width: 100%; height: 100%; touch-action: none; }
+
+footer { padding: 6px 12px; border-top: 1px solid var(--border); font-size: 12px; }
+footer code { color: var(--accent); }
+
+/* The overlay: four panels over the canvas. The pointer goes through them: the canvas owns the mouse. */
+.v3d-overlay {
+  position: absolute; inset: 0; pointer-events: none;
+  display: grid; gap: 10px; padding: 10px;
+  grid-template-columns: minmax(220px, 300px) 1fr minmax(220px, 300px);
+  grid-template-rows: auto 1fr;
+  grid-template-areas: "frames . chat" "frames . events";
+}
+.v3d-frames { grid-area: frames; }
+.v3d-frame, .v3d-cast, .v3d-lines {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 7px 9px;
+  align-self: start;
+}
+.v3d-frame { margin-bottom: 8px; }
+.v3d-overlay > :nth-child(2) { grid-area: chat; }
+.v3d-overlay > :nth-child(3) { grid-area: events; }
+.v3d-frame-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.v3d-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.v3d-frame-title { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+.v3d-small { font-size: 12px; }
+.v3d-bar { height: 7px; margin-top: 4px; background: #1b2733; border-radius: 4px; overflow: hidden; }
+.v3d-bar > i { display: block; height: 100%; width: 0; background: var(--hp); }
+.v3d-power > i { background: var(--power); }
+.v3d-castbar > i { background: var(--cast); }
+.v3d-frame.v3d-agent .v3d-name { color: var(--accent); }
+.v3d-frame.v3d-hostile .v3d-name { color: #ff9d9d; }
+.v3d-lines-title { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 3px; }
+.v3d-lines ol { list-style: none; margin: 0; padding: 0; max-height: 150px; overflow: hidden; }
+.v3d-lines li { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.v3d-lines li.v3d-chat { color: var(--power); }
+.v3d-lines li.v3d-death, .v3d-lines li.v3d-error { color: #ff8a8a; }
+.v3d-cast { margin-top: 8px; }
+@media (max-width: 900px) {
+  .v3d-overlay { grid-template-columns: 1fr; grid-template-rows: auto; grid-template-areas: "frames" "chat" "events"; }
+
+}

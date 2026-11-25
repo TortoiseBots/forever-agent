@@ -97,6 +97,7 @@ is the same list with the details.
 | Vendor, quest, trainer, flight path, mail, loot and battleground act steps | works against the scripted world; a live run is the next step for each |
 | `forever dungeon-play`, `forever dungeon-run --dry`, `forever dungeon-watch`, `forever raid-watch` | works against the scripted world; the live modes are wired, no live dungeon or raid run yet |
 | `forever dash-bots` roster dashboard and watch | built; no live run yet |
+| The dashboard's 3D view (stage 1: the walkable mesh with markers, live and replay) | built; exercised against a fake serve and a synthetic mesh |
 | The trials bench (`forever-agent trials`) | provisions live and drives its situations |
 | Navmesh planning (`path_to`, `walk_path`, `forever path-check`) | works offline on a Forever mmaps folder; needs a cgo build |
 

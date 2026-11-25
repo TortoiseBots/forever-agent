@@ -10,6 +10,7 @@ rules, and the practical steps for a new command or daemon method.
 * [Package map](package-map.md) - Every Go package in forever-agent with one line saying what it is for.
 * [Wire and packets](wire-and-packets.md) - How a byte on the world socket becomes a typed message in the agent, where a parser belongs, and the rules every parser follows.
 * [Contracts](contracts.md) - The versioned agreements between forever-agent and a bot module, where they live, and how each side proves it speaks them.
+* [The 3D view data format](view3d-data-format.md) - The four dashboard routes that feed the 3D view, the scene and frame JSON they answer, the limits each route enforces, and how another dashboard embeds the viewer.
 
 # How to change it
 

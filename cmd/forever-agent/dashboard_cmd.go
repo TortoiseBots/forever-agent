@@ -18,7 +18,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
-const dashboardUsage = "usage: forever-agent dashboard [--listen 127.0.0.1:8790] [--allow-host HOST[,HOST]] [--agents auto|<rpc,...>] [--tests-dir DIR] [--traces-dir DIR] [--plans-dir DIR[,DIR]] [--minimap-dir DIR] [--embed-from ORIGIN[,ORIGIN]] [--config-dir DIR] [--mmaps-dir DIR [--mmaps-format turtle|forever] [--parent MAP=PARENT[,MAP=PARENT]]]\n" +
+const dashboardUsage = "usage: forever-agent dashboard [--listen 127.0.0.1:8790] [--allow-host HOST[,HOST]] [--agents auto|<rpc,...>] [--tests-dir DIR] [--traces-dir DIR] [--plans-dir DIR[,DIR]] [--minimap-dir DIR] [--records-dir DIR] [--embed-from ORIGIN[,ORIGIN]] [--config-dir DIR] [--mmaps-dir DIR [--mmaps-format turtle|forever] [--parent MAP=PARENT[,MAP=PARENT]]]\n" +
 	"                          [--edit [--edit-dir DIR] [--edit-source DIR] [--edit-tokens FILE] [--edit-allow-default-dir FILE[,FILE]] [--edit-trust-local [--edit-trust-label LABEL]]]\n" +
 	"                          [--control [--control-tokens FILE] [--control-trust-local [--control-trust-label LABEL]] [--control-log FILE]]\n" +
 	"  serves a read-only live page of the running agents (README \"Live dashboard\"); with --edit or --control the page can also write.\n" +
@@ -46,6 +46,7 @@ func dashboardCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	tests := fs.String("tests-dir", filepath.Join(home, "forever-agent", "tests"), "the only folder whose files the page serves (run traces and reports)")
 	traces := fs.String("traces-dir", filepath.Join(home, "forever-agent", "traces"), "where the agents write run traces (read for orders and the binary SHA, never served)")
 	plans := fs.String("plans-dir", filepath.Join(home, "forever-agent", "dungeons"), "folder(s) with the dungeon plan files, comma separated")
+	records := fs.String("records-dir", filepath.Join(home, "forever-agent", "tests"), "folder of run record folders the 3D view replays (one folder per run, with its trace .jsonl); every read stays inside it")
 	minimaps := fs.String("minimap-dir", filepath.Join(home, "forever-agent-minimaps"), "folder with the map images `forever-agent minimap-extract` wrote (<map>.png, <map>.json); the run map draws over the image of its map id when there is one")
 	embed := fs.String("embed-from", "", "extra origins (http://host:port, comma separated) that may show this page in a frame; loopback pages always may")
 	edit := fs.Bool("edit", false, "turn on the route editor: POST /api/edit/<plan> with the editing token writes a navmesh-checked version of a plan's route into --edit-dir (off: the page is GET/HEAD only)")
@@ -133,7 +134,7 @@ func dashboardCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	// A Forever slot's live map (map_snapshot, drawn by the daemon) is polled by the poller itself: every 5 s, never
 	// under 2 s, under a 10 s bound (internal/dashboard/live_map.go), so no flag is needed here.
-	p := dashboard.NewPoller(dashboard.Options{ConfigDir: expandHome(*cfgDir), Agents: *agents, TestsDir: testsDir, TracesDir: expandHome(*traces), PlansDirs: planDirs, MinimapDir: minimapDir(expandHome(*minimaps), stderr)})
+	p := dashboard.NewPoller(dashboard.Options{ConfigDir: expandHome(*cfgDir), Agents: *agents, TestsDir: testsDir, TracesDir: expandHome(*traces), PlansDirs: planDirs, MinimapDir: minimapDir(expandHome(*minimaps), stderr), RecordsDir: expandHome(*records)})
 	var editor *dashboard.Editor
 	if *editMmaps != "" && !*edit { // the real route needs the navmesh, not the editor
 		mm := expandHome(*editMmaps)
@@ -144,6 +145,13 @@ func dashboardCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		}
 		defer planner.Close()
 		p.SetNavmesh(dashNav(planner, format), mm)
+		scenePlanner, err := openDashNav(mm, format, parents)
+		if err != nil {
+			fmt.Fprintln(stderr, "dashboard:", err)
+			return exitUsage
+		}
+		defer scenePlanner.Close()
+		p.SetSceneNavmesh(scenePlanner, dashNavFormatName(format))
 		fmt.Fprintf(stderr, "dashboard: the plan view draws the real route on the %s navmesh in %s\n", dashNavFormatName(format), mm)
 	}
 	if *trustLocal && !*edit {
@@ -161,6 +169,13 @@ func dashboardCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			return exitUsage
 		}
 		defer planner.Close()
+		scenePlanner, err := openDashNav(expandHome(*editMmaps), format, parents)
+		if err != nil {
+			fmt.Fprintln(stderr, "dashboard:", err)
+			return exitUsage
+		}
+		defer scenePlanner.Close()
+		p.SetSceneNavmesh(scenePlanner, dashNavFormatName(format))
 		editor = ed
 		if *trustLocal {
 			peers, ignored := dashboard.TrustPeers(allow)

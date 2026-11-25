@@ -61,6 +61,7 @@ When you want to drive a character from a script, read the daemon area; for a du
 * [forever raid-autopilot](bots-and-raids/raid-autopilot.md) - Keep the Forever raids of a walk folder running and restarting without a person watching each one.
 * [Battlegrounds](bots-and-raids/battlegrounds.md) - Queue a character for Warsong Gulch or Arathi Basin with the scripted act steps, or watch a whole match and read its report card.
 * [fleet](bots-and-raids/fleet.md) - Keep several Forever daemons online at once, one per account, from a single supervisor.
+* [Watch the agent in 3D](bots-and-raids/3d-view.md) - Open the dashboard's 3D view, follow a running serve or replay a recorded run, understand the markers and the camera, and know what stage 1 does not draw yet.
 * [Watching bots on a dashboard](bots-and-raids/dashboard.md) - Read a server's bot roster dashboard, use the agent's live page with its Positions panel, and see why replaying a recording is Turtle-only.
 
 # Testing
@@ -79,6 +80,7 @@ When you want to drive a character from a script, read the daemon area; for a du
 * [Architecture](developers/architecture.md) - The layers forever-agent is built from, from a command line down to the world socket, and which package holds each layer.
 * [Package map](developers/package-map.md) - Every Go package in forever-agent with one line saying what it is for.
 * [Contracts](developers/contracts.md) - The versioned agreements between forever-agent and a bot module, where they live, and how each side proves it speaks them.
+* [The 3D view data format](developers/view3d-data-format.md) - The four dashboard routes that feed the 3D view, the scene and frame JSON they answer, the limits each route enforces, and how another dashboard embeds the viewer.
 * [Adding a command](developers/adding-a-command.md) - How to add a top-level or subcommand to the forever-agent CLI, with the help line, the scope, the exit codes and the tests it must pass.
 * [Adding a daemon method](developers/adding-a-daemon-method.md) - How to add a method to the forever serve daemon, from the registration line to the test and the JSON-RPC call that reaches it.
 * [Contributing](developers/contributing.md) - The rules and checks a change to forever-agent must pass before it is merged.

@@ -65,6 +65,7 @@ a scripted (fake) world. The long development notes are under `docs/forever/`.
 | `forever dungeon-watch` (watch a module-led run) | works against the scripted world; the live mode is wired but has not been run |
 | `forever raid-watch` (the same over a raid plan) | works against the scripted world; no live raid run yet |
 | `forever dash-bots` (roster dashboard client and watch) | client and watch built; no live run yet |
+| The dashboard's 3D view (stage 1: the walkable mesh with markers, live and replay) | built; exercised against a fake serve and a synthetic mesh |
 | Trials bench (`trials run` and its situations) | provisions live and drives the situations; see the testing section |
 | Navmesh planning (`path_to`, `walk_path`, `forever path-check`) | works offline on a Forever mmaps folder; needs a cgo build |
 

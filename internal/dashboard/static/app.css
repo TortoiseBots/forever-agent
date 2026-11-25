@@ -392,3 +392,7 @@ button.ctl:disabled { opacity: .5; cursor: default; }
 .livemap .lmimg[hidden] { display: none; }
 .livemap .lmcap, .livemap .lmlin, .livemap .lmerr, .livemap .lmnotes { font-size: 12px; margin-top: 3px; }
 .livemap .lmlin[hidden], .livemap .lmerr[hidden], .livemap .lmnotes[hidden] { display: none; }
+
+/* The header's link to the 3D view (#250). */
+.view3dlink { color: #ffd257; text-decoration: none; border: 1px solid #2b3a46; border-radius: 6px; padding: 2px 8px; }
+.view3dlink:hover { border-color: #ffd257; }
