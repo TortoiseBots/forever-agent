@@ -401,6 +401,42 @@ func TestRPCBadRepliesExit15(t *testing.T) {
 	}
 }
 
+// TestRPCReadsAReplyOverOneMiB: the old reader stopped at 1 MiB and a map_snapshot with the navmesh background (the
+// issue #228 row) came back as "invalid JSON: unexpected end of JSON input". A 2 MiB reply must parse, and a body past
+// the bound must be refused by name, never cut and mis-parsed.
+func TestRPCReadsAReplyOverOneMiB(t *testing.T) {
+	token := rpcCLITestToken(t)
+	big := strings.Repeat("x", 2<<20)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer "+token {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":1,"result":{"svg":%q}}`, big)
+	}))
+	t.Cleanup(ts.Close)
+	dir := rpcCLITestDir(t, rpcCLITestPort(t, ts), token)
+	code, out, errOut := runCLI("rpc", "--raw", "--timeout", "10s", dir, "status")
+	if code != exitOK {
+		t.Fatalf("a 2 MiB reply: code %d stderr %q", code, errOut)
+	}
+	if !strings.Contains(out, big[:64]) {
+		t.Fatalf("the 2 MiB result did not come back whole (%d bytes)", len(out))
+	}
+	// A reply past the bound is named, not mis-read as broken JSON.
+	oldMax := rpcMaxReply
+	rpcMaxReply = 64
+	defer func() { rpcMaxReply = oldMax }()
+	code, out, errOut = runCLI("rpc", "--timeout", "10s", dir, "status")
+	if code != exitSlotRefused || !strings.Contains(errOut, "larger than the 64-byte bound") {
+		t.Fatalf("an over-bound reply: code %d stdout %q stderr %q", code, out, errOut)
+	}
+	if out != "" {
+		t.Fatalf("stdout %q, want empty", out)
+	}
+}
+
 // A non-agent token file is refused before any request, with the fixed
 // line and exit 15, and the content is never printed; a valid token the
 // server echoes is still redacted. Mutation: skipping the shape check

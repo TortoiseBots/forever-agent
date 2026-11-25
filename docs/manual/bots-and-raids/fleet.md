@@ -12,6 +12,8 @@ sources:
     resource: cmd/forever-agent/fleet_forever.go
   - id: main
     resource: cmd/forever-agent/main.go
+  - id: bnet
+    resource: internal/forever/bnet/bnet.go
 ---
 
 `fleet --forever` starts one `forever serve` daemon per member of a fleet file,
@@ -80,11 +82,17 @@ line.
 | `dir` | The slot-style folder the serve writes `slot.json`, its pid file and its token into. |
 | `listen` | The daemon's JSON-RPC listen address: loopback, with a fixed port. Its port is also the port the supervisor polls. |
 | `password_file` | The private file the child reads the password from. The password never travels on a command line. |
+| `game_account` | Optional, 1 or more: the game account the login joins, by the join ticket's `#N` (the serve's own `--game-account`). Absent or 0 joins the first listed. |
 
-Every field is required. Accounts, characters, folders and listen ports must all be
+Every field but `game_account` is required. Accounts, characters, folders and listen ports must all be
 distinct — one realmd session per account, and two members on one account kick
 each other out. The file is read strictly: an unknown field (a password typed into
 the JSON, for instance) refuses the whole file.
+
+`game_account` is checked before the fleet starts, because only the login service knows how many game accounts an
+account holds: a member that names none costs one login (no world socket, no character, paced by the same budget),
+and an account that lists several stops the fleet then, with exit 2 and the field to add, instead of a serve
+failing at the world after its login was spent.
 
 # What it does
 

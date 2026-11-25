@@ -101,6 +101,12 @@ func isBankPos(pos items.Pos) bool {
 	return pos.Container >= bank.FirstTabSlot && pos.Container < bank.FirstTabSlot+bank.MaxCharacterTabSlots
 }
 
+// isTabBagSlot reports whether a position is a tab bag slot itself (container 255, slot 63-71): the bag a bank tab's
+// slots live in, not an item inside a tab.
+func isTabBagSlot(pos items.Pos) bool {
+	return pos.Container == items.BackpackContainer && pos.Slot >= bank.FirstTabSlot && pos.Slot < bank.FirstTabSlot+bank.MaxCharacterTabSlots
+}
+
 // bankRows is the bank's contents as the inventory model holds them: the tab bags and the player's bags in slots 63-71,
 // then every item inside them (items.Inventory.Bank).
 func bankRows(inv items.Inventory) []items.Item { return inv.Bank() }

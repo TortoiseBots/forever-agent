@@ -527,7 +527,8 @@ func parseValuesCreate(b *wire.Buffer, objectType uint8, thisIsYou bool) (Info, 
 
 // readObjectFragmentCreate is the CGObject fragment of a create: Object::BuildValuesCreate is virtual, so the
 // object type decides which WriteCreate methods follow (Creature.cpp:4124-4128, Player.cpp:3955-3962,
-// GameObject.cpp:4283-4287, Corpse.cpp:240-244, DynamicObject.cpp:252-256, Item.cpp:1867-1871).
+// GameObject.cpp:4283-4287, Corpse.cpp:240-244, DynamicObject.cpp:252-256, AreaTrigger.cpp:1790-1794,
+// Item.cpp:1867-1871).
 func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owner, unitAll, empath, partyMember, thisIsYou bool) error {
 	info.readObjectCreate(b)
 	switch objectType {
@@ -553,6 +554,8 @@ func readObjectFragmentCreate(b *wire.Buffer, info *Info, objectType uint8, owne
 		return info.readCorpseCreate(b)
 	case TypeDynamicObject:
 		return info.readDynamicObjectCreate(b)
+	case TypeAreaTrigger:
+		return info.readAreaTriggerCreate(b)
 	case TypeItem:
 		return info.readItemCreate(b, owner)
 	case TypeContainer:

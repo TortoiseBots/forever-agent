@@ -91,8 +91,8 @@ Rules:
 with the old agent's walk heartbeat rule:
 
 - it renews the lease **at start** and then **every 5 minutes**; the lease is **15 minutes** long,
-  so a live serve never loses it and a dead one frees its slot within minutes (the lease also
-  records the serve's pid, so the reap frees it at once);
+  so a live serve never loses it and a dead one frees its slot at once (the lease records the
+  serve's pid; see "A dead serve frees its slot at once" below);
 - a failed renewal that may pass (a lock timeout, an I/O error) is logged loudly and retried every
   minute — never silently dropped;
 - an **expired lease refuses the start** with a line naming the slot and its expiry and the two
@@ -109,6 +109,82 @@ The renewal log lines are, per renewal, `serve: lease <server>/<slot> renewed un
 `teardown` remains the command that ends the game presence and frees the lease; the serve itself
 does not release a lease it did not take (the lease's recorded pid makes it stale the moment the
 serve is gone).
+
+### A dead serve frees its slot at once; its `slot.json` keeps a stale lease id
+
+Every renewal stamps the lease with the serve's process: its pid, host, pid namespace and start time
+(the same record a walk's lease carries). A reader on the same host (`lease list`, `lease reap`, a
+`lease acquire` or `slot setup`) sees a pid that is gone or was reused and treats the lease as stale
+at once, so **a serve that dies frees its slot immediately**, not after the 15-minute expiry:
+`lease reap` (and any acquire) can take the slot over the moment the process is gone. This is
+intended; the expiry is the fallback for a holder on another host or one this platform cannot check.
+
+The dead serve's `slot.json` is not rewritten, so it still names the dead serve's lease id while the
+slots file's lease has been taken over (or released) by someone else. That too is intended: the
+manifest is a record of the setup (server, slot, holder, lease id, dir paths), not a claim, and the
+lease file is the truth. The stale manifest is harmless — a serve started from it refuses, and names
+the way out:
+
+- `lease <server>/<slot> is not this slot's any more (held by <holder> since ...)` when the slot was
+  taken over by another holder;
+- `lease <server>/<slot> was re-acquired (the slot.json holds another lease id)` when the same holder
+  re-acquired or the lease was released and taken again;
+- `lease <server>/<slot> is gone` when the lease was only released.
+
+Run `slot setup --forever` again for that dir to record the new lease, or clear the dir and let serve
+write a fresh bare manifest.
+
+### One serve per slot dir
+
+The dir's `slot.json`, token file, pid file and lease are one serve's, so a second `forever serve`
+on the same `--dir` is refused **whatever its `--listen` host and port** would be: the serve takes
+`serve.lock` in the dir for its whole run with a non-blocking exclusive lock (flock). The lock is
+released by the kernel when the process ends, however it ends, so a leftover `serve.lock` never
+blocks a later serve (the file is not removed; the lock, not the file, is the claim). The refusal is
+`another forever serve is already running in <dir> (pid <n>): stop it or serve another --dir` with
+**exit code 15**, before the lease is touched and before anything is written to the server. (A
+second serve with a *different* port on an existing manifest is refused earlier, by the manifest's
+port check, with the same exit code.)
+
+The lock is `flock(2)`, so every Unix build (`serve_lock_unix.go`) has it and a build without it
+(`serve_lock_other.go`, Windows) **refuses `--dir`** with a clear line naming the platform instead of
+serving the dir unlocked — half a rule is not the rule. A serve without `--dir` writes no manifest,
+token file or lease, so it has no dir to exclude and still runs there:
+`one serve per --dir needs a file lock (flock), which this build does not provide: <dir> cannot be
+served here; serve without --dir, or run forever serve on Linux or macOS` with exit 15.
+
+The lock is a **kernel** flock, so a slot dir on a network filesystem is only as good as that
+filesystem's flock: NFSv4 emulates it and a stalled server can block the lock for minutes. The serve
+survives that: its keeper renews under the lease store's lock, the keeper's wait for that lock ends
+with the serve's context (`slots.Store.RenewContext`, a poll of `LOCK_NB`), and the command's wait
+for the keeper is bounded (`serveLeaseStopWait`, 5 s): a renewal stuck in a lock or in a write is
+logged (`serve: the lease keeper did not stop within 5s; the dir stays locked until it does`) and the
+command returns. Keep a slot dir on a local disk when the runs are timed; the flock rules above are
+stated for a local filesystem.
+
+### The lease keeper's lifetime
+
+`lease.keep` returns a done channel, and the command cancels the keeper and waits for it before it
+returns, so no renewal line reaches stdout after the command has returned (a test holds a renewal
+inside its write and requires the command to stay blocked until the write finishes). The wait is
+bounded by `serveLeaseStopWait`: a keeper that cannot leave a write is named in one line and left to
+the process exit rather than holding the command forever. That line goes out on its **own goroutine**:
+the output is a reason the keeper can be stuck (a full pipe), so writing it on the shutdown path could
+block there again and make the bound meaningless. While the keeper is alive the dir stays **locked**:
+the bounded branch hands `serve.lock` to the keeper, which releases it as it ends, so a second serve
+cannot start on the dir and adopt a lease the old keeper could still stamp as its own process. (The
+process exit releases the lock too; the hand-off is what keeps a serve inside a longer-lived process
+honest.) The keeper's own lock wait is the run's context, so the common case (another lease command
+holds the store's lock) ends the keeper at once and needs no bound.
+
+The exit code is chosen **after** the keeper has been joined: a lease lost during the run is recorded
+by then, and it outranks the code the login or the world produced (`serveVerdict`). A supervisor
+therefore never reads a lost lease as a clean stop or as an auth failure.
+
+A renewal refusal is the lease's verdict **whatever the run's context says**: it is recorded and
+reported (exit 13) before the shutdown is taken into account, so a lease lost as the serve is
+cancelled is not reported as a clean stop. Only the error of a lock wait that ended with the run is
+read as the shutdown, and it is neither a loss nor a `renew failed` line.
 
 ### Interaction: `trials run` on a leased serve slot
 

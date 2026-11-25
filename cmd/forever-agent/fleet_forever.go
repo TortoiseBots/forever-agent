@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/bnet"
 	"github.com/pjerra/forever-agent/internal/netutil"
 	"github.com/pjerra/forever-agent/internal/privfile"
 	"github.com/pjerra/forever-agent/internal/slots"
@@ -30,13 +31,17 @@ import (
 // fleetForeverMember is one entry of a `fleet --forever` fleet file: the
 // account, the character, the slot-style dir the serve writes its manifest
 // into, the RPC listen address, and the password file the child reads. The
-// file carries no secret: only paths and names.
+// file carries no secret: only paths and names. GameAccount names the game
+// account the login joins, by the join ticket's #N (the serve's own
+// --game-account); absent or 0 is the first listed (#236 point 3: a
+// Battle.net account with several game accounts needs it).
 type fleetForeverMember struct {
 	Account      string `json:"account"`
 	Character    string `json:"character"`
 	Dir          string `json:"dir"`
 	Listen       string `json:"listen"`
 	PasswordFile string `json:"password_file"`
+	GameAccount  int    `json:"game_account,omitempty"`
 }
 
 type fleetForeverFile struct {
@@ -106,6 +111,9 @@ func loadFleetForever(path string) ([]fleetForeverMember, error) {
 			return nil, fmt.Errorf("fleet: character %q is listed twice", m.Character)
 		}
 		chars[key] = true
+		if m.GameAccount < 0 {
+			return nil, fmt.Errorf("fleet: member %d (%s): game_account is 1 or more (0 or absent joins the first listed)", n, m.Character)
+		}
 	}
 	return f.Members, nil
 }
@@ -118,6 +126,9 @@ func foreverChildArgs(ext live.ServerExt, m fleetForeverMember) []string {
 		"--account", m.Account, "--character", m.Character,
 		"--password-file", m.PasswordFile,
 		"--listen", m.Listen, "--dir", m.Dir,
+	}
+	if m.GameAccount > 0 {
+		args = append(args, "--game-account", strconv.Itoa(m.GameAccount))
 	}
 	if ext.Build != "" && ext.Build != "0" {
 		args = append(args, "--build", ext.Build)
@@ -134,6 +145,78 @@ func fleetReady(state string) bool { return state == "online" }
 // fleetForeverPace is the login pacing between `forever serve` children: one
 // login per 5 s, so the fleet stays under realmd's per-IP login limit.
 const fleetForeverPace = 5 * time.Second
+
+// fleetGameAccounts asks the login service how many game accounts an account lists, by logging in to it (SRP, the
+// RPC logon and the realm join; no world socket, no character). before is bnet's own BeforeAttempt, so every attempt
+// of an unpinned build is booked in the fleet's login budget like any other login. It is a variable so the tests
+// script the answer.
+var fleetGameAccounts = func(ctx context.Context, ext live.ServerExt, m fleetForeverMember, password string,
+	before func(context.Context) error) (int, error) {
+	opts := bnet.Options{
+		RESTAddr: ext.Rest, RPCAddr: ext.RPC, CAFile: ext.CA,
+		Account: m.Account, Password: password, GameAccount: m.GameAccount,
+		BeforeAttempt: before,
+	}
+	if ext.Build != "" && ext.Build != "0" {
+		n, err := strconv.ParseUint(ext.Build, 10, 32)
+		if err != nil {
+			return 0, fmt.Errorf("the slots file's build %q is not a number", ext.Build)
+		}
+		opts.ClientBuild = uint32(n)
+	}
+	res, err := bnet.Login(ctx, opts)
+	if err != nil {
+		return 0, err
+	}
+	return res.GameAccounts, nil
+}
+
+// fleetCheckGameAccounts errors before any serve starts when a member names no game account and its account holds
+// several: the serve would join the first listed and then fail on the character (#236 point 3, the live run's exit 5
+// after a login that was spent for nothing). The count is the login service's, so a member without game_account costs
+// a login, taken through the fleet's shared budget; a member that names one is not probed. The password is read the
+// way the child reads it and never printed.
+func fleetCheckGameAccounts(ctx context.Context, ext live.ServerExt, members []fleetForeverMember, budget *loginBudget,
+	now func() time.Time, stderr io.Writer) error {
+	for i, m := range members {
+		if m.GameAccount != 0 {
+			continue
+		}
+		password, err := servePassword(m.PasswordFile)
+		if err != nil {
+			return fmt.Errorf("member %d (%s): %w", i+1, m.Character, err)
+		}
+		// Each login attempt waits for its turn in the fleet's budget: an unpinned build logs in once per build it
+		// tries, and realmd's per-IP limit counts each one.
+		before := func(ctx context.Context) error {
+			if budget == nil {
+				return nil
+			}
+			at, _ := bookFleetLogin(budget, now())
+			if wait := at.Sub(now()); wait > 0 {
+				fmt.Fprintf(stderr, "fleet: waiting %s to check %s's game accounts\n", wait.Round(time.Second), m.Character)
+				timer := time.NewTimer(wait)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+			return nil
+		}
+		fmt.Fprintf(stderr, "fleet: checking %s's game accounts: no game_account is named\n", m.Character)
+		n, err := fleetGameAccounts(ctx, ext, m, password, before)
+		if err != nil {
+			return fmt.Errorf("member %d (%s): the login: %w", i+1, m.Character, err)
+		}
+		if n > 1 {
+			return fmt.Errorf("member %d (%s): the account has %d game accounts and none is named: name game_account in the fleet file (the world joins the first listed)",
+				i+1, m.Character, n)
+		}
+	}
+	return nil
+}
 
 // fleetForeverCmd is `fleet --forever FILE`: it loads the slots file's
 // `forever` block (the serve's connection flags) and the fleet file, starts
@@ -207,6 +290,15 @@ func fleetForeverCmd(ctx context.Context, fleetPath, slotsPath, server string, o
 	o.budget = budget
 	if o.stagger <= 0 {
 		o.stagger = fleetForeverPace
+	}
+	// Before a single serve starts: a member that names no game account on an account with several fails at the world,
+	// after spending a login, and the fleet only sees exit 5 (#236 point 3).
+	if err := fleetCheckGameAccounts(ctx, ext, members, budget, o.clock, stderr); err != nil {
+		if ctx.Err() != nil {
+			return exitFleet
+		}
+		fmt.Fprintf(stderr, "fleet: %v\n", err)
+		return exitUsage
 	}
 	start := func(m fleetForeverMember, w io.Writer) (fleetChild, error) {
 		return startProcess(exe, foreverChildArgs(ext, m), nil, w)

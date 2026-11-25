@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/tbdash"
@@ -24,18 +25,61 @@ const (
 	DefaultTimeout = 15 * time.Second
 
 	botsPath = "/api/v1/bots"
+	// statusPath carries the same heartbeat this port keeps off the bots answer (#236 point 2): the module's
+	// GET /api/v1/bots is a bare list and its status route holds bots, humans and the state ratios.
+	statusPath = "/api/v1/status"
+	// heartbeatTimeout bounds that optional status read. The roster is the read a watch needs, so a status
+	// route that hangs must cost a fraction of a second per sample, never the caller's request timeout
+	// (15 s by default); a dashboard's status answer is an in-memory snapshot served at its own 2 s cycle,
+	// so half a second is far past a healthy answer.
+	heartbeatTimeout = 500 * time.Millisecond
 )
 
-// Bot kinds and states, as the dashboard's contract names them.
+// serverStatus is the part of GET /api/v1/status the roster reads. The route also carries freshness and tick lag;
+// an unknown key is ignored, so a later field costs nothing. The counts are pointers so a route that answers none of
+// them is no heartbeat (another answer on the same path must not print "0 bot(s), 0 human(s)").
+type serverStatus struct {
+	Bots   *int               `json:"bots"`
+	Humans *int               `json:"humans"`
+	States map[string]float64 `json:"states"`
+}
+
+// heartbeat is the status route's answer as the roster's heartbeat, nil when the answer carries no count.
+func (st serverStatus) heartbeat() *Heartbeat {
+	if st.Bots == nil && st.Humans == nil {
+		return nil
+	}
+	hb := &Heartbeat{}
+	if st.Bots != nil {
+		hb.Bots = *st.Bots
+	}
+	if st.Humans != nil {
+		hb.Humans = *st.Humans
+	}
+	if len(st.States) > 0 {
+		hb.States = st.States
+	}
+	return hb
+}
+
+// Bot kinds and states, as the dashboard's contract names them: the port's macro states (busy, stalled, resting) are
+// the server's own words for a bot in a scripted block, a stalled movement and a rest, and a bot in one of them is
+// still a bot (#236 point 2: the module's BotSnapshot.State names all seven).
 const (
 	KindPool  = "pool"
 	KindHired = "hired"
 
-	StateIdle   = "idle"
-	StateMoving = "moving"
-	StateCombat = "combat"
-	StateDead   = "dead"
+	StateIdle    = "idle"
+	StateMoving  = "moving"
+	StateCombat  = "combat"
+	StateDead    = "dead"
+	StateBusy    = "busy"
+	StateStalled = "stalled"
+	StateResting = "resting"
 )
+
+// botStates is every state a record may carry, for the decoder's message.
+var botStates = []string{StateIdle, StateMoving, StateCombat, StateDead, StateBusy, StateStalled, StateResting}
 
 // Text is a dashboard field that may be a JSON string, a number or null: the port spells
 // identifiers (a guid, a class id, a power type) either way, and an absent optional field is
@@ -277,9 +321,9 @@ func (w botWire) bot() (Bot, error) {
 		return Bot{}, errors.New("state is missing")
 	}
 	switch string(w.State) {
-	case StateIdle, StateMoving, StateCombat, StateDead:
+	case StateIdle, StateMoving, StateCombat, StateDead, StateBusy, StateStalled, StateResting:
 	default:
-		return Bot{}, fmt.Errorf("state %q is not one of %s, %s, %s, %s", string(w.State), StateIdle, StateMoving, StateCombat, StateDead)
+		return Bot{}, fmt.Errorf("state %q is not one of %s", string(w.State), strings.Join(botStates, ", "))
 	}
 	if w.HP == nil {
 		return Bot{}, errors.New("hp is missing")
@@ -383,7 +427,9 @@ func New(base, user string, src tbdash.PasswordSource, opts Options) (*Client, e
 // credentials.
 func (c *Client) Login(ctx context.Context) error { return c.dash.Login(ctx) }
 
-// Roster reads GET /api/v1/bots and decodes it.
+// Roster reads GET /api/v1/bots and decodes it. A dashboard whose bots answer carries no heartbeat is asked
+// GET /api/v1/status for one (#236 point 2: this port keeps the heartbeat off the bots list); a status answer that
+// is missing or cannot be read leaves the roster without a heartbeat, as a dashboard that sends none always did.
 func (c *Client) Roster(ctx context.Context) (*Roster, error) {
 	raw, err := c.dash.GetJSON(ctx, botsPath, nil)
 	if err != nil {
@@ -393,7 +439,27 @@ func (c *Client) Roster(ctx context.Context) (*Roster, error) {
 	if err != nil {
 		return nil, fmt.Errorf("roster: %w", err)
 	}
+	if r.Heartbeat == nil {
+		r.Heartbeat = c.statusHeartbeat(ctx)
+	}
 	return r, nil
+}
+
+// statusHeartbeat reads the heartbeat off GET /api/v1/status. It is best effort: the bots roster is the read that
+// matters, so a dashboard without the route (or a bad answer there) is a roster without a heartbeat. Its read gets
+// heartbeatTimeout, not the client's request timeout, so a hanging status route cannot hold the roster.
+func (c *Client) statusHeartbeat(ctx context.Context) *Heartbeat {
+	ctx, cancel := context.WithTimeout(ctx, heartbeatTimeout)
+	defer cancel()
+	raw, err := c.dash.GetJSON(ctx, statusPath, nil)
+	if err != nil {
+		return nil
+	}
+	var st serverStatus
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return nil
+	}
+	return st.heartbeat()
 }
 
 // RosterSource is one sample of a roster. The watch takes it as a port, so the live watch hands

@@ -406,6 +406,12 @@ func TestBotChecks(t *testing.T) {
 	if r := run(KindPlay, garbled, "Tank"); r.Status != Fail {
 		t.Fatalf("an unreadable reply must not pass: %+v", r)
 	}
+	// A bot's reply that stops after its Player line did not finish: it is cut off, not a bot the account misses,
+	// and the run must not read it as an online bot (KindWatch has no account test to fail on instead).
+	cut := func(c *fakeConsole) { c.rows["tank"] = "Player Tank (GUID: 7)" }
+	if r := run(KindWatch, cut, "Tank"); r.Status != Fail || !strings.Contains(r.Detail, "cut off") || !strings.Contains(r.Detail, "Tank") {
+		t.Fatalf("a cut-off bot reply must be named as one: %+v", r)
+	}
 	if r := run(KindPlay, none); r.Status != Warn && r.Status != OK {
 		t.Fatalf("no bots named: %+v", r)
 	}

@@ -306,9 +306,9 @@ func TestServePromote(t *testing.T) {
 	}
 }
 
-// TestServeAssistant: the leader sets and clears a member's assistant flag (the readback is the member's flag in the
-// roster), a silent server is the no-confirm error, and an unknown name is refused before the packet.
-func TestServeAssistant(t *testing.T) {
+// TestServeAssistantNeedsARaid: the assistant flag is a raid rank (Group.cpp:1758-1762), so a party refuses the call
+// by name before any packet; the raid case is TestServeAssistantInRaid (serve_raid_test.go).
+func TestServeAssistantNeedsARaid(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
 	f.groupNames = []string{"Bottwo"}
@@ -317,40 +317,15 @@ func TestServeAssistant(t *testing.T) {
 	a := startServeDaemon(t, f, steps)
 	awaitGroup(t, a, steps, 2)
 
-	a.mustCall(t, "assistant", map[string]any{"name": "Bottwo"})
-	a.mustCall(t, "assistant", map[string]any{"name": "Bottwo", "clear": true})
-	a.mustFail(t, "assistant", map[string]any{"name": "Nobody"}, -32003, "no member named Nobody")
-
+	a.mustFail(t, "assistant", map[string]any{"name": "Bottwo"}, -32003, "needs a raid: convert_raid first")
 	f.mu.Lock()
-	seen := append([]fakeAssistSeen(nil), f.groupSeenAssistant...)
+	sent := len(f.groupSeenAssistant)
 	f.mu.Unlock()
-	if len(seen) != 2 {
-		t.Fatalf("the fake saw %d CMSG_SET_ASSISTANT_LEADER, want 2 (set, clear): %+v", len(seen), seen)
-	}
-	if !seen[0].Apply || seen[1].Apply {
-		t.Fatalf("the flags were %+v, want apply then clear", seen)
-	}
-	if seen[0].GUID != fakeGroupMemberGUID(0) {
-		t.Fatalf("the packet names %v, want Bottwo", seen[0].GUID)
+	if sent != 0 {
+		t.Fatalf("the party refusal sent %d CMSG_SET_ASSISTANT_LEADER", sent)
 	}
 	a.stop(t)
 	f.wait(t)
-
-	// A server that answers nothing: the flag never comes back, so the call fails.
-	g := newFakeServer(t)
-	g.serveMode = true
-	g.groupNames = []string{"Bottwo"}
-	g.groupSilent = true
-	defer g.close()
-	old := groupConfirmWait
-	groupConfirmWait = 300 * time.Millisecond
-	t.Cleanup(func() { groupConfirmWait = old })
-	steps = &stepLog{}
-	b := startServeDaemon(t, g, steps)
-	awaitGroup(t, b, steps, 2)
-	b.mustFail(t, "assistant", map[string]any{"name": "Bottwo"}, -32003, "did not confirm")
-	b.stop(t)
-	g.wait(t)
 }
 
 // TestServeMarkAndMarks: the mark method sets an icon by name and by guid and reads the icon list back; a moved

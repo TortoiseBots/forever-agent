@@ -29,7 +29,8 @@ InventoryType from Item.
 
 ## The method
 
-`item_info {entries: [1..64 positive ids], wait_ms?}` answers
+`item_info {entry | entries: [1..64 positive ids], wait_ms?}` answers (one entry may be named as `entry`; giving both,
+or neither, is refused)
 `{items: [{item_entry, found, name?, quality?, quality_name?, class?, subclass?,
 inventory_type?, item_level?, required_level?, sell_price?, buy_price?, stackable?,
 bonding?, container_slots?}]}` in the request's order, a repeated entry repeated.

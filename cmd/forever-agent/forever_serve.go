@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/bnet"
@@ -32,6 +33,17 @@ import (
 
 // mapPairs is --parent MAP=PARENT, repeatable.
 type mapPairs map[uint32]uint32
+
+// serveLogin is the login step of `forever serve`: bnet.Login through foreverCommon, with the
+// world-socket build probe. It is a variable so a test can stage the login (like authLogin does for
+// the older commands) and drive the command's own lifetime without realmd.
+var serveLogin = func(ctx context.Context, c *foreverCommon, stdout io.Writer, password string) (*bnet.Result, error) {
+	return c.loginWithPassword(ctx, "forever serve", stdout, password, c.worldAccept(stdout))
+}
+
+// serveWorldEnter is the world half of `forever serve` (world.Enter). A test replaces it with a fake
+// session to exercise the command's lease keeping and its shutdown without a game server.
+var serveWorldEnter = world.Enter
 
 func (m mapPairs) String() string {
 	if len(m) == 0 {
@@ -102,7 +114,7 @@ func serveCheckDir(dir, account, character string, port int) (keep bool, err err
 		}
 		for _, e := range entries {
 			// A crash between the token and the manifest leaves only these.
-			if n := e.Name(); n == "agent.pid" || (strings.HasPrefix(n, "rpc-") && strings.HasSuffix(n, ".token")) {
+			if n := e.Name(); n == "agent.pid" || n == serveLockName || (strings.HasPrefix(n, "rpc-") && strings.HasSuffix(n, ".token")) {
 				continue
 			}
 			return false, fmt.Errorf("%s is not empty and has no slot.json: pick an empty --dir or one made by slot setup --forever (serve never overwrites a foreign dir)", dir)
@@ -299,6 +311,10 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 
 	keepManifest := false
 	var lease *serveLease
+	var releaseDir func()
+	// stopKeeper joins the lease keeper; the lease block below replaces it, and it stays a no-op for
+	// a serve that holds no lease.
+	stopKeeper := func() {}
 	if *dir != "" {
 		if info, err := os.Lstat(*dir); err == nil {
 			if !info.IsDir() {
@@ -322,6 +338,16 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 			fmt.Fprintf(stderr, "forever serve: %v\n", err)
 			return exitUsage
 		}
+		// One serve per dir, whatever its listen address: the dir's manifest, token file and lease
+		// are one serve's. The lock is released by the kernel if this process dies.
+		releaseDir, err = lockServeDir(*dir)
+		if err != nil {
+			fmt.Fprintf(stderr, "forever serve: %v\n", err)
+			return exitSlotRefused
+		}
+		// Released on return, or (below) by the keeper itself when it outlived the bounded shutdown
+		// wait: the dir stays claimed while a keeper that could still write the lease is alive.
+		defer func() { releaseDir() }()
 		lease, err = openServeLease(*dir)
 		if err != nil {
 			fmt.Fprintf(stderr, "forever serve: %v\n", err)
@@ -334,7 +360,32 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 				fmt.Fprintf(stderr, "forever serve: %v\n", err)
 				return exitSlotRefused
 			}
-			lease.keep(ctx, cancel, stdout)
+			// The keeper logs renewals to stdout: the command waits for it before it returns, so no
+			// goroutine writes to an output the caller already owns again. The wait is bounded: a
+			// renewal stuck in a write must not keep a shutdown from returning, and its lock wait
+			// already ends with ctx (slots.Store.RenewContext). stopKeeper runs before any exit code
+			// is chosen (below), so a refusal the keeper already saw is recorded first; the defer is
+			// for the early returns in between, and runs it at most once.
+			keepDone := lease.keep(ctx, cancel, stdout)
+			var stopOnce sync.Once
+			stopKeeper = func() {
+				stopOnce.Do(func() {
+					cancel()
+					select {
+					case <-keepDone:
+					case <-time.After(serveLeaseStopWait):
+						// The keeper may still be inside a lease write. Hand the dir lock to it instead
+						// of returning it: a new serve must not adopt the lease this keeper could still
+						// stamp as this process's. The process exit releases the lock anyway. The line
+						// goes out on its own goroutine: the output is a reason the keeper can be stuck
+						// (a full pipe), so writing it here could defeat the bound.
+						go fmt.Fprintf(stdout, "serve: the lease keeper did not stop within %s; the dir stays locked until it does\n", serveLeaseStopWait)
+						held := releaseDir
+						releaseDir = func() { go func() { <-keepDone; held() }() }
+					}
+				})
+			}
+			defer func() { stopKeeper() }()
 		}
 	}
 	if *tokenFile == "" {
@@ -377,22 +428,21 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	common.beforeAttempt = func(ctx context.Context) error { return gate.enter(ctx, 0) }
 	if create != nil {
 		if code := serveEnsureCharacter(ctx, &common, password, create, stdout, stderr); code != exitOK {
-			return code
+			stopKeeper()
+			return serveVerdict(lease, code)
 		}
 	}
-	result, err := common.loginWithPassword(ctx, "forever serve", stdout, password, common.worldAccept(stdout))
+	result, err := serveLogin(ctx, &common, stdout, password)
 	if err != nil {
 		gate.failed(err)
-		if lease != nil {
-			if _, lost := lease.lostReason(); lost {
-				return exitServeLeaseLost
-			}
-		}
+		// The keeper is joined before the code is chosen: a refusal it already saw must be recorded
+		// before the command decides why it stopped.
+		stopKeeper()
 		if code, isLogin := loginExit(err, stderr); isLogin {
-			return code
+			return serveVerdict(lease, code)
 		}
 		fmt.Fprintf(stderr, "forever serve: %v\n", err)
-		return exitAuth
+		return serveVerdict(lease, exitAuth)
 	}
 	opts := common.withLogin(result, stdout, world.Options{
 		AddonOff: addonOff,
@@ -409,7 +459,7 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 			// A reconnect logs in again: the first login's join ticket is spent when the link drops.
 			Relogin: func(ctx context.Context, o world.Options) (world.Options, error) {
 				return reloginThrough(ctx, gate, o, func(lctx context.Context) (*bnet.Result, error) {
-					return common.loginWithPassword(lctx, "forever serve", stdout, password, common.worldAccept(stdout))
+					return serveLogin(lctx, &common, stdout, password)
 				}, func(r *bnet.Result, o world.Options) world.Options { return common.withLogin(r, stdout, o) })
 			},
 		},
@@ -420,23 +470,19 @@ func foreverServeCmd(ctx context.Context, args []string, stdout, stderr io.Write
 	} else {
 		fmt.Fprintln(stdout, "rpc: authentication off")
 	}
-	report, err := world.Enter(ctx, opts)
-	if lease != nil {
-		// A renewal that found another holder cancelled the run and already logged why; the exit
-		// code says the stop was the lease, not the game or the network.
-		if _, lost := lease.lostReason(); lost {
-			return exitServeLeaseLost
-		}
-	}
+	report, err := serveWorldEnter(ctx, opts)
+	// The keeper is joined before the exit code is chosen: a renewal that found another holder is
+	// the stop the supervisor must see (13), and it must be recorded before the code is picked.
+	stopKeeper()
 	if report != nil {
 		fmt.Fprintf(stdout, "serve: %d server packet(s) in %d opcode(s)\n", reportTotal(report), len(report.Counts))
 	}
 	if err != nil {
 		fmt.Fprintf(stderr, "forever serve: %v\n", err)
-		return exitWorld
+		return serveVerdict(lease, exitWorld)
 	}
 	fmt.Fprintln(stdout, "serve: logged out")
-	return exitOK
+	return serveVerdict(lease, exitOK)
 }
 
 func reportTotal(r *world.Report) int {

@@ -203,6 +203,8 @@ var spellFailures = map[int32]string{
 	137: "target in combat",
 	141: "target not dead",
 	150: "too close",
+	152: "totem category",
+	153: "totems",
 	157: "unit not in front",
 	158: "vision obscured",
 	172: "prevented by mechanic",
@@ -215,6 +217,32 @@ func SpellFailureName(code int32) string {
 		return name
 	}
 	return fmt.Sprintf("spell failure %d", code)
+}
+
+// SpellFailureResult names a SpellCastResult and, for the results whose FailedArg1 the core fills with what the cast
+// lacked, that argument too (FillSpellCastFailedArgs, Spell.cpp:4480-4640): a missing reagent item, totem item
+// (SPELL_FAILED_TOTEMS: a tool the spell needs in the bags, e.g. Pick Lock's Thieves' Tools 5060), totem category or
+// spell focus. Without it a refusal reads as a bare number ("spell failure 153") that names nothing to fix.
+func SpellFailureResult(code, arg1 int32) string {
+	switch code {
+	case 121: // SPELL_FAILED_REAGENTS: arg1 is the item entry, -1 for a currency
+		if arg1 > 0 {
+			return fmt.Sprintf("reagents (needs item %d)", arg1)
+		}
+	case 123: // SPELL_FAILED_REQUIRES_SPELL_FOCUS
+		if arg1 > 0 {
+			return fmt.Sprintf("requires spell focus (needs focus %d)", arg1)
+		}
+	case 152: // SPELL_FAILED_TOTEM_CATEGORY
+		if arg1 > 0 {
+			return fmt.Sprintf("totem category (needs a totem of category %d)", arg1)
+		}
+	case 153: // SPELL_FAILED_TOTEMS: arg1 is the tool item the spell requires
+		if arg1 > 0 {
+			return fmt.Sprintf("totems (needs tool item %d in the bags)", arg1)
+		}
+	}
+	return SpellFailureName(code)
 }
 
 // PowerName names a Powers value (SharedDefines.h:292-310).

@@ -58,7 +58,7 @@ no pending invite it is `no pending group invite`. `leave_group` needs a valid r
 | Method | Parameters | Meaning |
 |---|---|---|
 | `promote` | `name` | Make a member the leader. |
-| `assistant` | `name`, `clear` | Set (or with `clear: true` take away) a member's assistant flag. |
+| `assistant` | `name`, `clear` | Set (or with `clear: true` take away) a member's assistant flag. The flag is a raid rank, so this call takes a raid only. |
 | `loot_method` | `method`, `master`, `threshold` | Set the loot method. |
 | `mark` | `guid` or `name`, `icon` | Put a raid target icon on a unit. |
 | `marks` | none | Read the icons back. |
@@ -66,7 +66,10 @@ no pending invite it is `no pending group invite`. `leave_group` needs a valid r
 
 Only the leader may `promote`, `assistant`, `loot_method` and `disband`; in a party any member may `mark`. These
 calls are refused in a raid (`raid group control is not ported yet`), because the raid ranks differ and the raid
-operations come with the raid runs.
+operations come with the raid runs. The exception is `assistant`: the flag is a raid rank the core sets only in a
+raid and only from the leader, so `assistant` takes a raid and refuses a party with
+`assistant: needs a raid: convert_raid first` (a non-leader reads `assistant: only the leader can (the leader is
+NAME)`).
 
 `loot_method.method` is one of `free-for-all`, `round-robin`, `master-loot`, `group-loot`, `need-before-greed`,
 `personal-loot` (or its number 0-5; the short forms `ffa`, `round`, `master`, `group`, `need`, `personal` are

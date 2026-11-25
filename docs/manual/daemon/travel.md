@@ -16,6 +16,10 @@ sources:
     resource: internal/forever/world/mapchange.go
   - id: map-check
     resource: cmd/forever-agent/forever_map.go
+  - id: serve-trigger
+    resource: internal/forever/world/trigger.go
+  - id: serve-fall
+    resource: internal/forever/world/fall.go
 ---
 
 # What this is
@@ -43,17 +47,20 @@ The core's `.go xyz` line, through the GM command channel.
 | `map` | int | Optional map id (0 to `2147483647`). Without it the line keeps the current map. |
 | `require_ground` | bool | Make an unknown ground an error. The answer still says the character was moved. |
 
-The call waits for the server to move the character and, when the point is above ground the navmesh knows,
-for the fall to land.
+The call waits for the server to move the character. A point above ground the navmesh knows starts a fall, and the
+answer comes when the server's own move is confirmed, at the fall's start (`ground: "falling"`, the flight still
+left in `fall_ms`): the fall goes on flying on every later wait, so a `status` call during it shows the character in
+the air.
 
 | Field | Meaning |
 |---|---|
 | `sent` | The command line sent. |
 | `map`, `x`, `y`, `z` | Where the character stands afterwards. |
 | `fell`, `drop_yd` | A fall was flown, and how far. |
+| `falling`, `fall_ms`, `fall_land_z` | The fall is in the air, the flight this long still to run, and the floor it lands on. |
 | `teleport_seq` | The session's teleport counter. |
 | `z_unknown` | The height is not trustworthy. |
-| `ground` | `standing` (ground within a yard), `landed` (a fall was flown), or `unknown`. |
+| `ground` | `standing` (ground within a yard), `falling` (a fall is in the air), `landed` (a fall was flown), or `unknown`. |
 | `ground_why` | Why the ground is unknown: no navmesh, no floor in reach, a failed query, water, or a far teleport (which starts no fall). |
 
 Teleporting moves only this session's own character, so it needs no `--allow-gm-units`; the session must be
@@ -70,6 +77,29 @@ instance portal or a scripted trigger.
 
 There is no server answer to wait for: check `status.map` afterwards. A map change appears in `event_log` as
 a `session` row whose `data.state` is `map_change`.
+
+# area_trigger_watch
+
+Arms a trigger volume the character's own walking enters, so a portal fires on the step in rather than through an
+`area_trigger` call. The client keeps no table of triggers: it sends `CMSG_AREA_TRIGGER` itself the moment its own
+movement takes the character into an armed volume.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `id` | int | — (required unless `clear`) | Trigger id, above 0. |
+| `map` | int | the current map | Map the volume belongs to. |
+| `x`, `y`, `z` | float | the character's own position | The volume's centre. All three or none: one or two are refused. |
+| `radius` | float | `4` | The volume's radius in yards, over 0 and at most 100. Standing inside a classic entrance sphere (7 yd across) is what the default buys; a walking leg (a 500 ms heartbeat at 7 yd/s) usually samples it. |
+| `clear` | bool | `false` | Remove every armed volume instead of adding one; `id` is not needed then. |
+
+A volume that was not inside the character and is inside now sends the packet once; leaving re-arms it, so each
+crossing sends exactly once. A volume the character already stands in sends at once, and a walk that only cuts
+through a sphere, with both sampled ends outside, is sampled at the path's closest approach and entered from there.
+Arming the same id again moves its volume and keeps its entered state, so a retried call is not a second crossing.
+One session carries at most 32 volumes.
+
+The result is `{"triggers":[{id, map, x, y, z, radius}, ...]}`: the armed volumes after the call, in arming order
+(empty after `clear`). What the trigger did shows on `status.map` and in `event_log`, as for `area_trigger`.
 
 # mount and dismount
 

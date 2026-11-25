@@ -16,12 +16,27 @@ import (
 // vendor page stays below it.
 const serveItemInfoMaxEntries = 64
 
-// serveItemInfoParams is item_info's parameter object. wait_ms is reserved for the
-// method frame D2 brings: this round's fetch is bounded only by the session's own DB
-// deadline, so a non-zero wait_ms is refused rather than silently ignored.
+// serveItemInfoParams is item_info's parameter object. Entry is the single-item form (one entry is one entries list of
+// one); exactly one of Entry and Entries may be given. wait_ms is reserved for the method frame D2 brings: this round's
+// fetch is bounded only by the session's own DB deadline, so a non-zero wait_ms is refused rather than silently ignored.
 type serveItemInfoParams struct {
+	Entry   *int32  `json:"entry,omitempty"`
 	Entries []int32 `json:"entries"`
 	WaitMS  int     `json:"wait_ms,omitempty"`
+}
+
+// entries is the call's id list: entries when given, else the single entry.
+func (p serveItemInfoParams) ids() ([]int32, error) {
+	if p.Entry == nil {
+		return p.Entries, nil
+	}
+	if len(p.Entries) != 0 {
+		return nil, fmt.Errorf("item_info: give entry or entries, not both")
+	}
+	if *p.Entry <= 0 {
+		return nil, fmt.Errorf("item_info: entry %d is not a positive item id", *p.Entry)
+	}
+	return []int32{*p.Entry}, nil
 }
 
 // ServeItemInfo is item_info's result: one row per requested entry, in the
@@ -81,6 +96,11 @@ func registerItemInfoMethods(srv *rpc.Server, st *serveState) {
 // packet goes out; a fetch that fails is an error naming how many entries the
 // server answered, so a caller can see whether a retry is worth it.
 func (s *session) serveItemInfo(p serveItemInfoParams) (ServeItemInfo, error) {
+	entries, err := p.ids()
+	if err != nil {
+		return ServeItemInfo{}, err
+	}
+	p.Entries = entries
 	if n := len(p.Entries); n < 1 || n > serveItemInfoMaxEntries {
 		return ServeItemInfo{}, fmt.Errorf("item_info: needs 1-%d entries, got %d", serveItemInfoMaxEntries, n)
 	}

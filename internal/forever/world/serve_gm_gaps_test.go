@@ -119,57 +119,81 @@ func TestServeTeleportThatNeverArrivesFails(t *testing.T) {
 	f.wait(t)
 }
 
-// TestServeTeleportAboveTheGroundFallsAndLands: with a navmesh whose floor is at 50, a teleport to 30 yd above it
-// is answered after the landing: the fall flew its heartbeats, sent one fall-land, and the answer carries the floor.
-func TestServeTeleportAboveTheGroundFallsAndLands(t *testing.T) {
+// TestServeTeleportAboveTheGroundFallsAndStatusShowsIt: with a navmesh whose floor is at 50, a teleport 200 yd above
+// it answers at the fall's start ("falling", with the floor and the computed flight), status reports the fall
+// while it is in the air, and the fall then lands by itself on the session's own waits: one fall-land packet and the
+// floor as the position. Answering after the landing (the old behaviour) set and cleared the falling state inside one
+// call, so a status poll never saw it (issue #228, row 5).
+func TestServeTeleportAboveTheGroundFallsAndStatusShowsIt(t *testing.T) {
 	dir := navfixture.WriteForeverDirAt(t, 0, []navfixture.Poly{navfixture.Square(1000, 2000, 1008, 2008, 50)}, nil, 1000, 2000)
 	f := newFakeServer(t)
 	f.serveMode = true
-	tele := &[3]float32{1002, 2002, 80}
+	// A 200 yd drop flies for about 5 s, so a slow answer on a loaded runner still lands well after the call returns.
+	tele := &[3]float32{1002, 2002, 250}
 	f.serveGMScript = goScript(tele)
 	defer f.close()
 	a := startServeDaemonWith(t, f, &stepLog{}, dir)
 	waitServeUnits(t, a)
 	var out ServeTeleport
-	start := time.Now()
-	json.Unmarshal(a.mustCall(t, "teleport", map[string]any{"x": 1002, "y": 2002, "z": 80}), &out)
-	if !out.Fell || math.Abs(float64(out.Z)-50) > 0.05 || out.X != 1002 || out.Y != 2002 || math.Abs(float64(out.DropYd)-30) > 0.05 {
-		t.Fatalf("teleport answered %+v", out)
+	json.Unmarshal(a.mustCall(t, "teleport", map[string]any{"x": 1002, "y": 2002, "z": 250}), &out)
+	// The answer is the fall's start, whatever the call's own latency: waiting for the landing would answer "landed"
+	// with the character on the floor.
+	if !out.Fell || !out.Falling || out.Ground != "falling" {
+		t.Fatalf("teleport answered %+v, want a fall in flight", out)
 	}
-	if took := time.Since(start); took < 1500*time.Millisecond {
-		t.Fatalf("the answer came after %v, before the fall's 1.76 s were over", took)
+	if math.Abs(float64(out.FallLandZ)-50) > 0.05 || math.Abs(float64(out.DropYd)-200) > 0.05 || out.FallMS <= 0 {
+		t.Fatalf("the fall's own numbers: %+v", out)
+	}
+	var st ServeStatus
+	json.Unmarshal(a.mustCall(t, "status", nil), &st)
+	if !st.Falling || st.FallMS <= 0 || math.Abs(float64(st.FallLandZ)-50) > 0.05 {
+		t.Fatalf("status during the fall %+v", st)
+	}
+	// The fall lands on the session's own waits: falling goes false, z is the floor, one fall-land went out.
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		json.Unmarshal(a.mustCall(t, "status", nil), &st)
+		if !st.Falling {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if st.Falling {
+		t.Fatal("status still says falling after the flight")
+	}
+	if math.Abs(float64(st.Z)-50) > 0.05 {
+		t.Fatalf("z after the landing %v, want the floor 50", st.Z)
 	}
 	if n := rawCount(f, wire.CMSGMoveFallLand); n != 1 {
 		t.Fatalf("%d fall-land packet(s), want one", n)
 	}
-	if n := rawCount(f, wire.CMSGMoveHeartbeat); n < 3 {
-		t.Fatalf("%d heartbeat(s) in a 1.76 s fall, want the first and two or three on the 500 ms beat", n)
-	}
-	if out.Ground != "landed" || out.ZUnknown {
-		t.Fatalf("the landing was not reported: %+v", out)
+	if n := rawCount(f, wire.CMSGMoveHeartbeat); n < 4 {
+		t.Fatalf("%d heartbeat(s) in a 5 s fall, want the first and the 500 ms beats", n)
 	}
 	// A teleport onto the floor stands, and require_ground accepts it.
 	*tele = [3]float32{1004, 2004, 50}
+	// The struct is reset between answers: a later answer omits the optional fields it did not set (omitempty), and
+	// Unmarshal would otherwise keep the earlier answer's values.
+	out = ServeTeleport{}
 	json.Unmarshal(a.mustCall(t, "teleport", map[string]any{"x": 1004, "y": 2004, "z": 50, "require_ground": true}), &out)
-	if out.Fell || out.Ground != "standing" || out.ZUnknown {
+	if out.Fell || out.Falling || out.Ground != "standing" || out.ZUnknown {
 		t.Fatalf("a teleport onto the floor answered %+v", out)
 	}
-	var st struct {
+	var zs struct {
 		ZUnknown bool `json:"z_unknown"`
 	}
-	json.Unmarshal(a.mustCall(t, "status", nil), &st)
-	if st.ZUnknown {
+	json.Unmarshal(a.mustCall(t, "status", nil), &zs)
+	if zs.ZUnknown {
 		t.Fatal("status.z_unknown stayed set after a checked teleport")
 	}
-	// The raw gm path is done at the landing too, so the call after a `.go xyz` never meets a mover in the air.
-	*tele = [3]float32{1003, 2003, 70}
+	// The raw gm path is still done at the landing, so the call after a `.go xyz` never meets a mover in the air.
+	*tele = [3]float32{1003, 2003, 90}
 	before := rawCount(f, wire.CMSGMoveFallLand)
-	a.mustCall(t, "gm", map[string]any{"text": ".go xyz 1003 2003 70"})
+	a.mustCall(t, "gm", map[string]any{"text": ".go xyz 1003 2003 90"})
 	if rawCount(f, wire.CMSGMoveFallLand) != before+1 {
 		t.Fatal("the raw gm teleport answered before the fall landed")
 	}
 	a.mustCall(t, "walk_to", map[string]any{"x": 1004, "y": 2003, "z": 50})
-	// Landed: ordinary movement works again right after the answer.
 	a.mustCall(t, "walk_to", map[string]any{"x": 1004, "y": 2002, "z": 50})
 	a.stop(t)
 	f.wait(t)

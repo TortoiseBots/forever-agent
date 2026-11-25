@@ -414,3 +414,92 @@ func TestFleetForeverCLIRefusesLockedAccount(t *testing.T) {
 		t.Fatalf("code %d stderr %q", code, errOut)
 	}
 }
+
+// TestFleetForeverGameAccountFlag is #236 point 3: a member names its game account in the fleet file and the serve
+// gets it as --game-account; an absent game_account sends no flag (the first listed), and a negative one is refused
+// when the file loads.
+func TestFleetForeverGameAccountFlag(t *testing.T) {
+	m := fleetForeverMember{Account: "ACC", Character: "Testchar", Dir: "d", Listen: "127.0.0.1:8765", PasswordFile: "pw", GameAccount: 3}
+	got := strings.Join(foreverChildArgs(serveExt, m), " ")
+	if !strings.Contains(got, "--game-account 3") {
+		t.Fatalf("the serve line has no game account: %s", got)
+	}
+	m.GameAccount = 0
+	if got := strings.Join(foreverChildArgs(serveExt, m), " "); strings.Contains(got, "--game-account") {
+		t.Fatalf("an absent game account sent one: %s", got)
+	}
+
+	path := filepath.Join(t.TempDir(), "f.json")
+	body := `{"members":[{"account":"ACC","character":"Testchar","dir":"d","listen":"127.0.0.1:9001","password_file":"p","game_account":2}]}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ms, err := loadFleetForever(path)
+	if err != nil || len(ms) != 1 || ms[0].GameAccount != 2 {
+		t.Fatalf("a named game account: %v %+v", err, ms)
+	}
+	body = `{"members":[{"account":"ACC","character":"Testchar","dir":"d","listen":"127.0.0.1:9001","password_file":"p","game_account":-1}]}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadFleetForever(path); err == nil || !strings.Contains(err.Error(), "game_account") {
+		t.Fatalf("a negative game account loaded: %v", err)
+	}
+}
+
+// TestFleetCheckGameAccountsErrorsEarly is #236 point 3: a member that names no game account on an account the login
+// lists several for is refused before any serve starts, and the message says what to add to the file. A member that
+// names one is not probed at all.
+func TestFleetCheckGameAccountsErrorsEarly(t *testing.T) {
+	old := fleetGameAccounts
+	t.Cleanup(func() { fleetGameAccounts = old })
+
+	dir := t.TempDir()
+	pw := filepath.Join(dir, "pw")
+	if err := os.WriteFile(pw, []byte("not-a-real-password\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	members := []fleetForeverMember{{Account: "ACC", Character: "Onea", Dir: "d1", Listen: "127.0.0.1:9101", PasswordFile: pw}}
+	var probed []string
+	fleetGameAccounts = func(_ context.Context, _ live.ServerExt, m fleetForeverMember, password string, before func(context.Context) error) (int, error) {
+		if before != nil {
+			if err := before(context.Background()); err != nil {
+				t.Fatalf("the budget hook: %v", err)
+			}
+		}
+		if password != "not-a-real-password" {
+			t.Fatalf("the probe got password %q", password)
+		}
+		probed = append(probed, m.Character)
+		return 6, nil
+	}
+	var out strings.Builder
+	err := fleetCheckGameAccounts(context.Background(), serveExt, members, nil, time.Now, &out)
+	if err == nil || !strings.Contains(err.Error(), "game_account") || !strings.Contains(err.Error(), "6 game accounts") {
+		t.Fatalf("six game accounts and none named: %v", err)
+	}
+	if len(probed) != 1 {
+		t.Fatalf("probed %v, want the one unnamed member", probed)
+	}
+
+	// One game account: nothing to name, the fleet goes on.
+	probed = nil
+	fleetGameAccounts = func(_ context.Context, _ live.ServerExt, m fleetForeverMember, _ string, _ func(context.Context) error) (int, error) {
+		probed = append(probed, m.Character)
+		return 1, nil
+	}
+	if err := fleetCheckGameAccounts(context.Background(), serveExt, members, nil, time.Now, &out); err != nil {
+		t.Fatalf("one game account: %v", err)
+	}
+
+	// A named game account is proof enough: no login is spent on the check.
+	probed = nil
+	named := members[0]
+	named.GameAccount = 2
+	if err := fleetCheckGameAccounts(context.Background(), serveExt, []fleetForeverMember{named}, nil, time.Now, &out); err != nil {
+		t.Fatalf("named game account: %v", err)
+	}
+	if len(probed) != 0 {
+		t.Fatalf("a member that names its game account was probed: %v", probed)
+	}
+}

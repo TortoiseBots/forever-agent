@@ -61,7 +61,7 @@ runs; the run says so once in its notes instead of dropping them silently.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--plan` | required | The plan file. Its name picks the time budget: Ragefire Chasm 90 minutes, Wailing Caverns 150, anything else 120. |
-| `--bots` | required | The four bots: tank, healer and two damage dealers, in that order, no repeats. |
+| `--bots` | required | The four bots: tank, healer and two damage dealers, in that order, no repeats. The healer must use mana: the pre-boss rest gate reads its mana pool, and a healer whose power is not mana stops the run `boss-not-ready`. |
 | `--character` | required | The player's character: the agent's own, the party leader. |
 | `--max-minutes` | 0 | The run's budget; `0` takes the plan's, 0-1440 otherwise. |
 | `--max-wipes` | 2 | The run's wipe budget: the (n+1)th wipe ends it; `-1` is no budget, 1-20 otherwise. |

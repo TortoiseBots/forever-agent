@@ -63,6 +63,17 @@ type Mover struct {
 	// (UNIT_FLAG_ON_TAXI), so no movement packet of any caller goes out. The session sets it on the mover it builds;
 	// nil means no guard (a plain mover in a test).
 	Refuse func() error
+	// Cross, when set, sees the mover's own position after every movement packet a walk sends (start, heartbeat,
+	// facing, stop), and may send packets of its own: the session arms its area-trigger watch here, so a volume the
+	// walk enters is taken from inside it, as a real client's own trigger table does. Its error ends the walk.
+	Cross func(pos [3]float32) error
+	// Samples, when set, is asked before a movement packet advances the mover from the position the last packet
+	// carried to the next one, and names points on that straight line, in travel order, that must be reported first.
+	// A path between two heartbeats can cut through a volume the server only acts on from a position inside it
+	// (MiscHandler.cpp:556-561), so the mover sends a heartbeat at each named point on the leg's own timeline: the
+	// crossing is made from a position the server holds, and no packet moves the character backwards. Same error
+	// contract as Cross.
+	Samples func(from, to [3]float32) [][3]float32
 	// Logf, when set, receives one line per step.
 	Logf func(format string, args ...any)
 	// X, Y, Z, O is the client's belief about where the character is; the walk updates it.
@@ -86,6 +97,13 @@ type Mover struct {
 	// airborne is the knockback flight: the mover is thrown and no ordinary movement (walk, chase, facing, stop)
 	// may start or continue until it lands. A walk in progress ends at its next wake-up without a stop packet.
 	airborne bool
+	// reported is the position the last movement packet carried and reportedAt its time: the start of the segment
+	// Samples is asked about. reportedSet is false until the first packet of the connection.
+	reported    [3]float32
+	reportedAt  time.Time
+	reportedSet bool
+	// sampling is true while Samples' own points are being reported: those packets must not ask Samples again.
+	sampling bool
 
 	// sendTimes is the ring of the last movement packets' times, so the chase can hold its optional re-aim when the
 	// link has already carried maxMovementPacketsPerSecond in the last second.
@@ -136,6 +154,9 @@ func (m *Mover) EndMapChange(x, y, z, o float32) {
 		m.sendTimes[i] = time.Time{}
 	}
 	m.sendIdx = 0
+	// The server placed the character with SMSG_NEW_WORLD, not with a movement packet of ours: the first packet on
+	// the new map starts a new segment instead of measuring one across the transfer.
+	m.reportedSet = false
 }
 
 // BetweenMaps reports whether the movement window is closed.
@@ -145,6 +166,14 @@ func (m *Mover) logf(format string, args ...any) {
 	if m.Logf != nil {
 		m.Logf(format, args...)
 	}
+}
+
+// crossed offers the mover's position to Cross, if a watch is armed.
+func (m *Mover) crossed() error {
+	if m.Cross == nil {
+		return nil
+	}
+	return m.Cross([3]float32{m.X, m.Y, m.Z})
 }
 
 // Position returns the client's belief about its own position.
@@ -195,8 +224,12 @@ func (m *Mover) LandingInfo(at time.Time) MovementInfo {
 }
 
 // SetFlightPosition moves the client's belief along its own ballistic arc (the server sends the mover none of its
-// own position updates), leaving the ground flags as the flight packet carries them.
-func (m *Mover) SetFlightPosition(x, y, z float32) { m.X, m.Y, m.Z = x, y, z }
+// own position updates), leaving the ground flags as the flight packet carries them. The flight's packets go out
+// around the mover, so the segment Samples measures starts at the next packet the mover itself sends.
+func (m *Mover) SetFlightPosition(x, y, z float32) {
+	m.X, m.Y, m.Z = x, y, z
+	m.reportedSet = false
+}
 
 // SetPosition records a position the server put the character at (the login's verify-world, or a later ThisIsYou
 // create). A walk in progress is abandoned there, like a teleport: its straight line no longer starts where the
@@ -204,6 +237,8 @@ func (m *Mover) SetFlightPosition(x, y, z float32) { m.X, m.Y, m.Z = x, y, z }
 func (m *Mover) SetPosition(x, y, z, o float32) {
 	m.noteTeleport()
 	m.X, m.Y, m.Z, m.O = x, y, z, normalizeOrientation(o)
+	// The server put the character here itself, so a segment from the old position would be one it never saw.
+	m.reportedSet = false
 }
 
 // info builds the movement info of one packet at the current position with the given flags.
@@ -230,7 +265,8 @@ func (m *Mover) send(core uint32, flags uint64) error {
 }
 
 // sendAt sends one movement opcode with the position the mover holds and the timestamp of at. A stop uses it to
-// carry the computed arrival time even when the wake-up was a little late.
+// carry the computed arrival time even when the wake-up was a little late. Samples is asked first, so a point it
+// names goes out before the position this packet carries.
 func (m *Mover) sendAt(core uint32, flags uint64, at time.Time) error {
 	if m.Refuse != nil {
 		if err := m.Refuse(); err != nil {
@@ -242,8 +278,56 @@ func (m *Mover) sendAt(core uint32, flags uint64, at time.Time) error {
 		// refusal lives here, so a stop or a re-aim on an abandoned leg cannot slip through.
 		return ErrMapChange
 	}
+	if err := m.sampleCrossings(at); err != nil {
+		return err
+	}
 	m.recordMovement(at)
-	return m.Sender.Send(core, BuildMovementPacket(m.info(flags, at)))
+	if err := m.Sender.Send(core, BuildMovementPacket(m.info(flags, at))); err != nil {
+		return err
+	}
+	m.reported = [3]float32{m.X, m.Y, m.Z}
+	m.reportedAt = at
+	m.reportedSet = true
+	return nil
+}
+
+// sampleCrossings reports Samples' points before the next position goes out: each is sent as a heartbeat on the
+// segment from the last reported position to the one this packet will carry, at the time the walk reaches it, and
+// offered to Cross in that order. The mover's own belief does not change — the packet that asked is sent after —
+// and the points are not asked about again.
+func (m *Mover) sampleCrossings(at time.Time) error {
+	if m.Samples == nil || m.sampling || !m.reportedSet {
+		return nil
+	}
+	from, fromAt := m.reported, m.reportedAt
+	to := [3]float32{m.X, m.Y, m.Z}
+	span := at.Sub(fromAt)
+	seg := Distance(from[0], from[1], from[2], to[0], to[1], to[2])
+	if seg <= 0 || span <= 0 {
+		return nil
+	}
+	points := m.Samples(from, to)
+	if len(points) == 0 {
+		return nil
+	}
+	keep := to
+	m.sampling = true
+	defer func() {
+		m.sampling = false
+		m.X, m.Y, m.Z = keep[0], keep[1], keep[2]
+	}()
+	flags := m.base() | FlagForward
+	for _, p := range points {
+		f := Distance(from[0], from[1], from[2], p[0], p[1], p[2]) / seg
+		m.X, m.Y, m.Z = p[0], p[1], p[2]
+		if err := m.sendAt(wire.CMSGMoveHeartbeat, flags, fromAt.Add(time.Duration(float64(span)*float64(f)))); err != nil {
+			return err
+		}
+		if err := m.crossed(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // recordMovement keeps the time of every movement packet for the one-second rate cap.
@@ -270,6 +354,8 @@ func (m *Mover) SetTeleport(x, y, z, o float32, sequence uint32) {
 	m.noteTeleport()
 	m.X, m.Y, m.Z, m.O = x, y, z, normalizeOrientation(o)
 	m.Sequence = sequence
+	// The jump is the server's move, not a line the character walked: no sample may be taken across it.
+	m.reportedSet = false
 }
 
 // teleportCorrectionYd is how far a teleport may move the character from where a leg has it and still be the
@@ -365,6 +451,10 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 	if err := m.send(wire.CMSGMoveStartForward, base|FlagForward); err != nil {
 		return fmt.Errorf("objects: CMSG_MOVE_START_FORWARD: %w", err)
 	}
+	if err := m.crossed(); err != nil {
+		_ = m.send(wire.CMSGMoveStop, base)
+		return err
+	}
 	m.walking = true
 	defer func() { m.walking = false }()
 	m.logf("walk: start forward from %.2f %.2f %.2f to %.2f %.2f %.2f (%.2f yd, facing %.2f, run %.1f yd/s)",
@@ -434,6 +524,9 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 			if err := m.sendAt(wire.CMSGMoveStop, base, arrival); err != nil {
 				return fmt.Errorf("objects: CMSG_MOVE_STOP: %w", err)
 			}
+			if err := m.crossed(); err != nil {
+				return err
+			}
 			m.logf("walk: stop at %.2f %.2f %.2f (%.2f yd in %s, %d heartbeats)", m.X, m.Y, m.Z, dist,
 				now.Sub(start).Round(time.Millisecond), heartbeats)
 			return ctx.Err()
@@ -447,6 +540,10 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 		m.advance(sx, sy, sz, tx, ty, tz, dist, start, now)
 		if err := m.send(wire.CMSGMoveHeartbeat, base|FlagForward); err != nil {
 			return fmt.Errorf("objects: CMSG_MOVE_HEARTBEAT: %w", err)
+		}
+		if err := m.crossed(); err != nil {
+			_ = m.send(wire.CMSGMoveStop, base)
+			return err
 		}
 		heartbeats++
 		last = now
@@ -541,6 +638,10 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 	}
 	if err := m.send(wire.CMSGMoveStartForward, base|FlagForward); err != nil {
 		return fmt.Errorf("objects: CMSG_MOVE_START_FORWARD: %w", err)
+	}
+	if err := m.crossed(); err != nil {
+		_ = m.send(wire.CMSGMoveStop, base)
+		return err
 	}
 	m.walking = true
 	defer func() { m.walking = false }()
@@ -675,6 +776,9 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 			if err := m.sendAt(wire.CMSGMoveStop, base, arrival); err != nil {
 				return fmt.Errorf("objects: CMSG_MOVE_STOP: %w", err)
 			}
+			if err := m.crossed(); err != nil {
+				return err
+			}
 			m.logf("path: stop at %.2f %.2f %.2f (%.2f yd in %s)", m.X, m.Y, m.Z, total,
 				now.Sub(start).Round(time.Millisecond))
 			return ctx.Err()
@@ -692,12 +796,18 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 			if err := m.Face(nextDir); err != nil {
 				return fmt.Errorf("objects: CMSG_MOVE_SET_FACING: %w", err)
 			}
+			if err := m.crossed(); err != nil {
+				return err
+			}
 			lastSend = now
 			turn++
 		}
 		if !now.Before(lastSend.Add(HeartbeatInterval)) && m.movementsInLastSecond(now) < maxMovementPacketsPerSecond {
 			if err := m.sendAt(wire.CMSGMoveHeartbeat, base|FlagForward, now); err != nil {
 				return fmt.Errorf("objects: CMSG_MOVE_HEARTBEAT: %w", err)
+			}
+			if err := m.crossed(); err != nil {
+				return err
 			}
 			lastSend = now
 		}

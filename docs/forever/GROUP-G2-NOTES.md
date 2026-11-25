@@ -35,7 +35,7 @@ still refuse a raid until the raid ranks are modelled for them.
 | Method | Params | Result |
 |---|---|---|
 | `promote` | `{name*}` | `{}` |
-| `assistant` | `{name*, clear?}` | `{}` (`clear: true` clears the flag) |
+| `assistant` | `{name*, clear?}` | `{}` (`clear: true` clears the flag); a raid only, leader only (#236: the core sets the flag only in a raid group and only from the leader, Group.cpp:1758-1762, GroupHandler.cpp:545-555, and the next roster carries it back) |
 | `loot_method` | `{method*, master?, threshold?}` | `{}` |
 | `mark` | `{guid? \| name*, icon*}` | `{icon, guid}` once the icon slot confirms it |
 | `marks` | `{}` | `{marks: [{icon, guid}]}`, set icons in slot order |

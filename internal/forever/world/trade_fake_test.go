@@ -53,8 +53,10 @@ type tradeWorld struct {
 	swapOnAcc     bool   // ... by swapping its item for a worse instance of the same entry and count
 	staleIdx      bool   // the bot's side has changed since the character last heard of it
 	bound         map[int32]bool
-	tooFar        bool // an accept finds the players too far apart
-	cancelAnswer  bool // a refused item answers cancelled
+	// castRefusal answers CMSG_CAST_SPELL with this SMSG_CAST_FAILED pair (reason, arg1) instead of the go.
+	castRefusal  *[2]int32
+	tooFar       bool // an accept finds the players too far apart
+	cancelAnswer bool // a refused item answers cancelled
 	// The core's state.
 	open        bool
 	sets        map[uint8]wire.GUID
@@ -318,8 +320,17 @@ func (w *tradeWorld) answer(_ *itemWorld, core uint32, payload []byte) {
 		}
 	case wire.CMSGCastSpell:
 		w.cast = append([]byte(nil), payload...)
-		castID := wire.ReadPackedGUID(wire.NewReader(payload))
-		w.server(wire.SMSGSpellGo, buildSpellGo(itemSelf, itemSelf, castID, 7777, 0, trade.CastTarget()))
+		castID := wire.ReadPackedGUID(r)
+		r.ReadU8() // SendCastFlags
+		r.ReadI32()
+		r.ReadI32()
+		r.ReadI32()
+		spell := r.ReadI32()
+		if refusal := w.castRefusal; refusal != nil {
+			w.server(wire.SMSGCastFailed, buildCastFailedArgs(castID, spell, refusal[0], refusal[1], 0))
+			return
+		}
+		w.server(wire.SMSGSpellGo, buildSpellGo(itemSelf, itemSelf, castID, spell, 0, trade.CastTarget()))
 	case wire.CMSGSplitItem:
 		r.Skip(1)
 		fromPack, fromSlot, toPack, toSlot := r.ReadU8(), r.ReadU8(), r.ReadU8(), r.ReadU8()
@@ -1211,5 +1222,32 @@ func TestCastOnTradeSlot(t *testing.T) {
 	unit, item := wire.ReadPackedGUID(r), wire.ReadPackedGUID(r)
 	if flags != trade.TargetFlagTradeItem || !unit.IsZero() || item != (wire.GUID{High: 1 << 58, Low: 10}) {
 		t.Fatalf("target flags %#x unit %s item %s", flags, unit, item)
+	}
+}
+
+// TestCastOnTradeSlotNamesAMissingTool: the live session's refusal (issue #228) was spell failure 153 on Pick Lock
+// 1804 with the trade open and the other player's item in slot 6. 153 is SPELL_FAILED_TOTEMS, and the core fills its
+// argument with the tool item the cast lacked: Pick Lock's SpellTotems row names Thieves' Tools 5060, checked by
+// CheckItems (Spell.cpp:7780-7960) before the trade block (:7205) ever runs. The trade target was right; the answer
+// must name the tool, not a bare number.
+func TestCastOnTradeSlotNamesAMissingTool(t *testing.T) {
+	w := newTradeWorld(t)
+	w.s.mover = &objects.Mover{Sender: w, ClientTime: func(time.Time) uint32 { return 0 }, RunSpeed: 5.5}
+	w.castRefusal = &[2]int32{153, 5060}
+	ctx := context.Background()
+	if _, err := w.s.serveTradeOpen(ctx, serveTradeOpenParams{To: tradeBotName}); err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := w.s.castTradeSlot(ctx, 1804, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome == "success" {
+		t.Fatal("the refused cast answered success")
+	}
+	for _, want := range []string{"totems", "5060", "tool"} {
+		if !strings.Contains(outcome, want) {
+			t.Fatalf("the refusal %q does not name %q", outcome, want)
+		}
 	}
 }

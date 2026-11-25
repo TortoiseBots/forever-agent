@@ -36,6 +36,8 @@ Scope: `wire`, `party` and the `party` serve method. No serve method sends a rai
   mark) instead of "raid: not handled in this round".
 - Group control (`promote`, `assistant`, `loot_method`, `mark`, `disband`) still refuses a raid, now by its real
   reason: the raid ranks differ (an assistant may mark icons) and the raid operations arrive with the raid walk.
+  Exception since #236: `assistant` is a raid operation, so it takes a raid (leader only, the next roster carrying the
+  member's flag) and refuses a party instead.
 - The fake world writes the raid flag and per-member subgroups (`groupRaid`, `groupSubgroup`).
 
 Tests: `internal/forever/party/raid_test.go` (three layouts, a ten-member raid parsed and modelled, five-member flag

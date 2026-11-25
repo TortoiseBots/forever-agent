@@ -31,6 +31,19 @@ func (s *session) raidRoster(what string) error {
 // raidLeader reports whether this character leads the group.
 func (s *session) raidLeader() bool { return s.party.LeaderGUID == s.party.SelfGUID }
 
+// raidLeaderRank is raidRoster plus the leader rank the core asks of the raid commands only the leader may send:
+// the assistant rank (CMSG_SET_ASSISTANT_LEADER) is taken only from Group::IsLeader (GroupHandler.cpp:545-555). The
+// message is the party leader-only one, so a caller reads the same refusal in a party and in a raid.
+func (s *session) raidLeaderRank(what string) error {
+	if err := s.raidRoster(what); err != nil {
+		return err
+	}
+	if !s.raidLeader() {
+		return fmt.Errorf("%s: only the leader can (the leader is %s)", what, chat.SanitiseName(s.party.LeaderName()))
+	}
+	return nil
+}
+
 // raidAssistant reports whether this character holds MEMBER_FLAG_ASSISTANT (Group.h:59-72).
 func (s *session) raidAssistant() bool {
 	if m, ok := s.party.Members[s.party.SelfGUID]; ok {

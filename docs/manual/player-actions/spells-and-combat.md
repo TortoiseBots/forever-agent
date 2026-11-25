@@ -18,6 +18,8 @@ sources:
     resource: internal/spellstate/spellstate.go
   - id: trade-cast
     resource: internal/forever/world/trade_cast.go
+  - id: combat-reasons
+    resource: internal/forever/combat/reasons.go
 ---
 
 This page covers what a `forever serve` session (or a script run with `forever act`) can do with spells and
@@ -88,7 +90,11 @@ Notes that matter in practice:
 - A target that is not in the world model, or that is dead, is refused before anything is sent. Range and line of
   sight are the server's to check: the call does not walk and does not pre-check distance.
 - A refused cast is an error whose message names the server's reason, for example
-  `cast: the server refused the spell: not ready` or `cast: the server refused the spell: out of range`.
+  `cast: the server refused the spell: not ready` or `cast: the server refused the spell: out of range`. A refusal
+  about what the cast lacks carries the missing thing, from the server's own failed-cast argument: the reagent or
+  tool item, the spell focus or the totem category, as in
+  `totems (needs tool item 5060 in the bags)` for a Pick Lock without Thieves' Tools, instead of a bare
+  `spell failure 153`. `spell_fail` combat rows and `last_failure.reason_name` carry the same words.
 - A server that never answers fails with `world: no answer to CMSG_CAST_SPELL for spell N`. The spell is then held
   back briefly: the next cast of the same spell waits out a short quarantine so a late answer cannot be mistaken for
   its own.

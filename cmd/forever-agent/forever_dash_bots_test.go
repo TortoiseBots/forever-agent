@@ -364,3 +364,41 @@ func TestDashRecordNeedsWatch(t *testing.T) {
 		t.Fatalf("stderr %q does not say what --record needs", stderr.String())
 	}
 }
+
+// TestDashBotsWatchHeartbeatEveryRead is #236 point 2: this port answers GET /api/v1/bots with a bare list and keeps
+// the heartbeat on GET /api/v1/status, so the watch takes it from there and prints the line on every good read, not
+// only on the baseline. A bot in the port's busy state is in the roster (it used to be skipped as an unknown state).
+func TestDashBotsWatchHeartbeatEveryRead(t *testing.T) {
+	t.Setenv(dashBotsPasswordEnv, dashTestPassword)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/login":
+			http.SetCookie(w, &http.Cookie{Name: "s", Value: "v", Path: "/"})
+			fmt.Fprint(w, `{"success":true}`)
+		case "/api/v1/status":
+			fmt.Fprint(w, `{"humans":2,"bots":1,"states":{"busy":1}}`)
+		default:
+			fmt.Fprint(w, `[{"name":"Ember","guid":1,"class":"Druid","level":60,"hp":900,"max_hp":1000,`+
+				`"map":0,"instance":"","x":1.5,"y":2.5,"z":3.5,"kind":"hired","state":"busy","group":"g1"}]`)
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 800*time.Millisecond)
+	defer cancel()
+	var stdout, stderr bytes.Buffer
+	args := []string{"--url", srv.URL, "--user", "DashUser", "--watch", "--interval", "100ms", "--timeout", "2s"}
+	if code := foreverDashBotsCmd(ctx, args, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit %d, stderr %q", code, stderr.String())
+	}
+	out := stdout.String()
+	if n := strings.Count(out, "roster: 1 bot(s), 2 human(s); states busy 1"); n < 2 {
+		t.Fatalf("%d heartbeat line(s), want one per read:\n%s", n, out)
+	}
+	if strings.Contains(out, "skipped") || strings.Contains(stderr.String(), "skipped") {
+		t.Fatalf("a busy record was skipped: out %q stderr %q", out, stderr.String())
+	}
+	if !strings.Contains(out, "Ember") || !strings.Contains(out, "busy") {
+		t.Fatalf("stdout %q does not carry the busy bot's row", out)
+	}
+}

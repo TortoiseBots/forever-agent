@@ -806,3 +806,86 @@ func TestChaseStandoffNeverRunsOntoTheTarget(t *testing.T) {
 		t.Fatalf("%d stop packet(s), want one", stops)
 	}
 }
+
+// TestMoverReportsTheSampleSamplesNames: a walk at 40 yd/s moves 20 yd between heartbeats, so a 0.5 yd volume 2 yd
+// ahead has both sampled ends outside it. Samples names the closest approach, and the mover reports it on the leg's
+// own timeline before the heartbeat that carries the next sampled position — the server acts on an area trigger only
+// from a position inside it (MiscHandler.cpp:556-561), and no packet moves the character backwards.
+func TestMoverReportsTheSampleSamplesNames(t *testing.T) {
+	start := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+	sender := &fakeSender{now: start}
+	m := &Mover{
+		Sender:     sender,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+		X:          1000, Y: 2000, Z: 50,
+		RunSpeed: 40,
+		Flags:    FlagTouchingGround,
+	}
+	interior := [3]float32{1002, 2000, 50}
+	m.Samples = func(from, to [3]float32) [][3]float32 {
+		if Distance(from[0], from[1], from[2], 1000, 2000, 50) > 0.01 || Distance(to[0], to[1], to[2], 1020, 2000, 50) > 0.01 {
+			return nil
+		}
+		return [][3]float32{interior}
+	}
+	var crossed [][3]float32
+	m.Cross = func(pos [3]float32) error {
+		crossed = append(crossed, pos)
+		return nil
+	}
+	// 30 yd at 40 yd/s: a heartbeat at 20 yd, then the stop.
+	if err := m.MoveTo(context.Background(), 1030, 2000, 50); err != nil {
+		t.Fatal(err)
+	}
+	var cores []uint32
+	var sampled sentPacket
+	foundSample := false
+	for _, p := range sender.sent {
+		cores = append(cores, p.core)
+		mi := moveOf(t, p)
+		if mi.X == interior[0] && mi.Y == interior[1] && mi.Z == interior[2] {
+			sampled, foundSample = p, true
+		}
+	}
+	if !foundSample {
+		t.Fatalf("no packet carries the volume's inside point %v: %v", interior, cores)
+	}
+	want := []uint32{
+		wire.CMSGMoveSetFacing,
+		wire.CMSGMoveStartForward,
+		// The inserted sample of the volume, then the 20 yd heartbeat, then the stop.
+		wire.CMSGMoveHeartbeat,
+		wire.CMSGMoveHeartbeat,
+		wire.CMSGMoveStop,
+	}
+	if len(cores) != len(want) {
+		t.Fatalf("sent %v, want %v", cores, want)
+	}
+	for i := range want {
+		if cores[i] != want[i] {
+			t.Fatalf("packet %d is %s, want %s (sequence %v)", i, wire.ClientName(cores[i]), wire.ClientName(want[i]), cores)
+		}
+	}
+	// The inserted heartbeat is at the volume's inside point, 2 yd along a 20 yd segment: 1/10 of the heartbeat span.
+	mi := moveOf(t, sampled)
+	wantTime := uint32((500 * time.Millisecond / 10).Milliseconds())
+	if mi.Time != wantTime {
+		t.Fatalf("the sample's time is %d ms, want %d ms on the segment's timeline", mi.Time, wantTime)
+	}
+	// Cross saw the inside point before the sampled position it lies behind, so the packet went out from inside.
+	insideAt, sampledAt := -1, -1
+	for i, pos := range crossed {
+		if pos == interior {
+			insideAt = i
+		}
+		if Distance(pos[0], pos[1], pos[2], 1020, 2000, 50) <= 0.01 {
+			sampledAt = i
+		}
+	}
+	if insideAt < 0 || sampledAt < 0 || insideAt > sampledAt {
+		t.Fatalf("Cross's positions are %v, want the volume's point before the 20 yd one", crossed)
+	}
+	if x, y, z, _ := m.Position(); !near(x, 1030) || !near(y, 2000) || !near(z, 50) {
+		t.Fatalf("the sample moved the mover's belief to %.2f %.2f %.2f", x, y, z)
+	}
+}

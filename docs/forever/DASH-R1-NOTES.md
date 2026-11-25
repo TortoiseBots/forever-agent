@@ -59,7 +59,18 @@ strict about types and about two closed sets:
   valid empty roster.
 
 The heartbeat is assumed to travel in the bots answer. If the port moves it to its own route, only `Client.Roster`
-and the `Roster` type change; the watch rules do not read it.
+and the `Roster` type change; the watch rules do not read it. This port does exactly that: `GET /api/v1/bots`
+answers a bare list and `GET /api/v1/status` carries the heartbeat (`bots`, `humans`, `states`), so `Client.Roster`
+asks the status route whenever the bots answer has none (#236 point 2). A dashboard without the route is a roster
+without a heartbeat, never a failed read. The fallback is optional, so its read carries its own half-second bound
+(`heartbeatTimeout`) rather than the caller's `--timeout`: a status route that hangs behind a healthy bots route
+costs each sample half a second, not the 15 s default; a test holds `/api/v1/status` open and asserts `Roster`
+returns promptly.
+
+The same port names seven states: the four the rules read (`idle`, `moving`, `combat`, `dead`) and three macro
+states of its own (`busy`, `stalled`, `resting`). All seven are kept (#236 point 2: a busy bot used to be skipped as
+an unknown state); the rules stay as they were, so only a `moving` bot can be stuck and only a `combat` bot can be a
+lone fight.
 
 ## The command
 
@@ -77,8 +88,10 @@ forever-agent forever dash-bots --url URL --user NAME [--pass-file FILE] [--watc
 * Without `--watch`: login, one read, the roster, exit 0. The first line is the heartbeat when the dashboard sends
   one (`roster: N bot(s), M human(s); states ...`), then one line per bot, sorted by name:
   `name  class level  kind  state  hp A/B  powertype A/B  map Z zone instance  (x, y, z)  target  group`.
-* With `--watch`: the first successful read is the baseline and prints the roster; later reads print only events:
-  `HH:MM:SS  death  NAME died  (map ...)`, `stuck`, `lone-combat`, `far-from-group`. A failed read is printed to
+* With `--watch`: the first successful read is the baseline and prints the roster; every later good read prints the
+  heartbeat line first and then its events: `HH:MM:SS  death  NAME died  (map ...)`, `stuck`, `lone-combat`,
+  `far-from-group`. The heartbeat line is the watch's sign of life at the `--interval` pace (the dashboard's own
+  snapshot cycle is 2 s, #236 point 2). A failed read is printed to
   stderr and the next interval retries; five consecutive failures end the watch with exit 1. Ctrl-C exits 0.
 * Exit codes: 0 printed or watched, 1 login/read failed or the watch gave up, 2 usage or a refused value.
 

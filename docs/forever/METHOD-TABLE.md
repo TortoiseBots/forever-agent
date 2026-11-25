@@ -59,8 +59,20 @@ with no path, so it reports the CLI's own "no --export" warning. A blocked check
 lines in the `-32003` message and sends nothing. A daemon started without `--dir` cannot check the slot, the lease
 or the module link, so it refuses too, naming `forever dungeon-watch`. The preflight runs off the session queue:
 the GM guard, each send and each 50 ms packet slice is its own short queued call, so `status` and the other methods
-answer while a slow console or module is waited for. A `.pinfo` reply that stops before its Account line is reported
-as cut off, not as a character that does not exist; a console answer of nothing refuses with the read's bound.
+answer while a slow console or module is waited for. Each read holds the command channel's one-run lock
+(`command.Session.ExclusiveRun`) for its whole reply, so no other command runs inside a tokenless `.pinfo` answer's
+quiet window: the console's text carries no marker that would tell it from a dashboard `bot` call's reply, and a
+stray "Player not found!" would refuse the run. A `bot`, `gm` or `commander` call arriving inside that window is
+refused at once with `-32003` "busy: a run preflight holds the command channel, retry", sending nothing: those
+methods run on the session goroutine the preflight's own queued calls need, so waiting there would stop every
+method (and the packet loop) until the read ended. The waits are bounded — 35 s for the channel, and each read's
+own deadline (plus 2 s) counted from the moment the channel is its own, not from the call — so a channel that never
+comes back refuses instead of holding the call, and a long wait for it does not spend the read's window. The
+channel's quiet-window rule covers each read too: it waits out the tail of an earlier run on the channel before it
+sends, and its own reply leaves the window a later run waits out. A line from a command sent outside that channel
+(the GM guard's own probe) or an unsolicited system line can still fall inside the window, which the code notes. A
+`.pinfo` reply that stops before its Account line is reported as cut off, not as a character that does not exist; a
+console answer of nothing refuses with the read's bound.
 
 `plan_check {name, from_leg?, from_pull_group?}` walks the plan from the serve's plans folder (`--plans-dir`, default
 `dungeons`) on a scratch Forever planner over the serve's `--navmesh` (its own tile cache, so a walk on the session
@@ -107,6 +119,7 @@ sent is in the model.
 | `addon_stop` | refused: no add-on host on this server: running a real add-on headless is a later ticket, so there is nothing to start, tick, click or read (addon_send is the ported half, the add-on message layer) |
 | `addon_tick` | refused: no add-on host on this server: running a real add-on headless is a later ticket, so there is nothing to start, tick, click or read (addon_send is the ported half, the add-on message layer) |
 | `area_trigger` | implemented |
+| `area_trigger_watch` | implemented |
 | `assistant` | implemented |
 | `attack` | implemented |
 | `auction_bid` | implemented |
