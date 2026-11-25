@@ -68,7 +68,9 @@ type cmdLink struct {
 	// command line: SendCommand refuses it, so runOne, tbcmd.Client and any future caller are guarded alike.
 	probe bool
 	// owner lets the unconfirmed guard pass a `.bot` line (the owner commands of a normal player, never a GM
-	// line); every other command text still needs the GM confirmation. Only the serve channel sets it.
+	// line) and the sight query line the player run sends (playSightQuery: one read-only `.tb los` shape the module
+	// answers for a player account); every other command text still needs the GM confirmation. Only the serve
+	// channel sets it.
 	owner bool
 }
 
@@ -81,10 +83,19 @@ func (l *cmdLink) SendCommand(ctx context.Context, text string) error {
 	if l.s.gmStop != nil {
 		return l.s.gmStop
 	}
-	if !l.probe && command.IsCommandText(text) && !l.s.gmConfirmed && !(l.owner && isOwnerLine(text)) {
+	if !l.probe && command.IsCommandText(text) && !l.s.gmConfirmed && !(l.owner && (isOwnerLine(text) || playSightQuery(text))) {
 		return errCommandNotConfirmed
 	}
-	return l.s.SendCommandCtx(ctx, text)
+	if err := l.s.SendCommandCtx(ctx, text); err != nil {
+		return err
+	}
+	// The line left: remember the sight query exactly as the server will echo it (with the token the command layer
+	// appended), so the feed reads an older module's say of it as the module's answer, not as a command falling
+	// through. The play channel keeps its own note (its link is not this one).
+	if l.owner && playSightQuery(text) {
+		l.s.noteSightSent(text)
+	}
+	return nil
 }
 
 func (l *cmdLink) Pump(ctx context.Context, feed func(chat.Line), done func() bool) error {

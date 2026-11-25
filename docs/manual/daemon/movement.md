@@ -186,6 +186,14 @@ with `-32003` and `los: not supported by this module build`; that is not a parse
 that is not the module's record — a missing or unknown key, a value its key does not take, a second line, an answer
 for another pair or another call (a different token) — is refused `-32003` `los: the module's answer is not a los record: ...`, never read as a zero.
 
+The method runs through the session's GM guard like every other line it sends, with one exception: an account that is
+not a GM may still run the one shape the player run sends — `a` a bot's name or a ground spot `x,y,z`, `b` a guid,
+nothing after it — because the module answers that read-only line under its own access rule. Every other shape keeps
+the guard: without a confirmed GM permission such a call answers `-32003` with the guard's refusal and sends nothing
+(the GM probe goes first). A module that says the line aloud as the character's own chat is answering that it gives
+the account no sight query: the call is refused `-32003` `los: said aloud: this module build gives the account no
+sight query`, and the say-echo guard is not tripped by it, so a later `bot` line still goes out.
+
 The plan scout's Forever live pass asks it from each pull row's stand to the units of its target pack and records
 the server's answer beside the navmesh ray (see [plan tools](../dungeons/plan-tools.md#plan-scout)).
 

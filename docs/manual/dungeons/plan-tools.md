@@ -280,6 +280,15 @@ sides would be read the same way for every unit), or that answers `rate` twice i
 goes on with the ray alone. When the query pass's bound or such a stop leaves stands unasked, one note says how many
 were not asked.
 
+On a Forever serve every live unit is first named by its **export spawn**, because a Forever guid is 128 bits (`0x`
+and 32 hex digits) whose low part is the instance's counter, not the database spawn id. A live creature is the spawn
+of its own entry that stands nearest it, within 10 yd (`scoutSpawnMatchYd`; 3D) plus the spawn's `wander` radius, and
+a patrol spawn also matches a unit within 10 yd of that patrol's loop; one live unit is one spawn at most, nearest
+pairs first, and a player, a dead unit and an entry 0 never match. The navmesh ray and the sight query both key the
+unit by that spawn id, and a unit that matched no spawn is not read. A target pack unit with no live unit near its
+spawn stays unanswered, and one note counts them (`live sight: N target pack unit(s) had no live unit of their entry
+near their spawn; those stay unanswered`): a pass that asked nothing says so instead of reporting 0 of N in silence.
+
 A walked hop whose `walk_path` answers `no full route (partial)` is recorded as a partial walk: the step's `live_walk`
 check is a skip naming the server's answer, its `reached_yd` says how far the session stood from the hop's origin when
 the answer came, and the pass goes on to the next stand instead of stopping. One note (`live walks: N stand(s)

@@ -278,14 +278,20 @@ type fakeServer struct {
 	mapSc *mapScenario
 	// serveMode runs the RPC daemon's tolerant scenario (serve_fake_test.go): it answers every packet the serving
 	// methods can send and records what it saw.
-	serveMode       bool
-	serveSwing      bool
-	serveStop       bool
-	serveLogout     bool
-	serveArea       bool
-	serveAreas      []int32 // every CMSG_AREA_TRIGGER id, in the order the fake saw them
-	serveCast       bool
-	serveGMSent     bool
+	serveMode   bool
+	serveSwing  bool
+	serveStop   bool
+	serveLogout bool
+	serveArea   bool
+	serveAreas  []int32 // every CMSG_AREA_TRIGGER id, in the order the fake saw them
+	serveCast   bool
+	serveGMSent bool
+	// serveNoGM answers the `.gm` probe as ordinary say chat (the core's fall-through for an account without the
+	// command): the session's GM guard cannot confirm it.
+	serveNoGM bool
+	// serveEchoTB answers every `.tb` line as ordinary say chat (a module build that has no such command says it
+	// aloud).
+	serveEchoTB     bool
 	serveBotSent    bool
 	serveInviteSent bool
 	// serveSessions counts the instance sessions the serving scenario ran (a reconnect makes a second one).

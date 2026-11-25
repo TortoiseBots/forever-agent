@@ -676,7 +676,7 @@ func (p *playRun) walkClear(seg [][3]float32) bool {
 		}
 		if g.Patrol != nil {
 			for _, u := range units {
-				if !u.Dead && !u.Friendly && slices.Contains(g.Patrol.Entries, u.Entry) {
+				if patrolOnPath(*g, u) {
 					at = append(at, u.Pos)
 				}
 			}

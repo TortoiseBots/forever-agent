@@ -1546,7 +1546,7 @@ func TestScoutForeverSightNotAsked(t *testing.T) {
 	sight := scoutForeverSight{ok: false}
 	data := planscout.LiveData{ServerLOS: map[planscout.LOSKey]bool{}}
 	spot := planscout.LiveSpot{Step: 1, TargetGuids: []planscout.LiveTarget{{Guid: 100}, {Guid: 101}}}
-	if err := foreverServerSightAt(context.Background(), fake, spot, nil, &data, &sight); err != nil {
+	if err := foreverServerSightAt(context.Background(), fake, spot, nil, nil, &data, &sight); err != nil {
 		t.Fatalf("sight: %v", err)
 	}
 	if sight.notAsked != 1 {
@@ -1554,5 +1554,143 @@ func TestScoutForeverSightNotAsked(t *testing.T) {
 	}
 	if fake.losCalls != 0 {
 		t.Fatalf("%d los queries after the pass stopped asking", fake.losCalls)
+	}
+}
+
+// TestForeverServerSightAt128BitGUID: a Forever serve prints 128-bit guids whose low part is an instance counter, not
+// a spawn id. The live read is named by the export spawn of its entry that stands nearest it, the ray is stored under
+// that spawn id, and the los query carries the guid string exactly as the serve printed it.
+func TestForeverServerSightAt128BitGUID(t *testing.T) {
+	guid := serveclient.GUID("0x20011830A00B0DC0000000000000002F")
+	units := []serveclient.Unit{{
+		GUID: guid, Type: "creature", Entry: 11318, Name: "CaveTrog", X: -154.04, Y: 27.97, Z: -38.57,
+		Level: 16, Health: 100, MaxHealth: 100,
+	}}
+	spawns := []worldspawn.Spawn{{GUID: 20038045, Entry: 11318, Pos: dungeon.Point{X: -154, Y: 28, Z: -38.6}}}
+	match := foreverMatchSpawns(units, spawns, nil)
+	if match[0] != 20038045 {
+		t.Fatalf("match = %v; want unit 0 named by spawn 20038045", match)
+	}
+	spot := planscout.LiveSpot{
+		Step: 1, Point: dungeon.Point{X: -150, Y: 30, Z: -38},
+		LOSPoint: dungeon.Point{X: -150, Y: 30, Z: -38}, TargetGuids: []planscout.LiveTarget{{Guid: 20038045, Entry: 11318}},
+	}
+	data := planscout.LiveData{LOS: map[planscout.LOSKey]bool{}, ServerLOS: map[planscout.LOSKey]bool{}}
+	fake := newFakeForeverServe(units...)
+	wu := []world.Unit{foreverWorldUnit(units[0], match[0])}
+	if wu[0].SpawnID != 20038045 {
+		t.Fatalf("the world unit = %+v; want the spawn id carried", wu[0])
+	}
+	ok, err := foreverWalkRayAt(context.Background(), fake, spot, wu, data.LOS)
+	if !ok || err != nil {
+		t.Fatalf("walk ray: ok=%v err=%v", ok, err)
+	}
+	if _, have := data.LOS[planscout.LOSKey{Step: 1, Guid: 20038045}]; !have {
+		t.Fatalf("LOS = %v; want the ray stored under spawn 20038045", data.LOS)
+	}
+	sight := scoutForeverSight{ok: true}
+	if err := foreverServerSightAt(context.Background(), fake, spot, units, match, &data, &sight); err != nil {
+		t.Fatalf("sight: %v", err)
+	}
+	if _, have := data.ServerLOS[planscout.LOSKey{Step: 1, Guid: 20038045}]; !have {
+		t.Fatalf("ServerLOS = %v; want the server's answer under spawn 20038045", data.ServerLOS)
+	}
+	if len(fake.loss) != 1 || !strings.HasSuffix(fake.loss[0], "|"+string(guid)) {
+		t.Fatalf("los queries = %v; want the live guid string unchanged", fake.loss)
+	}
+	if sight.unmatched != 0 || sight.skipped != 0 || sight.unread != 0 {
+		t.Fatalf("sight = %+v; want the one target answered", sight)
+	}
+}
+
+// TestForeverMatchSpawns: nearest first, one live unit per spawn, entry and distance rules, a wander radius and a
+// patrol's path, and players never matched.
+func TestForeverMatchSpawns(t *testing.T) {
+	spawns := []worldspawn.Spawn{
+		{GUID: 10, Entry: 100, Pos: dungeon.Point{}},
+		{GUID: 11, Entry: 100, Pos: dungeon.Point{X: 2}},
+		{GUID: 12, Entry: 100, Pos: dungeon.Point{X: 40}},              // entry 100, far from every unit
+		{GUID: 13, Entry: 200, Pos: dungeon.Point{X: 100}, Wander: 10}, // 11 yd away, matches on its wander
+		{GUID: 14, Entry: 300, Pos: dungeon.Point{X: 200}},             // a patrol away from its spawn point
+		{GUID: 15, Entry: 400, Pos: dungeon.Point{X: 300}},             // 11 yd away, no wander to cover it
+		{GUID: 1 << 40, Entry: 500, Pos: dungeon.Point{X: 400}},        // no uint32 spawn id
+	}
+	patrols := []worldspawn.Patrol{{SpawnGUIDs: []uint64{14},
+		Path: []dungeon.Point{{X: 220, Y: 0}, {X: 260, Y: 0}}}}
+	units := []serveclient.Unit{
+		{GUID: "0x1", Type: "creature", Entry: 100, X: 0.5}, // nearer 10 than 11
+		{GUID: "0x2", Type: "creature", Entry: 100, X: 2.5}, // 11
+		{GUID: "0x3", Type: "creature", Entry: 100, X: 3},   // 11
+		{GUID: "0x4", Type: "creature", Entry: 200, X: 111}, // 13 on its wander
+		{GUID: "0x5", Type: "creature", Entry: 300, X: 260}, // 14 on its path
+		{GUID: "0x6", Type: "creature", Entry: 400, X: 311}, // 11 yd, out of reach
+		{GUID: "0x7", Type: "player", Entry: 500, X: 400},   // a player is never a spawn
+		{GUID: "0x8", Type: "creature", Entry: 500, X: 400}, // a spawn id past uint32
+		{GUID: "0x9", Type: "creature", X: 0},               // entry 0
+		{GUID: "0xA", Type: "creature", Entry: 100, X: 0, Dead: true},
+	}
+	match := foreverMatchSpawns(units, spawns, patrols)
+	want := map[int]uint32{0: 10, 1: 11, 3: 13, 4: 14}
+	if len(match) != len(want) {
+		t.Fatalf("match = %v; want %v", match, want)
+	}
+	for ui, id := range want {
+		if match[ui] != id {
+			t.Fatalf("unit %d matched spawn %d; want %d (match %v)", ui, match[ui], id, match)
+		}
+	}
+	// Nearest first: unit 2 (x 3) may take 11 only if unit 1 does not; unit 1 stands nearer, so both keep one.
+	if _, taken := match[2]; taken {
+		t.Fatalf("two units took one spawn: %v", match)
+	}
+}
+
+// TestForeverMatchSpawnsNearestFirst: when two units stand near one spawn and a nearer spawn exists, the nearer pair
+// wins and the other unit takes the farther spawn.
+func TestForeverMatchSpawnsNearestFirst(t *testing.T) {
+	spawns := []worldspawn.Spawn{
+		{GUID: 20, Entry: 100, Pos: dungeon.Point{X: 1}},
+		{GUID: 21, Entry: 100, Pos: dungeon.Point{X: 12}},
+	}
+	units := []serveclient.Unit{
+		{GUID: "0x1", Type: "creature", Entry: 100, X: 2},
+		{GUID: "0x2", Type: "creature", Entry: 100, X: 3},
+	}
+	match := foreverMatchSpawns(units, spawns, nil)
+	if match[0] != 20 || match[1] != 21 {
+		t.Fatalf("match = %v; want the nearer unit on spawn 20 and the other on 21", match)
+	}
+}
+
+// TestForeverServerSightNotesUnmatchedTargets: a pass whose target pack has no live unit near its spawn says so
+// instead of reporting 0 of N in silence, and sends no query.
+func TestForeverServerSightNotesUnmatchedTargets(t *testing.T) {
+	dir := t.TempDir()
+	mmaps := foreverFlat(t)
+	foreverScoutPackPlanFile(t, dir, "scout_nomatch")
+	// The read holds the pack's entry, but nowhere near either spawn: nothing matches.
+	units := []serveclient.Unit{
+		{GUID: "0x20011830A00B0DC0000000000000AA", Type: "creature", Entry: 4100, Name: "ForeverRat",
+			X: -100, Y: 0, Z: 0, Level: 30, Health: 100, MaxHealth: 100},
+	}
+	fake := newFakeForeverServe(units...)
+	useFakeForeverServe(t, fake)
+	code, _, errOut := runCLI("plan-scout", "scout_nomatch", "--dir", dir, "--mmaps", mmaps,
+		"--spawns", foreverExport(), "--forever", "--out", filepath.Join(dir, "out"), "--live", "--slot", t.TempDir())
+	if code == exitLivePhaseRefused || code == exitPlanScoutLiveAborted {
+		t.Fatalf("live pass: code %d err %q", code, errOut)
+	}
+	if fake.losCalls != 0 {
+		t.Fatalf("%d los queries; want none for an unmatched target pack", fake.losCalls)
+	}
+	rep := foreverReport(t, dir, "scout_nomatch")
+	found := false
+	for _, n := range rep.Notes {
+		if strings.Contains(n, "target pack unit(s) had no live unit of their entry near their spawn") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the report does not note the unmatched targets: %q", rep.Notes)
 	}
 }

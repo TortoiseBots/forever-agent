@@ -71,7 +71,8 @@ type ScoutCfg struct {
 	FamilyAssistRadius float64
 }
 
-// LOSKey names one `q los` answer: the step it was asked for and the unit's spawn guid (the low 24 bits of its GUID).
+// LOSKey names one `q los` answer: the step it was asked for and the unit's spawn id (UnitSpawnKey: the read's own
+// SpawnID, else the low 24 bits of its GUID).
 type LOSKey struct {
 	Step int
 	Guid uint32
@@ -747,10 +748,10 @@ func liveAggroCheck(st *StepResult, units []world.Unit, w *worldspawn.World, own
 		if u.Dead {
 			continue
 		}
-		low := world.Low24(u.GUID)
+		spawn := world.UnitSpawnKey(u)
 		var reach float64
 		hostile := u.Hostile && u.Level > 1
-		if sp, ok := spawns[uint64(low)]; ok {
+		if sp, ok := spawns[uint64(spawn)]; ok {
 			if !liveKeep(sp) {
 				continue
 			}
@@ -760,7 +761,7 @@ func liveAggroCheck(st *StepResult, units []world.Unit, w *worldspawn.World, own
 		if !hostile || reach <= 0 {
 			continue
 		}
-		if o, ok := owned[uint64(low)]; ok && o <= pullIdx {
+		if o, ok := owned[uint64(spawn)]; ok && o <= pullIdx {
 			continue // this pull, or a pack an earlier row already owns
 		}
 		d := dist3(point, dungeon.Point{X: u.X, Y: u.Y, Z: u.Z})
@@ -773,13 +774,13 @@ func liveAggroCheck(st *StepResult, units []world.Unit, w *worldspawn.World, own
 		if d < nearest {
 			nearest, haveNear = d, true
 		}
-		los, ok := live.LOS[LOSKey{Step: st.Step, Guid: low}]
+		los, ok := live.LOS[LOSKey{Step: st.Step, Guid: spawn}]
 		if !ok {
 			los = true // the high side: no answer means sight is assumed
 		}
 		name := u.Name
 		if name == "" {
-			name = fmt.Sprintf("guid %d", low)
+			name = fmt.Sprintf("guid %d", spawn)
 		}
 		if los {
 			inSight = append(inSight, fmt.Sprintf("%s at %.1f yd", name, d))
@@ -889,7 +890,7 @@ func liveJoinersCheck(st *StepResult, row planexport.StepRow, idx int, rows []pl
 		if u.Dead {
 			continue
 		}
-		at[world.Low24(u.GUID)] = dungeon.Point{X: u.X, Y: u.Y, Z: u.Z}
+		at[world.UnitSpawnKey(u)] = dungeon.Point{X: u.X, Y: u.Y, Z: u.Z}
 	}
 	lmobs := make([]aggroest.Mob, len(mobs))
 	copy(lmobs, mobs)

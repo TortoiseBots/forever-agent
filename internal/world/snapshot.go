@@ -69,6 +69,9 @@ type Unit struct {
 	// Voidwalker: 100% of the base mana, not of the maximum). 0 when the server did not send them.
 	BaseMana   uint32 `json:"base_mana,omitempty"`
 	BaseHealth uint32 `json:"base_health,omitempty"`
+	// SpawnID is the DB spawn id when the reader knows it (a live read matched to the world export's spawn); 0 means
+	// derive it from the guid (UnitSpawnKey). A Forever serve prints 128-bit guids, whose low part is no spawn id.
+	SpawnID uint32 `json:"spawn_id,omitempty"`
 }
 
 // Aura is a spell in one of a unit's 48 aura slots (UNIT_FIELD_AURA).

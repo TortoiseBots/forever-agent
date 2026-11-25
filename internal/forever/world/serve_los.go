@@ -4,16 +4,19 @@ package world
 // whether its line of sight is clear between two things and how far apart they are, and answers the parsed record.
 // The query changes nothing (no move, no selection, no fight state).
 //
-// The line is built and read by the typed `.tb` client (tbcmd.LOS); nothing here composes a command line, and the
-// session's GM guard runs before the line like every other `.tb` line. A refusal the module writes into its answer
-// (`no-access`, `not-in-world`, `different-maps`, `rate`, ...) is the method's result with reason set, because a
-// polling tool needs the code; a malformed line, and a module that does not answer the command at all, are typed
-// errors. A rate refusal is returned as it arrived; nothing retries it here.
+// The line is built and read by the typed `.tb` client (tbcmd.LOS); nothing here composes a command line. A GM account
+// runs it through the session's guard like every other `.tb` line; a session that is not a GM may still run the one
+// read-only shape the player run sends (playSightQuery), because the module answers it under its own access rule, and
+// an older module's echo of it is read as a refusal rather than a command falling through. Every other shape keeps the
+// GM probe. A refusal the module writes into its answer (`no-access`, `not-in-world`, `different-maps`, `rate`, ...) is
+// the method's result with reason set, because a polling tool needs the code; a malformed line, and a module that does
+// not answer the command at all, are typed errors. A rate refusal is returned as it arrived; nothing retries it here.
 
 import (
 	"context"
 	"errors"
 
+	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/forever/sightcmd"
 	"github.com/pjerra/forever-agent/internal/rpc"
@@ -63,8 +66,14 @@ func (st *serveState) serveLOS(ctx context.Context, p serveLOSParams) (ServeLOS,
 	if _, err := tbcmd.LOSLine(sa, sb, p.Map); err != nil {
 		return ServeLOS{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "los: " + err.Error()}
 	}
-	client := tbcmd.NewClient(&serveTBRunner{st: st})
+	client := tbcmd.NewClient(&serveSightRunner{st: st})
 	rep, err := client.LOS(ctx, p.A, p.B, p.Map)
+	// The line said aloud is the module's answer that this account gets no sight query: it is a refusal of the call,
+	// not a lost link (the feed treats a sight echo as such and leaves the session's guard alone).
+	if s := st.session.Load(); s != nil && s.sightWasSaidAloud() {
+		return ServeLOS{}, &rpc.Error{Code: rpc.CodeGame,
+			Message: "los: said aloud: this module build gives the account no sight query"}
+	}
 	if err != nil {
 		return ServeLOS{}, losError(err)
 	}
@@ -77,6 +86,23 @@ func (st *serveState) serveLOS(ctx context.Context, p serveLOSParams) (ServeLOS,
 		out.DistYD = &d
 	}
 	return out, nil
+}
+
+// serveSightRunner is the los method's own transport. A session whose GM permission is confirmed runs the line as
+// every other serve line does. One that is not a GM runs only the shapes playSightQuery admits (the player run's
+// read-only sight line, which the module answers for a player account): the line is put on the channel without the GM
+// probe, and cmdLink.SendCommand admits it for the serve channel's link alone. Every other line takes the probe path.
+type serveSightRunner struct{ st *serveState }
+
+func (r *serveSightRunner) Run(ctx context.Context, line string, o command.Options) (*command.Reply, error) {
+	s := r.st.session.Load()
+	if s == nil {
+		return nil, ErrLinkLost
+	}
+	if s.gmConfirmed || !playSightQuery(line) {
+		return s.serveCommandOptions(ctx, line, o)
+	}
+	return s.serveRunLine(ctx, line, o)
 }
 
 // losError names the two los failures a caller must tell apart from a module answer: a server whose module build has

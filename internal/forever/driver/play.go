@@ -1110,6 +1110,7 @@ func (p *playRun) walkToWithin(ctx context.Context, to Vec3, arrive float64, dir
 			return false
 		}
 		if route.Kind != navmesh.RouteComplete {
+			p.walkPartial(route, to, "walk")
 			p.stop("walk:" + string(route.Kind))
 			return false
 		}
@@ -1123,6 +1124,19 @@ func (p *playRun) walkToWithin(ctx context.Context, to Vec3, arrive float64, dir
 	}
 	p.stop("walk:mapchange")
 	return false
+}
+
+// walkPartial records a route the mesh could not complete: the walk stops at "walk:partial" as before, and the event
+// names where it was going, where the route ended, how far that end stands off the mesh and which walk it was (the
+// leg walk or the pull's own approach), so the next partial reads its cause from the trace.
+func (p *playRun) walkPartial(route navmesh.Route, to Vec3, state string) {
+	p.rec.Event(p.now(), "walk_partial", map[string]any{
+		"kind": string(route.Kind), "reason": route.Reason,
+		"from_x": p.self[0], "from_y": p.self[1], "from_z": p.self[2],
+		"to_x": to[0], "to_y": to[1], "to_z": to[2],
+		"end_x": route.End[0], "end_y": route.End[1], "end_z": route.End[2],
+		"end_yd": route.EndDistance, "leg": p.legName(), "state": state,
+	})
 }
 
 // walkEnd is how one walk ended: an arrival, a map change (the rest is planned again), a pack in the way to pull
@@ -1196,9 +1210,10 @@ func (p *playRun) walkSegments(ctx context.Context, segs [][][3]float32) walkEnd
 
 // packInWay is the plan's next uncleared pack a live unit of which stands within PlayPullYd of the agent: a pack in
 // the way is fought before the walk goes on. It is any pack of the plan, not only the current leg's (a party that
-// walks past another leg's pack fights it where it stands; aggro does not read the plan), and a patrol counts by its
-// entry, because it walks through the party while its spawn is out of the pack's radius. A hostile no pack claims and
-// no patrol names is patrolHold's business.
+// walks past another leg's pack fights it where it stands; aggro does not read the plan), and a patrol counts when it
+// stands on its path (patrolOnPath), because it walks through the party while its spawn is out of the pack's radius and
+// a unit of its entry 100 yd off the path is another fight's add. A hostile no pack claims and no patrol names is
+// patrolHold's business.
 func (p *playRun) packInWay() (int, bool) {
 	if p.selfMap != p.route.Map {
 		return -1, false
@@ -1224,7 +1239,7 @@ func (p *playRun) packInWay() (int, bool) {
 			continue
 		}
 		for _, u := range units {
-			if slices.Contains(g.Patrol.Entries, u.Entry) {
+			if patrolOnPath(*g, u) {
 				consider(g, u)
 			}
 		}
