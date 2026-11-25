@@ -3,7 +3,7 @@
   "name": "scarlet_cathedral",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-25: plan-export refuses legs[1].boss.hold; the module's plan table has no hold rows, and the plan keeps the hold for the Turtle stack)",
   "map": 189,
   "entrance": {"x": 853.179, "y": 1319.18, "z": 18.6714},
   "entrance_trigger": 610,
@@ -521,7 +521,8 @@
         "button \"Lever\" entry 104589 at 1073.9 1405.9 30.3",
         "door \"Chapel Door\" entry 104591 at 1069.9 1399.1 30.8",
         "door \"High Inquisitor's Door\" entry 104600 at 1173.0 1398.9 32.0",
-        "The hold's spot 1140 1398 31.03 is the navmesh ground 14 yd west of Mograine (walkable, a 14 yd walk to him) and 62 yd from Whitemane's spawn behind the High Inquisitor's Door, so she must come to the party; radius 35 covers the chapel, timeout_s 600 the corpse timer."
+        "The hold's spot 1140 1398 31.03 is the navmesh ground 14 yd west of Mograine (walkable, a 14 yd walk to him) and 62 yd from Whitemane's spawn behind the High Inquisitor's Door, so she must come to the party; radius 35 covers the chapel, timeout_s 600 the corpse timer.",
+        "Forever check (2026-11-25, issue #223 batch 2, ForeverCore world DB, tools/dungeongen/export-forever.sh map 189: 369 normal spawns): plan-export --forever refuses legs[1].boss.hold (no hold rows in the module's plan table), so no run-leader rows are written and the plan is refused for Forever; the hold stays for the Turtle stack. Checked as a file: plan-check --forever walks all 103 points on the Forever map-189 tiles with no failed point, 33 packs the run leader hops toward, 11 findings (6 edge, 3 climb_anchor, 2 aggro) and 48 joiners."
       ]
     }
   ]

@@ -4,7 +4,7 @@ title: Dungeon plans
 description: What a dungeon plan file is, every field it can carry, and what its status and forever_status mean.
 tags: [dungeons, plans, reference, format]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:40:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T03:48:00Z }
 sources:
   - id: plan-go
     resource: internal/dungeon/plan.go
@@ -93,6 +93,11 @@ exported for a Forever server yet), `exported` (`tools/dungeongen` wrote the pla
 spawns were checked against a Forever world export), `refused` (it was checked against ForeverCore data and cannot
 be cleared for a Forever run: the free text names the refused field, or the spawns or the route the server does not
 have) or `live-checked` (it was run on a Forever server). `plan-list` prints the whole value, free text included.
+
+The check runs in batches (issue #223); a plan's own `forever_status` and `notes` carry the numbers. Of the classic
+dungeons, `stormwind_stockade` is `exported`, and `deadmines`, `shadowfang_keep`, `blackfathom_deeps`, `gnomeregan`,
+`razorfen_kraul`, `scarlet_graveyard`, `scarlet_library`, `scarlet_armory` and `scarlet_cathedral` are `refused`,
+each with the field, the spawns or the segments its value names. A plan still saying `todo` has not had the check.
 
 A naming rule that bites: `plan-export` refuses a `draft` plan unless `--allow-draft` is passed, and
 `--all-live` exports only `live-checked` plans. The plan check does not care about the status: it walks the file as

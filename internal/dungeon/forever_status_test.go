@@ -72,18 +72,30 @@ func TestTurtleCustomPlansAreNotApplicable(t *testing.T) {
 
 // TestSharedPlansKeepTurtleContent: a plan file serves both stacks, so checking a plan against ForeverCore data must
 // not delete a spawn a Turtle run needs. Where ForeverCore has no spawn of a Turtle content row, the plan keeps the row
-// and says refused for Forever: a Forever run cannot clear it, a Turtle run still can.
+// and says refused for Forever: a Forever run cannot clear it, a Turtle run still can. The counts are the units the
+// plan's pull groups and boss rows carry, so dropping one member of a pack fails the test, not just dropping the entry.
 func TestSharedPlansKeepTurtleContent(t *testing.T) {
 	tests := []struct {
 		plan    string
-		entries []uint32 // Turtle content ForeverCore has no spawn for
+		entries map[uint32]int // Turtle content ForeverCore has no spawn for: entry -> units in the plan
 	}{
 		// Deadmines' Defias Companions (3450) are summoned by the old server's scripts; ForeverCore's summon none.
-		{"deadmines", []uint32{3450}},
-		// Sever (14682), Prelate Ironmane (61969) and the Mistblade Rippers (61970) are Turtle spawns.
-		{"shadowfang_keep", []uint32{14682, 61969, 61970}},
+		{"deadmines", map[uint32]int{3450: 8}},
+		// Sever (14682) and Prelate Ironmane (61969) are Turtle bosses, the Mistblade Rippers (61970) their pack.
+		{"shadowfang_keep", map[uint32]int{14682: 1, 61969: 1, 61970: 9}},
 		// The Velthelaxx the Defiler wing: the boss (62530) and its members (62528, 62529).
-		{"blackfathom_deeps", []uint32{62528, 62529, 62530}},
+		{"blackfathom_deeps", map[uint32]int{62528: 5, 62529: 9, 62530: 1}},
+		// Razorfen Kraul's Turtle-only units: Bramblehide Rootshaper (9), its Gnarled Bramblehide (5) and Rotthorn (1).
+		{"razorfen_kraul", map[uint32]int{62501: 9, 62502: 5, 62503: 1}},
+		// Scarlet Graveyard's Turtle spawns: the Scarlet Jailer pack (14), Duke Dreadmoore and Scorn.
+		{"scarlet_graveyard", map[uint32]int{61971: 14, 61972: 1, 14693: 1}},
+		// Scarlet Library's Turtle boss, Brother Wystan.
+		{"scarlet_library", map[uint32]int{61983: 1}},
+		// Scarlet Armory's Turtle boss, Armory Quartermaster Daghelm.
+		{"scarlet_armory", map[uint32]int{61982: 1}},
+		// Scarlet Cathedral has no Turtle-only entry: its refused field is the Mograine hold, pinned by
+		// TestScarletCathedralKeepsMograineHold.
+		{"scarlet_cathedral", nil},
 	}
 	for _, tc := range tests {
 		p, err := Load(filepath.Join(plansDir, tc.plan+".json"))
@@ -91,28 +103,61 @@ func TestSharedPlansKeepTurtleContent(t *testing.T) {
 			t.Errorf("%s: %v", tc.plan, err)
 			continue
 		}
-		seen := map[uint32]bool{}
+		got := map[uint32]int{}
 		for _, l := range p.Legs {
 			for _, g := range l.PullGroups {
 				for _, e := range g.Entries {
-					seen[e] = true
+					got[e]++
 				}
 			}
 			if l.Boss != nil {
-				seen[l.Boss.Entry] = true
+				got[l.Boss.Entry]++
 				for _, e := range l.Boss.First {
-					seen[e] = true
+					got[e]++
 				}
 			}
 		}
-		for _, e := range tc.entries {
-			if !seen[e] {
-				t.Errorf("%s: entry %d is Turtle content ForeverCore lacks and must stay in the plan", tc.plan, e)
+		for e, want := range tc.entries {
+			if got[e] != want {
+				t.Errorf("%s: entry %d has %d units, want %d: it is Turtle content ForeverCore lacks and must stay in the plan", tc.plan, e, got[e], want)
 			}
 		}
 		if word, _, _ := strings.Cut(p.ForeverStatus, " "); word != ForeverRefused {
 			t.Errorf("%s: forever_status %q, want %s: the Turtle content has no ForeverCore spawn", tc.plan, p.ForeverStatus, ForeverRefused)
 		}
+	}
+}
+
+// TestScarletCathedralKeepsMograineHold: Scarlet Cathedral's Forever check stopped on plan-export's refusal of
+// legs[1].boss.hold, because the module's plan table has no hold rows. The plan keeps the hold for the Turtle stack
+// (the Mograine/Whitemane event: instance data 1 at 4, Whitemane 3977 summoned when it ends), so a Forever check must
+// not delete it to make the plan export.
+func TestScarletCathedralKeepsMograineHold(t *testing.T) {
+	p, err := Load(filepath.Join(plansDir, "scarlet_cathedral.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Legs) < 2 || p.Legs[1].Boss == nil {
+		t.Fatalf("scarlet_cathedral: leg 1 has no boss, so the Mograine hold is gone")
+	}
+	h := p.Legs[1].Boss.Hold
+	if h == nil {
+		t.Fatalf("scarlet_cathedral: legs[1].boss.hold is the Mograine/Whitemane event and must stay in the plan")
+	}
+	if h.Data != 1 || h.Value == nil || *h.Value != 4 {
+		t.Errorf("scarlet_cathedral: the hold reads instance data %d at %v, want 1 at 4", h.Data, h.Value)
+	}
+	whitemane := false
+	for _, e := range h.Entries {
+		if e == 3977 {
+			whitemane = true
+		}
+	}
+	if !whitemane {
+		t.Errorf("scarlet_cathedral: the hold's entries %v name no Whitemane (3977)", h.Entries)
+	}
+	if word, _, _ := strings.Cut(p.ForeverStatus, " "); word != ForeverRefused {
+		t.Errorf("scarlet_cathedral: forever_status %q, want %s: the module has no hold rows", p.ForeverStatus, ForeverRefused)
 	}
 }
 

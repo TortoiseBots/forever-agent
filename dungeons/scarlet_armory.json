@@ -3,7 +3,7 @@
   "name": "scarlet_armory",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-25: the boss's 61982 has no ForeverCore map-189 spawn, 17 units stand 29.0-86.1 yd from any core spawn of their entry and 9 of 45 exported segments are server NOPATH)",
   "map": 189,
   "entrance": {"x": 1608.1, "y": -318.919, "z": 18.6714},
   "entrance_trigger": 612,
@@ -31,7 +31,8 @@
     "Needs: Herod's door (GO_HEROD_DOOR) opens through the armory script",
     "One of four wings of map 189; Armory Quartermaster Daghelm (61982) is Turtle's addition.",
     "Census 2026-10-23 (82 spawns, 80 trash 35-38 rank 1, 2 bosses): all trash is humanoid faction 67; 4286 4289 4290 4292 4297 4298 flee at 15 % (EventAI 47), 4295 does not. 4292 Protector heals (Holy Light 15493, interruptible), 4290 Guardsman casts Shadow Bolt 9613 and Curse of Weakness 6205, 4297 Conjuror summons a Fire Elemental (575) on spawn: kill_first 4292 4290 4297, no pack needs CC. No creature_groups and no rare rank 2/4 in the wing. Ten patrollers (movement_type 2) are pull members and carry their creature_movement path as a patrol block (period estimated). Herod 3975 (boss_herod) summons two Myrmidons 4295 and trainees 6575 on aggro, which no plan row can list.",
-    "Herod's Door 101854 and Lever 101855 stand at the second leg; the door's DB state is 1 (active) and the boss script opens it on aggro, so no door step is needed."
+    "Herod's Door 101854 and Lever 101855 stand at the second leg; the door's DB state is 1 (active) and the boss script opens it on aggro, so no door step is needed.",
+    "Forever check (2026-11-25, issue #223 batch 2, ForeverCore world DB, tools/dungeongen/export-forever.sh map 189: 369 normal spawns): plan-export --forever writes 2 legs, 46 steps, 42 pulls, 2 moves, 92 units and 2 boss rows and refuses no field. plan-probe --forever on the Forever map-189 tiles reports 18 of the 92 units with no core spawn of their entry within the row's radius and 9 of 45 segments that do not walk (all server NOPATH); plan-check --forever fails 14 of 84 points (off the mesh) with 7 findings (2 edge, 3 climb_anchor, 1 hop_len, 1 aggro) and 33 joiners; trash-check reports 28 danger, 8 own and 2 patrol segments of 45. The boss's 61982 (Armory Quartermaster Daghelm) has no map-189 spawn in the core, and 17 units (4289 2, 4290 2, 4292 4, 4295 3, 4298 6) stand 29.0-86.1 yd from any core spawn of their entry, so the plan is refused for Forever rather than trimmed for it."
   ],
   "legs": [
     {
