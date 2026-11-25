@@ -130,7 +130,11 @@ func decisionsPullModule(ctx context.Context, o decisionsPullOptions, stdout, st
 	}
 	if report != nil && report.Decisions != nil {
 		d := report.Decisions
-		fmt.Fprintf(stdout, "decisions: pulled %d row(s) in %d page(s) (%d bytes) into %s\n", d.Rows, d.Pages, d.Bytes, report.DecisionsFile)
+		if d.Rows == 0 {
+			fmt.Fprintln(stdout, "decisions: the module has no decision row for this run (nothing written)")
+		} else {
+			fmt.Fprintf(stdout, "decisions: pulled %d row(s) in %d page(s) (%d bytes) into %s\n", d.Rows, d.Pages, d.Bytes, report.DecisionsFile)
+		}
 		if d.Truncated && d.Note != "" {
 			fmt.Fprintf(stderr, "decisions: %s\n", d.Note)
 		}

@@ -245,4 +245,16 @@ func TestDecisionsPullModuleReport(t *testing.T) {
 	if !strings.Contains(stderr.String(), "no-capture") {
 		t.Fatalf("stderr: %q", stderr.String())
 	}
+	// A run the module kept no row for is a success with nothing written, and the message says so.
+	enterDecisionsPull = func(ctx context.Context, o *decisionsPullOptions, stdout io.Writer) (*world.Report, error) {
+		return &world.Report{Decisions: &driver.RunDecisions{Rows: 0, Pages: 1}}, nil
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := decisionsCmd(context.Background(), login, &stdout, &stderr); code != exitOK {
+		t.Fatalf("no rows: exit %d, want 0: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "no decision row") {
+		t.Fatalf("stdout: %q", stdout.String())
+	}
 }

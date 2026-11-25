@@ -149,8 +149,8 @@ forever-agent decisions pull --leader NAME --out DIR
 ```
 
 `--run ID` names the run by its id instead of its leader. The command logs in, reads the rows through the command
-channel and writes them into `DIR` as `<run id>.decisions.jsonl`; `--since-seq N` starts above an earlier cursor and
-`--limit N` (1-200) sets the page asked for. It needs the account's command permission, like every `.tb` read, and a
+channel and writes them into `DIR` as `<run id>.decisions.jsonl` (a run with no row writes no file, and the command
+says so); `--since-seq N` starts above an earlier cursor and `--limit N` (1-200) sets the page asked for. It needs the account's command permission, like every `.tb` read, and a
 module build without the command answers `not supported by this module build`. Without `--leader` or `--run` the
 command keeps its other mode: the Turtle dashboard pull of decision captures (`--dash-url`).
 

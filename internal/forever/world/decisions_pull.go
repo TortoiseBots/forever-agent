@@ -59,15 +59,17 @@ func (s *session) pullDecisions(ctx context.Context, o *DecisionsPullOptions) er
 	if stem == "" {
 		stem = pull.Run
 	}
-	block, err := driver.WriteRunDecisions(o.Out, stem, pull)
+	written, err := driver.WriteRunDecisions(o.Out, stem, pull)
 	if err != nil {
 		return err
 	}
-	summary := driver.RunDecisions{Rows: len(pull.Rows), Pages: pull.Pages, Bytes: block, Truncated: pull.Truncated,
+	summary := driver.RunDecisions{Rows: len(pull.Rows), Pages: pull.Pages, Bytes: written, Truncated: pull.Truncated,
 		Note: pull.Note}
 	s.report.Decisions = &summary
-	s.report.DecisionsFile = driver.DecisionsPath(o.Out, stem)
-	s.opts.logf("decisions: %d row(s) in %d page(s), %d bytes, run %s", summary.Rows, summary.Pages, block, pull.Run)
+	if written > 0 {
+		s.report.DecisionsFile = driver.DecisionsPath(o.Out, stem)
+	}
+	s.opts.logf("decisions: %d row(s) in %d page(s), %d bytes, run %s", summary.Rows, summary.Pages, written, pull.Run)
 	if summary.Note != "" {
 		s.opts.logf("decisions: %s", summary.Note)
 	}
