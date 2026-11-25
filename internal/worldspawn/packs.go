@@ -95,11 +95,15 @@ func (w *World) packSets(index map[uint64]int, leaderFallback bool) map[uint64]u
 
 // PackIndex is every spawn's pack label under the core's pack model: Pack's own (a creature_groups group that aggros
 // together, or a creature_linking aggro edge), with one reading for an older export. An export whose creature rows carry
-// group leaders but no group_flags column at all says only who leads whom: with no flags to read, a shared non-zero leader
-// is the group those rows describe. A spawn in no group is its own label.
+// group leaders but no group_flags column at all (World.GroupFlagsKnown false) says only who leads whom: with no flags
+// to read, a shared non-zero leader is the group those rows describe. A column whose every row says 0 is not that
+// case; it says nothing aggros together. A spawn in no group is its own label.
 func (w *World) PackIndex() map[uint64]uint64 {
 	index := make(map[uint64]int, len(w.Spawns))
-	flagsSeen := false
+	// The column is the evidence, not a non-zero value in it: an export carrying group_flags (or the Forever export's
+	// group_ai) says all its groups' option sets, and zeros mean none of them aggros together. Only an export without
+	// the column falls back to its leader rows.
+	flagsSeen := w.GroupFlagsKnown
 	for i, s := range w.Spawns {
 		index[s.GUID] = i
 		if s.GroupFlags != 0 {

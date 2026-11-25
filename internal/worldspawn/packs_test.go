@@ -196,3 +196,46 @@ func TestPackIndexPinsTheLinkFlags(t *testing.T) {
 		t.Fatal("a leader-only export links a spawn outside its groups")
 	}
 }
+
+// TestPackIndexTellsAZeroFlagsColumn: the export carries its group_flags column and every row says 0 (a formation-only
+// world, nothing aggros together): that is the core's answer, not an old export without the column whose leader rows
+// ARE the group. Reading a zeroed column as leader-only would hide a pack-spread warning.
+func TestPackIndexTellsAZeroFlagsColumn(t *testing.T) {
+	zeroed := &World{GroupFlagsKnown: true, Spawns: []Spawn{
+		{GUID: 40, Faction: 14, GroupLeader: 40, GroupFlags: 0},
+		{GUID: 41, Faction: 14, GroupLeader: 40, GroupFlags: 0},
+	}}
+	idx := zeroed.PackIndex()
+	if idx[40] == idx[41] {
+		t.Fatal("an export with the group_flags column of all zeros read as a leader-only export")
+	}
+	// The reading for an export WITHOUT the column is unchanged: its leader rows are the group.
+	bare := &World{Spawns: []Spawn{
+		{GUID: 50, Faction: 14, GroupLeader: 50},
+		{GUID: 51, Faction: 14, GroupLeader: 50},
+	}}
+	if idx := bare.PackIndex(); idx[50] != idx[51] {
+		t.Fatal("an export without the group_flags column no longer reads its leader rows as a group")
+	}
+}
+
+// TestLoadNotesTheGroupFlagsColumn: the loader knows whether creatures.tsv carried its group_flags column, so an
+// export with the column of all zeros is not mistaken for an older export without it.
+func TestLoadNotesTheGroupFlagsColumn(t *testing.T) {
+	dir := writeExport(t, map[string]string{
+		"creatures.tsv": newHeader +
+			spawnRowOpts(60, 100, "leader", 0, 0, 0, 0, 60, 0, 20, 0, 1, 0, 0) +
+			spawnRowOpts(61, 100, "member", 40, 0, 0, 0, 60, 0, 20, 0, 1, 0, 0),
+		"groups.tsv": "leader_guid\tmember_guid\tdist\tangle\tflags\n60\t61\t40\t0\t0\n",
+	})
+	w, _, err := Load(dir, 1)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !w.GroupFlagsKnown {
+		t.Fatal("the export's group_flags column was not seen")
+	}
+	if idx := w.PackIndex(); idx[60] == idx[61] {
+		t.Fatal("the export's zeroed group flags read as a leader-only export")
+	}
+}
