@@ -1106,6 +1106,9 @@ func (p *playRun) agentPull(ctx context.Context, group int, members []Unit, skul
 	if p.stopReason != "" {
 		return false
 	}
+	// The clearance's baseline is this pull's own: a later pull stands somewhere else, and its approaches are measured
+	// from where it began.
+	p.approachBase = map[wire.GUID]float64{}
 	if skull.GUID.IsZero() || skull.Dead || skull.Friendly {
 		p.agentPullFailed(group, "gone")
 		return false
@@ -1695,10 +1698,21 @@ func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64
 		if dist3(u.Pos, target) <= PlayAssistYd {
 			continue
 		}
-		// Standing inside the clearance already: only nearer than here counts (a hostile the agent stands on, within the
-		// slack, can be walked away from and blocks nothing).
+		// Standing inside the clearance already: only nearer than the first plan that stood inside it counts (a hostile
+		// the agent stands on, within the slack, can be walked away from and blocks nothing). That distance is kept per
+		// unit for the pull: each pass' own distance let repeated re-plans creep a little nearer every time (about the
+		// slack per pass, until the pull's deadline).
 		radius := PlayAgentApproachPackYd
-		if here := dist3(points[0], u.Pos); here < radius {
+		here := dist3(points[0], u.Pos)
+		if base, ok := p.approachBase[u.GUID]; ok {
+			here = base
+		} else if here < radius {
+			if p.approachBase == nil {
+				p.approachBase = map[wire.GUID]float64{}
+			}
+			p.approachBase[u.GUID] = here
+		}
+		if here < radius {
 			radius = here - PlayAgentApproachStartEpsYd
 		}
 		if radius <= 0 {

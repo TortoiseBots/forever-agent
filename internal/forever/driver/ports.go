@@ -47,8 +47,11 @@ type Unit struct {
 	// Friendly marks a unit that cannot be pulled (a quest giver, a player of the same faction, a totem); the
 	// adapter knows the faction, the fake sets it.
 	Friendly bool
-	// Owner is the unit's owner GUID (SummonedBy, else CreatedBy, else CharmedBy), zero when unowned.
-	Owner wire.GUID
+	// Owner is the unit's owner GUID (SummonedBy, else CreatedBy, else CharmedBy), zero when unowned; CharmedBy is the
+	// charm's controller on its own, zero when the unit is not charmed (a party pet an enemy charmed still reports the
+	// party member as Owner, and the charm says who holds it now).
+	Owner     wire.GUID
+	CharmedBy wire.GUID
 	// Faction is the unit's faction template id and Flags its unit flags, as the update fields carry them (0 when the
 	// view does not know). The patrol hold reads them: the reaction through Reactions, the flags for UnitNotAttackable.
 	Faction int32

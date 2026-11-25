@@ -1300,10 +1300,12 @@ func wantApproachClears(t *testing.T, rig *playRig) {
 // by a party member and is not marked friendly. It stands by the party, inside the clearance of the agent's start, and
 // it is not a pack: the approach walks and pulls. Counted, it blocked every approach with pack-near.
 func TestAgentPullApproachIgnoresPartyOwnedUnits(t *testing.T) {
+	// Every case stands on the walked path and outside the skull's assistance radius, so each one blocks when it is
+	// counted (a case off the path would pass without the fix, which is what let two of these go by).
 	cases := map[string]Vec3{
-		"at the stand":     {40, 5, 0},
-		"beside the agent": {45, 18, 0},
-		"on the path":      approachPoint(3, 1),
+		"early on the path": approachPoint(1.5, 0),
+		"on the path":       approachPoint(3, 1),
+		"late on the path":  approachPoint(4, 0),
 	}
 	for name, pos := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1470,4 +1472,71 @@ func TestAgentPullApproachPartialRouteIsNoPath(t *testing.T) {
 	if len(rig.fake.agentAttacks) != 0 {
 		t.Fatalf("the agent attacked %v; want no swing on a partial route", rig.fake.agentAttacks)
 	}
+}
+
+// TestPackOnPathMeasuresFromThePullsFirstPlan: the clearance a hostile inside the agent's start imposes is measured
+// from the distance the pull's first approach planned from, not from wherever a later pass happens to stand. Without
+// that, every pass lets the agent creep about the slack nearer (0.5 yd), pass after pass, until the pull's deadline.
+//
+// Mutation this test catches: packOnPath reading the pass' own start distance (the second plan blocks later, from a
+// point it already crept to).
+func TestPackOnPathMeasuresFromThePullsFirstPlan(t *testing.T) {
+	skull := livePullSkull
+	hostile := approachPoint(4, 12) // inside the clearance of the fallback's start, 12 yd to the side of the path
+	rig := approachRig(t, skull, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(40), Entry: 11980, Pos: hostile})
+	})
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults(),
+		approachBase: map[wire.GUID]float64{}}
+	base := dist3(livePullSelf, hostile)
+	if base >= PlayAgentApproachPackYd {
+		t.Fatalf("the test's hostile stands %.1f yd from the start; want it inside the %v yd clearance", base, PlayAgentApproachPackYd)
+	}
+	if _, blocked := p.packOnPath(-1, skull, []Vec3{livePullSelf, skull}, 0); !blocked {
+		t.Fatal("the path toward the skull did not block on the hostile inside the start's clearance")
+	}
+	if got := p.approachBase[fightGUID(40)]; got != base {
+		t.Fatalf("the recorded baseline is %.2f, want the first plan's %.2f", got, base)
+	}
+	// A later pass stands 0.4 yd nearer the hostile (the creep the old rule allowed) and plans again: the clearance is
+	// the first plan's, so the path blocks within a fraction of a yard instead of the 0.5 the pass' own distance allows.
+	step := float32(0.4 / base)
+	near := Vec3{
+		livePullSelf[0] + (hostile[0]-livePullSelf[0])*step,
+		livePullSelf[1] + (hostile[1]-livePullSelf[1])*step,
+		livePullSelf[2] + (hostile[2]-livePullSelf[2])*step,
+	}
+	at, blocked := p.packOnPath(-1, skull, []Vec3{near, skull}, 0)
+	if !blocked {
+		t.Fatal("the second plan did not block")
+	}
+	if at > PlayAgentApproachStartEpsYd {
+		t.Fatalf("the second plan blocked at %.2f yd; want it measured from the first plan (within the %.2f yd slack of the start)", at, PlayAgentApproachStartEpsYd)
+	}
+	if got := p.approachBase[fightGUID(40)]; got != base {
+		t.Fatalf("the baseline moved to %.2f; want the first plan's %.2f", got, base)
+	}
+}
+
+// TestAgentPullApproachCharmedPets: a charm is the controlling ownership. A party's pet charmed by an enemy fights
+// the party and is a pack (the approach keeps its clearance); an enemy's pet charmed by a party member is the party's
+// and is not. The serve unit's Owner still names the summoner in both cases, so only the charm field tells them.
+//
+// Mutation this test catches: partyOwned reading Owner alone (the charmed party pet skipped as the party's, the
+// approach walking through a mob that is fighting it).
+func TestAgentPullApproachCharmedPets(t *testing.T) {
+	t.Run("a party pet charmed by an enemy is a pack", func(t *testing.T) {
+		rig := approachRig(t, livePullSkull, nil)
+		owner := rig.ports.Group.Roster()[0].GUID
+		rig.fake.AddUnit(Unit{GUID: fightGUID(41), Entry: 11979, Pos: approachPoint(3, 1), Owner: owner, CharmedBy: fightGUID(99)})
+		Play(context.Background(), rig.route, rig.ports, rig.cfg)
+		wantPackNear(t, rig)
+	})
+	t.Run("an enemy pet charmed by the party is not", func(t *testing.T) {
+		rig := approachRig(t, livePullSkull, nil)
+		member := rig.ports.Group.Roster()[0].GUID
+		rig.fake.AddUnit(Unit{GUID: fightGUID(42), Entry: 11978, Pos: approachPoint(3, 1), Owner: fightGUID(98), CharmedBy: member})
+		Play(context.Background(), rig.route, rig.ports, rig.cfg)
+		wantApproachClears(t, rig)
+	})
 }

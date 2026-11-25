@@ -114,10 +114,11 @@ would add no sight — the leading player pulls the mob itself:
    larger for a lower-level agent). That clearance is measured against another pack of the plan, a patrol no plan group
    claims and a stranger alike, but not against the pull's own units, a unit already fighting the party, or one within
    `PlayAssistYd` (10 yd) of the skull, which is the pull's own social add and comes with it. The party's own pets,
-   totems and guardians (units a party member owns) and critters are not counted; an enemy hunter's pet or a hostile
-   totem is. Where the agent already stands inside a hostile's clearance, only a point of the path nearer to that
-   hostile than the agent stands now (less `PlayAgentApproachStartEpsYd`, 0.5 yd) blocks, so a path that walks away
-   from it is clear. A hostile the view does not carry (a pack out of view) is unknown and is not counted: the check fails open there. When the path cannot keep
+   totems and guardians (units a party member owns, or that a party member has charmed) and critters are not counted;
+   an enemy hunter's pet or a hostile totem is, and so is a party pet an enemy has charmed (the charm is the
+   controlling ownership while it is on). Where the agent already stands inside a hostile's clearance, only a point of
+   the path nearer to that hostile than the agent stood at the pull's first plan (less `PlayAgentApproachStartEpsYd`,
+   0.5 yd) blocks, so a path that walks away is clear and repeated re-plans cannot creep nearer a little at a time. A hostile the view does not carry (a pack out of view) is unknown and is not counted: the check fails open there. When the path cannot keep
    the clearance, the approach walks the longest prefix of it that ends short of the first hostile, inside the other
    bounds, and plans again from there; a prefix that does not move the agent is no path. It never walks through a pack.
    The path it walks is the path it checked for those bounds, not a second query.
@@ -149,7 +150,7 @@ The fallback is bounded and it never becomes a second tank:
 | `PlayAgentPullMarginYd` | 2 yd | The approach stops this far inside the pull's range, so the walk's arrival tolerance lands in range. |
 | `PlayAgentApproachPathYd` | 40 yd | The longest navmesh path the approach may walk to the mob. |
 | `PlayAgentApproachPastYd` | 30 yd | How far past the party's pull stand the approach may end. |
-| `PlayAgentApproachStartEpsYd` | 0.5 yd | The slack of the clearance's start-inside rule: from a start already inside a hostile's clearance, a path point blocks only when it is nearer to that hostile than the agent's own distance by more than this. |
+| `PlayAgentApproachStartEpsYd` | 0.5 yd | The slack of the clearance's start-inside rule: from a start already inside a hostile's clearance, a path point blocks only when it is nearer to that hostile than the distance the pull's first approach planned from, by more than this. The distance is kept per hostile for the whole pull, so repeated re-plans cannot creep nearer. |
 | `PlayAgentApproachPackYd` | 22 yd | The clearance the approach keeps from every live hostile it is not pulling: another pack, an unclaimed patrol or a stranger (proximity aggro is about 20 yd; the plan carries no aggro margin of its own). A pack out of view is unknown and is not counted. |
 | `PlayTankEngageYd` | 10 yd | How near the tank the brought-back mob must stand before the tank is ordered again. |
 | `PlayAgentPullHP` | 40 % | The character's health floor for pulling; unknown health fails closed. |
