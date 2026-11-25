@@ -95,10 +95,13 @@ be cleared for a Forever run: the free text names the refused field, or the spaw
 have) or `live-checked` (it was run on a Forever server). `plan-list` prints the whole value, free text included.
 
 The check runs in batches (issue #223); a plan's own `forever_status` and `notes` carry the numbers. Of the classic
-dungeons, `stormwind_stockade` is `exported`, and `deadmines`, `shadowfang_keep`, `blackfathom_deeps`, `gnomeregan`,
-`razorfen_kraul`, the four Scarlet Monastery wings (`scarlet_graveyard`, `scarlet_library`, `scarlet_armory`,
-`scarlet_cathedral`), `razorfen_downs`, `uldaman`, `sunken_temple`, `zulfarrak` and `maraudon_purple` are `refused`,
-each with the field, the spawns or the segments its value names. A plan still saying `todo` has not had the check.
+dungeons, `stormwind_stockade` and `ragefire_chasm` are `exported`, and `deadmines`, `shadowfang_keep`,
+`blackfathom_deeps`, `gnomeregan`, `razorfen_kraul`, the four Scarlet Monastery wings (`scarlet_graveyard`,
+`scarlet_library`, `scarlet_armory`, `scarlet_cathedral`), `razorfen_downs`, `uldaman`, `sunken_temple`,
+`zulfarrak`, `maraudon_purple`, `maraudon_orange`, `lower_blackrock_spire`, `blackrock_depths`, `scholomance`, the
+three Dire Maul wings (`dire_maul_east`, `dire_maul_north`, `dire_maul_west`), `stratholme_live`,
+`stratholme_undead` and `wailing_caverns-extra` are `refused`, each with the field, the spawns or the segments its
+value names. The plans still saying `todo` (`wailing_caverns` and the raid plans) have not had the check.
 
 A naming rule that bites: `plan-export` refuses a `draft` plan unless `--allow-draft` is passed, and
 `--all-live` exports only `live-checked` plans. The plan check does not care about the status: it walks the file as

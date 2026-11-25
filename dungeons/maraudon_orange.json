@@ -3,7 +3,7 @@
   "name": "maraudon_orange",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-25: 50 of 427 unit rows miss a ForeverCore map-349 spawn of their entry within the row's radius and 3 of 212 segments do not walk on the Forever tiles)",
   "map": 349,
   "entrance": {"x": 1016.83, "y": -458.52, "z": -43.4737},
   "entrance_trigger": 3133,
@@ -38,7 +38,8 @@
     "Adds with no spawn row: Noxxion summons Noxxion's Spawn (13456, five at a time) and turns untargetable for 15 s every 40 s; Princess Theradras summons 12238 at 28.07 61.88 -123.41 on aggro. No plan field can list them.",
     "The eight-Vile-Larva and six-Deep-Borer pulls are one linked pack in creature_groups (aggro together) and cannot be split; they are the plan's largest pulls.",
     "Every pull whose walk passes a patroller within 25 yd carries that patroller's creature_movement path as a patrol block with an estimated round (the mapping walk measures it): 85 pulls, the long Theradrim Guardian loops cross most of the inner ring.",
-    "The Rotgrip boss point keeps needs_walk: the mapping walk has not been done and no coordinate was invented."
+    "The Rotgrip boss point keeps needs_walk: the mapping walk has not been done and no coordinate was invented.",
+    "Forever check (2026-11-25, issue #223 batch 4, ForeverCore world DB, tools/dungeongen/export-forever.sh map 349: 624 normal spawns): plan-export --forever writes 6 legs, 213 steps, 120 pulls, 87 moves, 338 pack units and 6 boss rows and refuses no field. plan-probe --forever on the Forever map-349 tiles misses a core spawn within the row's radius for 50 of 427 unit rows (11784 Theradrim Guardian 17, 11792 Putridus Shadowstalker 3, 11793 Celebrian Dryad 3, 11794 Sister of Celebrian 4, 12206 Primordial Behemoth 5, 12207 Thessala Hydra 3, 12223 Cavern Lurker 1, 13142 Deeprot Tangler 6, 13533 Spewed Larva 1, 13596 Rotgrip 3, 13599 Stolid Snapjaw 4: the plan's patrol starts and packs stand 10.1-76.1 yd from any core spawn of their entry) and 3 of 212 segments do not walk (the rows at z -68.93, -79.33 and -110.26 find no floor within 5 yd, the first also crossing 12.2 yd of water); 212 segments: 129 ok, 80 warn, 3 bad. plan-check --forever fails 1 of 349 points with 312 findings (105 fail: water 20, off-floor 2, edge 71, ledge 11, short hop 35, patrol 25, hop_len 11, climb_anchor 24, joiners 113); trash-check reports 120 danger, 43 patrol, 19 own and 30 clear segments of 212. The plan keeps every spawn, leg and step: its content is shared with the Turtle stack."
   ],
   "legs": [
     {

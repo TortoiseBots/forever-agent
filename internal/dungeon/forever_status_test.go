@@ -113,6 +113,27 @@ func TestSharedPlansKeepTurtleContent(t *testing.T) {
 		{"zulfarrak", map[uint32]int{7273: 1, 7275: 1, 7796: 1, 62495: 1, 62496: 1, 62497: 1, 62498: 1, 62500: 11}},
 		// Maraudon Purple has no Turtle-only entry: its refused reason is the core's own spawn positions.
 		{"maraudon_purple", nil},
+		// Maraudon Orange and Lower Blackrock Spire have no Turtle-only entry: their refused reason is the core's own
+		// spawn positions and segments.
+		{"maraudon_orange", nil},
+		{"lower_blackrock_spire", nil},
+		// Blackrock Depths keeps Shan-xi Watershaper (61139), a Turtle NPC with no map-230 spawn in the core.
+		{"blackrock_depths", map[uint32]int{61139: 1}},
+		// Scholomance keeps Lord Blackwood (14695), the Turtle boss of its leg-7 hall pack, in both packs.
+		{"scholomance", map[uint32]int{14695: 2}},
+		// The three Dire Maul wings have no Turtle-only entry: their refused reasons are the spawn positions (east,
+		// north) and the holds the format cannot carry (west).
+		{"dire_maul_east", nil},
+		{"dire_maul_north", nil},
+		{"dire_maul_west", nil},
+		// Stratholme Live's missing units are a transform (10813) and summons (16101, 16102), not Turtle content; its
+		// refused reason is the spawn positions and two short segments.
+		{"stratholme_live", nil},
+		// Stratholme Undead refuses Baron Rivendare's hold; it has no Turtle-only entry.
+		{"stratholme_undead", nil},
+		// Wailing Caverns Extra refuses the Naralex event's unit waits, gossip and hold; its units are ordinary map-43
+		// spawns.
+		{"wailing_caverns-extra", nil},
 	}
 	for _, tc := range tests {
 		p, err := Load(filepath.Join(plansDir, tc.plan+".json"))
@@ -178,11 +199,13 @@ func TestScarletCathedralKeepsMograineHold(t *testing.T) {
 	}
 }
 
-// TestBatchPlansKeepTheirContent pins the Turtle content of the ten plans the #223 batches checked: batch 2's five
-// (razorfen_kraul, the four Scarlet Monastery wings) and batch 3's five (razorfen_downs, uldaman, sunken_temple,
-// zulfarrak, maraudon_purple). A Forever check may add forever_status or a note, but no leg, step, unit or point may
-// change: the counts catch a deleted move, door or wait step, and the hash catches a spawn moved with the counts
-// unchanged (notes, status and forever_status are left out, so text a Forever check writes does not fail it).
+// TestBatchPlansKeepTheirContent pins the Turtle content of the twenty plans the #223 batches checked: batch 2's five
+// (razorfen_kraul, the four Scarlet Monastery wings), batch 3's five (razorfen_downs, uldaman, sunken_temple,
+// zulfarrak, maraudon_purple) and batch 4's ten (maraudon_orange, lower_blackrock_spire, blackrock_depths,
+// scholomance, the three Dire Maul wings, both Stratholme plans and wailing_caverns-extra). A Forever check may add
+// forever_status or a note, but no leg, step, unit or point may change: the counts catch a deleted move, door or wait
+// step, and the hash catches a spawn moved with the counts unchanged (notes, status and forever_status are left out, so
+// text a Forever check writes does not fail it).
 func TestBatchPlansKeepTheirContent(t *testing.T) {
 	tests := []struct {
 		plan         string
@@ -210,6 +233,26 @@ func TestBatchPlansKeepTheirContent(t *testing.T) {
 			"636cfd123748fc35c1b7c8ac7705c380121780ee642b7807af1a1c29c027329d"},
 		{"maraudon_purple", 6, 0, 141, 392,
 			"83e50abe58b76d89c66becb65efb41be9fb62e2cf4fd2873972f43761fc30dd9"},
+		{"maraudon_orange", 6, 0, 120, 344,
+			"84f6643e0ee16e8c1dd5ad238ccaf53de4c475d9a7c397eb5641c44476ddc37d"},
+		{"lower_blackrock_spire", 7, 0, 113, 356,
+			"c139d970e11e4a8dcc39bf2438307213d6e3f5b0a63191ec5649a224a665e670"},
+		{"blackrock_depths", 10, 0, 257, 938,
+			"8c0d95efc285f736f0aa7b03dd0d2467be468644ca00d9e71c9c44b7c30b1f29"},
+		{"scholomance", 10, 0, 165, 454,
+			"a2aaecfae5eea4ada003da9270edc5a81adb06f1a5f64d9f7e8bc3afa7780bb9"},
+		{"dire_maul_east", 4, 0, 89, 272,
+			"93abfb7d3867223e4785a81313719617e3f2c22485c78607b522c437441996a3"},
+		{"dire_maul_north", 5, 0, 71, 232,
+			"a32a2d316ca93f187a53a4328c29bc851b020959254e9f3a2ca3d3ed20c370b4"},
+		{"dire_maul_west", 6, 0, 93, 256,
+			"fadee28a875aa1755bc8c0c5f7f95bfa72b22256b5f511d21cda0bb69b587b74"},
+		{"stratholme_live", 3, 0, 51, 231,
+			"1c1d874cba85875b64cc74fbec47ca6303415fb0c44bfdc0beb9fa728363111e"},
+		{"stratholme_undead", 6, 0, 83, 286,
+			"6b21f869f6494ddd306614c78e24716e50fdc716d0870fc4c3ba2774811536dc"},
+		{"wailing_caverns-extra", 12, 17, 4, 22,
+			"5e62bd85437907f971198bdeaedccbd6a88d61e11f619a3b039af27db57eff5c"},
 	}
 	for _, tc := range tests {
 		path := filepath.Join(plansDir, tc.plan+".json")
