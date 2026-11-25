@@ -148,11 +148,11 @@ every pull and stopped `patrol` at the oggleflint leg). The run's own trace sett
 
 
 - Full suite on the clean committed tree: `vm-test ta ~/wt-proof3` —
-  `RESULT: PASS  kind=ta wt=wt-proof3 sha=38290af3 dirty=0 files=2757 runner=yulon-ubuntu2` (rc=0, 834 s; the run
+  `RESULT: PASS  kind=ta wt=wt-proof3 sha=38290af3 dirty=0 files=2757` (rc=0, 834 s; the run
   is `go test -count=1 -timeout 20m ./... && go vet ./...`).
 - Round 2, rebased onto `origin/main` (e281d846) with the two review notes fixed: the PR's gate command,
   `vm-test ta ~/wt-proof3 -- 'go test -timeout 20m ./internal/forever/... ./cmd/... && go vet ./...'` —
-  `RESULT: PASS  kind=ta wt=wt-proof3 sha=a7f6a06c dirty=0 files=2793 runner=yulon-ubuntu2` (rc=0, 872 s; the same
+  `RESULT: PASS  kind=ta wt=wt-proof3 sha=a7f6a06c dirty=0 files=2793` (rc=0, 872 s; the same
   command also passed at 294e5c13, 1124 s, before the two `gofmt`-only amend commits). Each new test's mutation was
   re-run on its own (mutation 1: rc=1, `TestWatchAttachRunsNoEntry` FAIL, 23 s; mutation 2: rc=1,
   `TestWatchAttachRefusesAnotherPlan` FAIL, 8 s).
@@ -166,7 +166,7 @@ every pull and stopped `patrol` at the oggleflint leg). The run's own trace sett
 
 - Full suite on the clean committed tree 4c0ee21c: `vm-test ta ~/wt-fa-88` with the PR's gate command (`gofmt -l
   internal cmd`, `go vet ./...`, `staticcheck ./...`, `go test -count=1 -timeout 20m ./...`) —
-  `RESULT: PASS  kind=ta wt=wt-fa-88 sha=4c0ee21c3 dirty=0 files=2894 runner=yulon-ubuntu2` (rc=0, 1168 s). The seven
+  `RESULT: PASS  kind=ta wt=wt-fa-88 sha=4c0ee21c3 dirty=0 files=2894` (rc=0, 1168 s). The seven
   patrol-hold tests with the `internal/forever/bnet` hygiene test on the same tree: `RESULT: PASS ... sha=4c0ee21c3
   dirty=0 ...` (233 s). CI on the PR: lint, the nine race shards, `test` and the navmesh jobs all SUCCESS. Before the
   fix the same tests were red: `TestPlayStationaryStrangerIsPulled`, `TestPlayUnreachableStrangerIsLeftBehind` and

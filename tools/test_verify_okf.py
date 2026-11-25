@@ -25,6 +25,8 @@ import verify_okf  # noqa: E402  (the module under test sits next to this file)
 HOME_PATH = "/ho" + "me/alice/project"
 LITERAL_VALUE = "hunt" + "er2"
 PASSWORD_VALUE = "password=" + LITERAL_VALUE
+# A test result's runner field, assembled from pieces: this file is scanned by the tree-wide privacy check.
+RUNNER_FIELD_TEXT = "run" + "ner=" + "build01"
 WINDOWS_PATH = "C:" + "\\Users\\alice"
 
 GOOD_AT = "2026-11-24T20:35:00Z"
@@ -355,6 +357,27 @@ class BundleTest(unittest.TestCase):
     def test_privacy_windows_path(self):
         write(self.root, "docs/manual/getting-started/page.md", page(body="# What\n\nSave it in %s.\n" % WINDOWS_PATH))
         self.assertProblem("Windows drive path")
+
+    def test_docs_tree_runner_field(self):
+        write(self.root, "docs/forever/NOTES.md", "RESULT: PASS  kind=ta sha=abc files=10 %s\n" % RUNNER_FIELD_TEXT)
+        self.assertProblem("a test-result runner field names a machine under docs: build01")
+
+    def test_manual_runner_field(self):
+        body = "# What\n\nRESULT: PASS %s\n" % RUNNER_FIELD_TEXT
+        write(self.root, "docs/manual/getting-started/page.md", page(body=body))
+        self.assertProblem("a test-result runner field names a machine under docs: build01")
+
+    def test_docs_tree_private_ip(self):
+        write(self.root, "docs/forever/NOTES.md", "Connect to 10.1.37.4.\n")
+        self.assertProblem("private-network IPv4 address under docs: 10.1.37.4")
+
+    def test_docs_tree_documentation_address_is_allowed(self):
+        write(self.root, "docs/forever/NOTES.md", "The test realm is 192.0.2.10:8090, the docs one 203.0.113.9.\n")
+        self.assertEqual(self.problems(), [])
+
+    def test_docs_tree_home_path(self):
+        write(self.root, "docs/forever/NOTES.md", "The tree lives in %s.\n" % HOME_PATH)
+        self.assertProblem("absolute home directory path under docs")
 
     def test_privacy_password_value(self):
         write(self.root, "docs/manual/getting-started/page.md", page(body="# What\n\nRun it with %s.\n" % PASSWORD_VALUE))
