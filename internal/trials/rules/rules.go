@@ -1038,6 +1038,7 @@ func AliasNames(rule Row, trial map[string]any) []string {
 	check := pyjson.ObjectOrEmpty(rule["check"])
 	blobs := []Row{
 		pyjson.ObjectOrEmpty(check["where"]),
+		pyjson.ObjectOrEmpty(check["where_fallback"]),
 		pyjson.ObjectOrEmpty(check["num"]),
 		pyjson.ObjectOrEmpty(check["den"]),
 		pyjson.ObjectOrEmpty(check["trigger"]),
@@ -1538,6 +1539,25 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 	return res
 }
 
+// checkWhere is the filter a check matches with: its where, or its where_fallback when the
+// recording carries no aura rows at all. Some agents' combat logs never write an aura event, and an
+// aura check cannot be answered from such a recording, so the fallback (the cast form) stands in.
+// note says which form was read and is carried in the result's evidence.
+func checkWhere(check Row, allRows []Row) (Row, string) {
+	where := pyjson.ObjectOrEmpty(check["where"])
+	fallback := pyjson.ObjectOrEmpty(check["where_fallback"])
+	if len(fallback) == 0 {
+		return where, ""
+	}
+	for _, r := range allRows {
+		switch pyjson.Str(r["kind"]) {
+		case "aura_on", "aura_off":
+			return where, "counted landed auras"
+		}
+	}
+	return fallback, "counted casts: the recording carries no aura rows"
+}
+
 func evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result {
 	trial := ctx.Trial
 	if trial == nil {
@@ -1546,6 +1566,7 @@ func evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 	// The scored window is fight_start..fight_end: only rows and samples inside it count
 	// (excluded rows stay: they carry the spans). Hp / aura / combat lookups still read ALL
 	// samples so the window's first events have their data.
+	allRows := rows
 	window := ctx.Window
 	allSamples := samples
 	if window != nil {
@@ -1554,7 +1575,7 @@ func evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 	}
 	check := pyjson.ObjectOrEmpty(rule["check"])
 	metric := pyjson.Str(check["metric"])
-	where := pyjson.ObjectOrEmpty(check["where"])
+	where, whereNote := checkWhere(check, allRows)
 	// where.not_within_s_after_mark: drop the events and samples within s seconds after each
 	// mark of that kind. Excluded-span rows stay. Hp/aura lookups still read all samples.
 	spans := AfterMarkSpans(rule, marks)
@@ -1774,6 +1795,9 @@ func evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 			}
 		}
 		ev = append(ev, attackEv...)
+		if whereNote != "" {
+			ev = append(ev, whereNote)
+		}
 		verdict := "FAIL"
 		if Pass(rule["pass_if"], int64(len(hits))) {
 			verdict = "PASS"

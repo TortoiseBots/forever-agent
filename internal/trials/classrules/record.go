@@ -6,6 +6,7 @@ package classrules
 // a rule reports the missing data instead of judging it.
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,14 +42,8 @@ func LoadRep(repDir string, trial map[string]any) Record {
 	for i, extraVal := range extras {
 		extra := pyjson.ObjectOrEmpty(extraVal)
 		m := Member{
-			Unit: "$extra1", Class: textOf(extra["class"]),
+			Unit: fmt.Sprintf("$extra%d", i+1), Class: textOf(extra["class"]),
 			Spec: textOf(extra["spec"]), Role: textOf(extra["role"]),
-		}
-		switch i {
-		case 1:
-			m.Unit = "$extra2"
-		case 2:
-			m.Unit = "$extra3"
 		}
 		if i < len(extraNames) {
 			m.Name = textOf(extraNames[i])
@@ -70,6 +65,28 @@ func LoadRep(repDir string, trial map[string]any) Record {
 		return rec
 	}
 	rec.EventsKnown = true
+	// The fight is the same one the bench scores: fight_start (the pull, its first hostile
+	// action) to fight_end, or to the last in-combat sample when the end mark is missing.
+	marks, _ := events.ReadJSONL(filepath.Join(repDir, "marks.jsonl"))
+	samples, _ := events.ReadJSONL(filepath.Join(repDir, "samples.jsonl"))
+	if lo, hi, _, ok := events.FightWindow(marks, samples); ok {
+		rec.Window = &[2]float64{lo, hi}
+	}
+	var spans []events.Span
+	for _, row := range rows {
+		if pyjson.Str(row["kind"]) != "excluded" {
+			continue
+		}
+		a, okA := pyjson.Float(row["from"])
+		b, okB := pyjson.Float(row["to"])
+		if !okA || !okB || b <= a {
+			continue
+		}
+		spans = append(spans, events.Span{A: a, B: b, Why: pyjson.Str(row["why"])})
+	}
+	for _, span := range events.MergeSpans(spans) {
+		rec.Excluded = append(rec.Excluded, Span{A: span.A, B: span.B, Why: span.Why})
+	}
 	byGUID := memberByGUID(rec.Members)
 	unitOf := func(guid any) string {
 		key := guidOf(guid)

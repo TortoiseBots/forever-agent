@@ -68,10 +68,21 @@ func TestLoadRep(t *testing.T) {
 		map[string]any{"kind": "heal", "t": 11.0, "src_guid": "0xCC", "dst_guid": "0xBB", "amount": 120},
 		map[string]any{"kind": "heal", "t": 12.0, "src_guid": "0xBB", "dst_guid": "0xDD", "amount": 40},
 		map[string]any{"kind": "cast", "t": 13.0, "src_guid": "0xBB", "dst_guid": "0xAA", "spell": "Flash Heal"},
+		map[string]any{"kind": "excluded", "t": 40.0, "from": 40.0, "to": 90.0, "why": "gm_heal"},
+	})
+	writeJSONL(t, filepath.Join(dir, "marks.jsonl"), []any{
+		map[string]any{"kind": "fight_start", "t": 0.0},
+		map[string]any{"kind": "fight_end", "t": 100.0},
 	})
 	rec := LoadRep(dir, testTrial())
 	if !rec.EventsKnown {
 		t.Fatal("events known, the file is there")
+	}
+	if rec.Window == nil || *rec.Window != [2]float64{0, 100} {
+		t.Fatalf("window %v, want the fight_start..fight_end 0..100", rec.Window)
+	}
+	if len(rec.Excluded) != 1 || rec.Excluded[0] != (Span{A: 40, B: 90, Why: "gm_heal"}) {
+		t.Fatalf("excluded spans %+v, want the recording's 40..90", rec.Excluded)
 	}
 	if len(rec.Members) != 4 {
 		t.Fatalf("%d members, want 4", len(rec.Members))
@@ -138,6 +149,10 @@ func TestTrialRows(t *testing.T) {
 			rows = append(rows, map[string]any{"kind": "heal", "t": float64(52 + i), "src_guid": "0xCC", "dst_guid": "0xBB", "amount": 50})
 		}
 		writeJSONL(t, filepath.Join(repDir, "events.jsonl"), rows)
+		writeJSONL(t, filepath.Join(repDir, "marks.jsonl"), []any{
+			map[string]any{"kind": "fight_start", "t": 0.0},
+			map[string]any{"kind": "fight_end", "t": 60.0},
+		})
 	}
 	rows := TrialRows(dir, testTrial())
 	if len(rows) != 2 {
@@ -157,6 +172,33 @@ func TestTrialRows(t *testing.T) {
 		}
 		if pyjson.Str(row["source"]) != "trials record" {
 			t.Fatalf("row %d source %q", i, pyjson.Str(row["source"]))
+		}
+	}
+}
+
+// TestLoadRepExtraUnitsAreNumbered: the extras' unit aliases follow their place in the trial's
+// list, however many it names; a fourth extra must not read as the first again.
+func TestLoadRepExtraUnitsAreNumbered(t *testing.T) {
+	trial := testTrial()
+	extras := []any{}
+	for range 4 {
+		extras = append(extras, map[string]any{"class": "druid", "spec": "balance", "role": "dps", "level": int64(60)})
+	}
+	trial["extra_bots"] = extras
+	dir := filepath.Join(t.TempDir(), "rep1")
+	writeJSON(t, filepath.Join(dir, "setup.json"), map[string]any{
+		"ok": true, "extra_names": []any{"A", "B", "C", "D"},
+		"guids": map[string]any{"player": "0xAA", "bot": "0xBB", "extras": []any{"0x01", "0x02", "0x03", "0x04"}},
+	})
+	rec := LoadRep(dir, trial)
+	want := []string{"$extra1", "$extra2", "$extra3", "$extra4"}
+	if len(rec.Members) != 2+len(want) {
+		t.Fatalf("%d members, want the player, the bot and %d extras", len(rec.Members), len(want))
+	}
+	for i, unit := range want {
+		m := rec.Members[2+i]
+		if m.Unit != unit || m.Name != []string{"A", "B", "C", "D"}[i] || m.GUID != []string{"0x01", "0x02", "0x03", "0x04"}[i] {
+			t.Fatalf("extra %d is %+v, want %s", i, m, unit)
 		}
 	}
 }

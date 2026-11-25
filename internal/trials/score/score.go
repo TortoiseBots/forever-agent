@@ -238,111 +238,6 @@ func floatOrZero(v any) (float64, error) {
 	return pyjson.PyFloat(v)
 }
 
-// markTime is a mark's time on the normaliser's base: its ISO wall minus the base wall, else
-// its plain numeric `t`.
-func markTime(mark rules.Row, baseWall float64, hasBase bool) *float64 {
-	if mark == nil {
-		return nil
-	}
-	if wall, ok := events.WallSecs(mark["wall"]); ok && hasBase {
-		v := wall - baseWall
-		return &v
-	}
-	if f, ok := pyjson.Float(mark["t"]); ok {
-		return &f
-	}
-	return nil
-}
-
-// fightWindow is (lo, hi, fightEndMissing) of the scored window.
-func fightWindow(marks, samples []rules.Row) (float64, float64, bool, bool) {
-	var fs, so, fe rules.Row
-	for _, mark := range marks {
-		switch pyjson.Str(mark["kind"]) {
-		case "fight_start":
-			if fs == nil {
-				fs = mark
-			}
-		case "setup_ok":
-			if so == nil {
-				so = mark
-			}
-		case "fight_end":
-			fe = mark
-		}
-	}
-	var base float64
-	hasBase := false
-	if fs != nil {
-		base, hasBase = events.WallSecs(fs["wall"])
-	}
-	if !hasBase && so != nil {
-		base, hasBase = events.WallSecs(so["wall"])
-	}
-	type timed struct {
-		T      float64
-		Sample rules.Row
-	}
-	var times []timed
-	for _, sample := range samples {
-		t, ok := pyjson.Float(sample["t"])
-		if !ok {
-			continue
-		}
-		times = append(times, timed{T: t, Sample: sample})
-	}
-	var lo *float64
-	if fs != nil {
-		lo = markTime(fs, base, hasBase)
-	}
-	if lo == nil {
-		if fs != nil || so != nil {
-			v := 0.0
-			lo = &v
-		} else if len(times) > 0 {
-			v := times[0].T
-			for _, item := range times[1:] {
-				v = minf(v, item.T)
-			}
-			lo = &v
-		}
-	}
-	var hi *float64
-	if fe != nil {
-		hi = markTime(fe, base, hasBase)
-	}
-	missing := hi == nil
-	if missing {
-		var fight, later []float64
-		for _, item := range times {
-			if lo == nil || item.T >= *lo {
-				later = append(later, item.T)
-				if pyjson.Truthy(item.Sample["in_combat"]) {
-					fight = append(fight, item.T)
-				}
-			}
-		}
-		pickMax := func(vals []float64) *float64 {
-			if len(vals) == 0 {
-				return nil
-			}
-			v := vals[0]
-			for _, x := range vals[1:] {
-				v = maxf(v, x)
-			}
-			return &v
-		}
-		hi = pickMax(fight)
-		if hi == nil {
-			hi = pickMax(later)
-		}
-	}
-	if lo == nil || hi == nil {
-		return 0, 0, missing, false
-	}
-	return *lo, maxf(*lo, *hi), missing, true
-}
-
 // excludedSpans are the normaliser's kind: excluded rows, merged (the ONE source).
 func excludedSpans(rows []rules.Row, marks []rules.Row) [][2]float64 {
 	var spans [][2]float64
@@ -494,7 +389,7 @@ func ScoreRepE(repDir string, trial Trial, priorEvents []rules.PriorEvent) (map[
 	// run dir is two levels up from rep dir (<run>/<trial>/repN)
 	abs, _ := filepath.Abs(repDir)
 	runDir := filepath.Dir(filepath.Dir(abs))
-	lo, hi, endMissing, hasWindow := fightWindow(marks, samples)
+	lo, hi, endMissing, hasWindow := events.FightWindow(marks, samples)
 	var window *[2]float64
 	if hasWindow {
 		window = &[2]float64{lo, hi}

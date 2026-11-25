@@ -8,11 +8,22 @@ package edge
 // of a FAIL decided from an empty opportunity.
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
 	"github.com/pjerra/forever-agent/internal/trials/scenario"
 )
+
+// etEvidence joins a rule entry's evidence lines.
+func etEvidence(t *testing.T, row map[string]any) string {
+	t.Helper()
+	var lines []string
+	for _, val := range list(t, row["evidence"]) {
+		lines = append(lines, pyjson.Str(val))
+	}
+	return strings.Join(lines, "\n")
+}
 
 // TestEdgeInnervateAllyTrialRules pins the staging and the rule wiring of the round-2 trial: a
 // level 60 Holy priest hire at 15 percent mana as `bot`, one Balance druid as `extra1` with no gear
@@ -61,19 +72,38 @@ func TestEdgeInnervateAllyTrialRules(t *testing.T) {
 	check := obj(t, low["check"])
 	where := obj(t, check["where"])
 	assertEqual(t, "count", pyjson.Str(check["metric"]))
-	assertEqual(t, "cast", pyjson.Str(where["kind"]))
+	// The landed aura is the evidence when the recording carries aura rows; the cast stands in
+	// only when it does not.
+	assertEqual(t, "aura_on", pyjson.Str(where["kind"]))
 	assertEqual(t, "$extra1", pyjson.Str(where["src"]))
 	assertEqual(t, "$bot", pyjson.Str(where["dst"]))
 	assertEqual(t, "Innervate", pyjson.Str(where["spell"]))
 	assertEqual(t, 35.0, num(t, where["dst_power_lt"]))
 	assertEqual(t, ">= 1", pyjson.Str(low["pass_if"]))
 	assertEqual(t, 5.0, num(t, low["min_opportunity_s"]))
+	fallback := obj(t, check["where_fallback"])
+	assertEqual(t, "cast", pyjson.Str(fallback["kind"]))
+	assertEqual(t, "$extra1", pyjson.Str(fallback["src"]))
+	assertEqual(t, "$bot", pyjson.Str(fallback["dst"]))
+	assertEqual(t, "Innervate", pyjson.Str(fallback["spell"]))
+	assertEqual(t, 35.0, num(t, fallback["dst_power_lt"]))
 
+	// The not-self rule needs the druid to have acted: its ratio is its self-casts over its own
+	// casts, so a fight the druid sat out divides by zero and is INCONCLUSIVE, and the ally's
+	// low mana is the opportunity floor that keeps an empty fight from a pass.
 	notSelf := etRuleByID(t, trial, "DRU-BAL-INNERVATE-NOT-SELF-TARGET")
-	nw := obj(t, obj(t, notSelf["check"])["where"])
-	assertEqual(t, "$extra1", pyjson.Str(nw["src"]))
-	assertEqual(t, "$extra1", pyjson.Str(nw["dst"]))
+	nsCheck := obj(t, notSelf["check"])
+	assertEqual(t, "ratio", pyjson.Str(nsCheck["metric"]))
+	nsNum := obj(t, nsCheck["num"])
+	assertEqual(t, "cast", pyjson.Str(nsNum["kind"]))
+	assertEqual(t, "$extra1", pyjson.Str(nsNum["src"]))
+	assertEqual(t, "$extra1", pyjson.Str(nsNum["dst"]))
+	assertEqual(t, "Innervate", pyjson.Str(nsNum["spell"]))
+	nsDen := obj(t, nsCheck["den"])
+	assertEqual(t, "cast", pyjson.Str(nsDen["kind"]))
+	assertEqual(t, "$extra1", pyjson.Str(nsDen["src"]))
 	assertEqual(t, "== 0", pyjson.Str(notSelf["pass_if"]))
+	assertEqual(t, 5.0, num(t, notSelf["min_opportunity_s"]))
 
 	acted := etRuleByID(t, trial, "PRI-LOWMANA-ACTED")
 	aw := obj(t, obj(t, acted["check"])["where"])
@@ -184,5 +214,90 @@ func TestEdgeInnervateAllyHealerActedPrecondition(t *testing.T) {
 	}
 	if got := etVerdict(t, tid, rid, nil, innervateSamples(secs, 900), secs, nil); got != "INCONCLUSIVE" {
 		t.Fatalf("no casts and no low mana: %s, want INCONCLUSIVE", got)
+	}
+}
+
+// TestEdgeInnervateAllyNotSelfFloor: the not-self rule is a ratio of the druid's self-casts to its
+// own casts, so a fight the druid sat out has nothing to divide and is INCONCLUSIVE, never a pass
+// from an empty count. One plain cast makes the same recording judgeable, and no self-cast passes.
+func TestEdgeInnervateAllyNotSelfFloor(t *testing.T) {
+	const tid = "priest-holy-low-mana-innervate-ally"
+	const rid = "DRU-BAL-INNERVATE-NOT-SELF-TARGET"
+	const secs = 90
+	silent := []any{etEvent(t, 20, "cast", etBot, etPlayer, "Flash Heal", 500)}
+	rules := etRules(t, tid, silent, innervateSamples(secs, 200), secs, nil)
+	row := rules[rid]
+	if got := pyjson.Str(row["verdict"]); got != "INCONCLUSIVE" {
+		t.Fatalf("the druid never cast: %s, want INCONCLUSIVE (%v)", got, row["evidence"])
+	}
+	if got := pyjson.Str(row["reason"]); got != "den 0" {
+		t.Fatalf("reason %q, want the zero denominator", got)
+	}
+	acted := append(append([]any(nil), silent...), etEvent(t, 25, "cast", etExtra1, etMob, "Wrath", 0))
+	rules = etRules(t, tid, acted, innervateSamples(secs, 200), secs, nil)
+	if got := pyjson.Str(rules[rid]["verdict"]); got != "PASS" {
+		t.Fatalf("one druid cast and no self-cast: %s, want PASS (%v)", got, rules[rid]["evidence"])
+	}
+}
+
+// TestEdgeInnervateAllyNotSelfOpportunity: a self-cast is a FAIL only when the ally was actually
+// low. The same self-cast in a fight where the ally never sat under 35% is INCONCLUSIVE from the
+// opportunity floor, so no data is not a failure.
+func TestEdgeInnervateAllyNotSelfOpportunity(t *testing.T) {
+	const tid = "priest-holy-low-mana-innervate-ally"
+	const secs = 90
+	events := []any{etEvent(t, 20, "cast", etExtra1, etExtra1, "Innervate", 0)}
+	rules := etRules(t, tid, events, innervateSamples(secs, 900), secs, nil)
+	row := rules["DRU-BAL-INNERVATE-NOT-SELF-TARGET"]
+	if got := pyjson.Str(row["verdict"]); got != "INCONCLUSIVE" {
+		t.Fatalf("a self-cast with no low ally: %s, want INCONCLUSIVE (%v)", got, row["evidence"])
+	}
+	if got := pyjson.Str(row["reason"]); got != "opportunity 0 s < 5 s" {
+		t.Fatalf("reason %q, want the opportunity floor", got)
+	}
+}
+
+// TestEdgeInnervateAllyLandedAura: when the recording carries aura rows, the low-mana rule counts
+// the landed Innervate aura, not the cast: a cast that never landed is a FAIL, and an aura with no
+// cast row is a PASS.
+func TestEdgeInnervateAllyLandedAura(t *testing.T) {
+	const tid = "priest-holy-low-mana-innervate-ally"
+	const rid = "DRU-BAL-INNERVATE-LOWMANA-TARGET"
+	const secs = 90
+	// One aura row for another spell is what tells the rule the recording carries aura events.
+	events := []any{
+		etEvent(t, 10, "aura_on", etBot, etBot, "Power Word: Shield", 0),
+		etEvent(t, 20, "cast", etExtra1, etBot, "Innervate", 0),
+	}
+	rules := etRules(t, tid, events, innervateSamples(secs, 200), secs, nil)
+	row := rules[rid]
+	if got := pyjson.Str(row["verdict"]); got != "FAIL" {
+		t.Fatalf("a cast with no landed aura: %s, want FAIL (%v)", got, row["evidence"])
+	}
+	landed := append(append([]any(nil), events...), etEvent(t, 20, "aura_on", etExtra1, etBot, "Innervate", 0))
+	rules = etRules(t, tid, landed, innervateSamples(secs, 200), secs, nil)
+	row = rules[rid]
+	if got := pyjson.Str(row["verdict"]); got != "PASS" {
+		t.Fatalf("the landed aura: %s, want PASS (%v)", got, row["evidence"])
+	}
+	if !strings.Contains(etEvidence(t, row), "counted landed auras") {
+		t.Fatalf("the evidence does not say it counted auras: %v", row["evidence"])
+	}
+}
+
+// TestEdgeInnervateAllyCastFallbackNote: a recording with no aura rows at all cannot answer an
+// aura check, so the rule counts the cast and says so in the result.
+func TestEdgeInnervateAllyCastFallbackNote(t *testing.T) {
+	const tid = "priest-holy-low-mana-innervate-ally"
+	const rid = "DRU-BAL-INNERVATE-LOWMANA-TARGET"
+	const secs = 90
+	events := []any{etEvent(t, 20, "cast", etExtra1, etBot, "Innervate", 0)}
+	rules := etRules(t, tid, events, innervateSamples(secs, 200), secs, nil)
+	row := rules[rid]
+	if got := pyjson.Str(row["verdict"]); got != "PASS" {
+		t.Fatalf("a cast in a recording without aura rows: %s, want PASS (%v)", got, row["evidence"])
+	}
+	if !strings.Contains(etEvidence(t, row), "no aura rows") {
+		t.Fatalf("the evidence does not say the cast stood in: %v", row["evidence"])
 	}
 }

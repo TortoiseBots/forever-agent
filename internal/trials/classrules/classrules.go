@@ -1,23 +1,26 @@
 // Package classrules holds the bench's class rules: readings of one repeat's own recording (events
 // and samples) that judge whether a party played its roles, not whether a bot learned a spell.
 //
-// Rule "healer assignment" (HEAL-ASSIGNMENT): in a fight with at least two proven healers and a
-// named tank, the main healer (the one with the most healing) must put at least MainHealerTankShare
-// (60%) of its healing on the party's tanks, and the other healers must keep their healing off the
-// tanks (at most OtherHealerTankShare, 40%) and spread it over the rest of the party (at least
-// MinRestTargets, 2, distinct non-tank allies). A healer is judged only with MinHealerHeals (10)
-// heal events of its own. The rule reports INCONCLUSIVE — never FAIL — when the recording cannot
-// carry the verdict: no events file, no heal rows, fewer than two judged healers (a one-healer party
-// has no split to check), no tank role in the party, a tank or healer the setup proves no guid for,
-// no single main healer (a tie at the top), a heal row without a readable amount, or a heal whose
-// target is not a party member the setup named (a pet, or a guid that never reached the setup): a
-// share computed over unreadable targets is not evidence.
+// Rule "healer assignment" (HEAL-ASSIGNMENT): in one fight of at least MinFightSeconds (30 s) with
+// at least two proven healers and a named tank, the main healer (the one with the most healing)
+// must put at least MainHealerTankShare (60%) of its healing on the party's tanks, and the other
+// healers must keep their healing off the tanks (at most OtherHealerTankShare, 40%) and spread it
+// over the rest of the party (at least MinRestTargets, 2, distinct non-tank allies). Only heals
+// inside the fight window (fight_start, the pull, to fight_end) and outside the recording's
+// excluded spans count. A healer is judged only with MinHealerHeals (10) placed heal events of its
+// own; heals on pets or units the setup did not name are left out of the shares and reported as an
+// "other" count, so one pet heal cannot silence the rule. The shares are gross healing: the heal
+// log's amount is the original heal and the recording carries no overheal. The rule reports
+// INCONCLUSIVE — never FAIL — when the recording cannot carry the verdict: no events file, no fight
+// window, a fight under MinFightSeconds, no heal rows, fewer than two judged healers (a one-healer
+// party has no split to check), no tank role in the party, a tank or healer the setup proves no guid
+// for, no single main healer (a tie at the top), or a placed heal row without a readable amount.
 //
 // The rows are bench readings, added by `trials score --class-rules` under trial.json's
 // `class_rules`; they are off by default so a default score stays exactly the bench's, and they never
 // change the exit code. They read the run's own record: the trial's party roles (the player's role
-// or forced role, the bot's role, the extras' roles), the setup's guids, the normalised events' heal
-// rows and the samples' bars.
+// or forced role, the bot's role, the extras' roles), the setup's guids, the recording's marks and
+// samples (the fight window and the excluded spans) and the normalised events' heal rows.
 package classrules
 
 import (
@@ -32,20 +35,28 @@ const (
 	RuleHealAssignment = "HEAL-ASSIGNMENT"
 )
 
-// The rule's thresholds, named so a report and a test can quote them.
+// The rule's thresholds, named so a report and a test can quote them, each with the reason for its
+// value.
 const (
 	// MainHealerTankShare is the share of the main healer's healing that must land on the party's
-	// tanks: a tank healer who sends most of its healing elsewhere is not covering the tank.
+	// tanks. It is a clear majority: the main healer's job is the tank, and 60% leaves it room to
+	// top up the rest of the party without losing the tank's cover.
 	MainHealerTankShare = 0.60
-	// OtherHealerTankShare is the most of any other healer's healing that may land on the tanks:
-	// above it the second healer is doing the main healer's job instead of the rest of the party.
+	// OtherHealerTankShare is the most of any other healer's healing that may land on the tanks.
+	// It is the main healer's 60% mirrored (the pair sums to 100), so the two numbers describe one
+	// split: the main healer on the tank, the others on the party.
 	OtherHealerTankShare = 0.40
-	// MinHealerHeals is the heal events a healer needs before the rule reads its shares: a healer
-	// with a handful of heals has no distribution to judge.
+	// MinHealerHeals is the placed heal events a healer needs before the rule reads its shares: a
+	// handful of heals has no distribution to judge. Ten heals is about one every 3 s in a fight
+	// of MinFightSeconds, the shortest fight the rule judges.
 	MinHealerHeals = 10
 	// MinRestTargets is the distinct non-tank party members the other healers must have healed
-	// between them: below it their healing is not split across the rest of the party.
+	// between them. One ally could be a single off-target; two distinct allies is a spread.
 	MinRestTargets = 2
+	// MinFightSeconds is the fight length the rule needs before it reads shares: at the run's
+	// one-second sampling a shorter fight holds too few heals to reach MinHealerHeals, and the
+	// shares would be one or two casts wide, so the rule reports INCONCLUSIVE instead.
+	MinFightSeconds = 30.0
 )
 
 // Verdicts are the words a Row carries.
@@ -82,11 +93,23 @@ type Heal struct {
 	AmountKnown bool
 }
 
+// Span is one excluded stretch of the repeat's timeline, in the events' seconds: GM heals and
+// the like (the normaliser's kind: excluded rows). Rows inside it never count.
+type Span struct {
+	A, B float64
+	Why  string
+}
+
 // Record is one repeat's view of the party and its healing.
 type Record struct {
 	Members     []Member
 	Heals       []Heal
 	EventsKnown bool // events.jsonl was read; false means the file is missing or unreadable
+	// Window is the fight the rule reads, [fight_start, fight_end] in the events' seconds (the
+	// pull is the fight's first hostile action). nil when marks.jsonl and samples.jsonl carry no
+	// usable fight, so the rule reports the missing window instead of judging the whole repeat.
+	Window   *[2]float64
+	Excluded []Span // the recording's excluded spans; a heal inside one never counts
 }
 
 // Row is one class rule's verdict for one repeat, in the report card's row shape (the same keys a

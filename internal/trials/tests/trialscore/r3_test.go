@@ -664,6 +664,43 @@ func TestR3M1_NumDenValues(t *testing.T) {
 	}
 }
 
+func TestR3M1_WhereFallbackValues(t *testing.T) {
+	count := func(check map[string]any) map[string]any {
+		doc := map[string]any{"metric": "count"}
+		for k, v := range check {
+			doc[k] = v
+		}
+		return tcRule(doc)
+	}
+	where := map[string]any{"kind": "aura_on", "src": "$bot", "spell": "Innervate"}
+	fallback := map[string]any{"kind": "cast", "src": "$bot", "spell": "Innervate"}
+	assertEqual(t, []string{}, tcVErr(count(map[string]any{"where": where, "where_fallback": fallback}), nil))
+
+	// A fallback without its where has nothing to stand in for.
+	errs := tcVErr(count(map[string]any{"where_fallback": fallback}), nil)
+	if !containsStr(errs, "where_fallback without a where") {
+		t.Fatalf("an orphan fallback is not reported: %v", errs)
+	}
+	for _, c := range []struct {
+		fallback map[string]any
+		needle   string
+	}{
+		{map[string]any{"kind": "casts"}, "bad kind"},
+		{map[string]any{"src": "$bots"}, "bad src alias"},
+		{map[string]any{"bogus": int64(1)}, "unknown where_fallback key"},
+		{map[string]any{"dst_power_lt": "abc"}, "bad dst_power_lt"},
+	} {
+		if !containsStr(tcVErr(count(map[string]any{"where": where, "where_fallback": c.fallback}), nil), c.needle) {
+			t.Fatalf("%s not reported", c.needle)
+		}
+	}
+	// Only a count check carries the evidence note that says which form it read.
+	rate := tcRule(map[string]any{"metric": "rate", "where": where, "where_fallback": fallback})
+	if !containsStr(tcVErr(rate, nil), "only read by a count check") {
+		t.Fatal("a rate rule with a fallback is not reported")
+	}
+}
+
 func TestR3M1_TriggerUnitAlias(t *testing.T) {
 	rule := tcLatRule(nil)
 	tcObj(tcObj(rule["check"])["trigger"])["unit"] = "$players"

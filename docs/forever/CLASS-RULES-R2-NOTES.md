@@ -7,22 +7,34 @@ can actually fail.
 ## Rule `HEAL-ASSIGNMENT` (package `internal/trials/classrules`)
 
 Reads one repeat: the party from the trial definition (the player's role or forced role, the bot's
-role, each extra's role) and the setup's guids, plus the normalised events' heal rows (caster,
-target, amount). One fight per repeat.
+role, each extra's role) and the setup's guids, plus the recording's marks and samples (the fight
+window and the excluded spans) and the normalised events' heal rows (caster, target, amount). One
+fight per repeat: `fight_start` (the pull, the fight's first hostile action) to `fight_end`, or the
+last in-combat sample when the end mark is missing. Only heals inside it and outside the excluded
+spans count; a fight under `MinFightSeconds` (30 s) is INCONCLUSIVE.
 
 - **Healers** are the party members whose role is `healer`; a healer is judged only with
-  `MinHealerHeals` (10) heal events of its own.
+  `MinHealerHeals` (10) placed heal events of its own (a placed heal is one on a named party member).
 - **Tanks** are the party members whose role is `tank`.
 - **The main healer** is the judged healer with the most healing.
 - **PASS** needs all three: the main healer puts at least `MainHealerTankShare` (60%) of its healing
   on the tanks; every other judged healer puts at most `OtherHealerTankShare` (40%) on them; the
   other healers healed at least `MinRestTargets` (2) distinct non-tank party members between them.
-- **INCONCLUSIVE, never FAIL, on missing evidence**: no `events.jsonl`, no heal rows, no tank role,
-  no healer role, a tank or healer with no guid in the setup, fewer than 10 heals by every healer, a
-  single judged healer (a split needs a second), a heal row with no readable amount, a heal row whose
-  target is not a party member the setup named (it can be neither the tank nor the rest), or two
-  healers tied on healing.
+  The 60/40 pair mirrors to one split between the tank healer and the group healer; 10 placed heals
+  is about one every 3 s in the rule's 30 s fight, and two distinct allies is a spread rather than a
+  single off-target.
+- **INCONCLUSIVE, never FAIL, on missing evidence**: no `events.jsonl`, no fight window, a fight
+  under 30 s, no heal rows, no tank role, no healer role, a tank or healer with no guid in the
+  setup, fewer than 10 placed heals by every healer, a single judged healer (a split needs a
+  second), a placed heal row with no readable amount, or two healers tied on healing.
+- Heals on pets or units the setup did not name are left out of the shares and reported in an
+  `other` count; they never make the rule INCONCLUSIVE by themselves.
 - A healer's heals on itself count in its own total but neither for the tanks nor as cover of the rest.
+- The shares are **gross** healing: the combat log's `amount` is `SMSG_SPELL_HEAL_LOG`'s
+  `OriginalHeal` and carries no overheal (internal/forever/world/session.go writes the row; the
+  packet's `OverHeal` is not recorded), so a heal that mostly overheated still counts in full.
+- What it cannot see: overheal, absorb/shield healing (no heal row), mana spent per heal, whether a
+  heal was needed, a pet's own healing.
 
 `trials score --class-rules` adds the rows under `trial.json`'s `class_rules`; the card prints them
 under `## Class rules`, `card.json` carries `class_rules`, and the count line names the class rules'
@@ -55,8 +67,8 @@ Rules:
 
 | Rule | Measure | Verdicts |
 |---|---|---|
-| `DRU-BAL-INNERVATE-LOWMANA-TARGET` | Innervate casts by `$extra1` on `$bot` while `$bot`'s mana reads under 35% (`dst_power_lt`), at least 1 | PASS on a cast; FAIL when the ally was low and no such cast landed (a cast elsewhere, a cast on a target above 35%, or no cast); INCONCLUSIVE when the ally never sat under 35% for 5 s |
-| `DRU-BAL-INNERVATE-NOT-SELF-TARGET` | Innervate casts by `$extra1` on itself, 0 | PASS/FAIL; a self-cast can never satisfy the rule above |
+| `DRU-BAL-INNERVATE-LOWMANA-TARGET` | landed Innervate auras by `$extra1` on `$bot` while `$bot`'s mana reads under 35% (`dst_power_lt`), at least 1; a recording with no aura rows falls back to the cast (`where_fallback`) and says so in the evidence | PASS on such a landing; FAIL when the ally was low and it did not land (a cast elsewhere, a cast on a target above 35%, a cast with no aura, or no cast); INCONCLUSIVE when the ally never sat under 35% for 5 s |
+| `DRU-BAL-INNERVATE-NOT-SELF-TARGET` | the druid's Innervate casts on itself over its own casts (`ratio`), 0 | PASS/FAIL when the druid acted and the ally was low 5 s; INCONCLUSIVE on a zero denominator (the druid cast nothing) or from the opportunity floor |
 | `PRI-LOWMANA-ACTED` | the priest's own casts, at least 3 | precondition, `expect_today` `?` |
 
 ## Engine keys the trial needed
@@ -66,9 +78,15 @@ Rules:
   matches: an unknown bar is not a low one. Takes the `$critical`/`$low`/`$medium` aliases.
 - `opportunity.power_lt` / `power_gt`: the opportunity window on the unit's own bar, so
   `min_opportunity_s` can require the ally to have actually been low.
+- `check.where_fallback`: a second where filter read instead when the recording carries no aura
+  rows at all. An agent whose combat log never writes an aura event cannot answer an aura check, so
+  the cast form stands in; the evidence names which form was read. Count checks only (the note is
+  part of a count's evidence).
 
-Both are tested directly (`internal/trials/rules/power_test.go`), including the sample that closes
-each interval, a barless sample and the excluded overlap.
+They are tested directly (`internal/trials/rules/power_test.go` and the edge trial's tests),
+including the sample that closes each interval, a barless sample, the excluded overlap, a fight the
+druid sat out, a self-cast with and without a low ally, an aura recording with no landing, and the
+cast fallback in a recording with no aura rows.
 
 ## Round-1 limits
 
@@ -108,6 +126,7 @@ each interval, a barless sample and the excluded overlap.
 
 A repeat of the new trial where the setup rows (`bot_mana` 15%, `extra_bots_present` with the druid,
 `mobs_ready`) pass and the combat-log feed carries rows: then `DRU-BAL-INNERVATE-LOWMANA-TARGET`
-PASSes only with an Innervate row on the priest at under 35% mana, and reports INCONCLUSIVE with
-"opportunity 0 s < 5 s" when the priest never sat low. The round-1 live run's blocker (an empty
-combat log: `gm_combatlog` needs a selected unit) is a runner/server-side item, not a trial rule.
+PASSes only with a landed Innervate aura on the priest at under 35% mana (or, in a recording with no
+aura rows at all, the cast, with the evidence saying so), and reports INCONCLUSIVE with "opportunity
+0 s < 5 s" when the priest never sat low. The round-1 live run's blocker (an empty combat log:
+`gm_combatlog` needs a selected unit) is a runner/server-side item, not a trial rule.

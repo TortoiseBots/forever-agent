@@ -82,6 +82,8 @@ Situation kinds the live runner drives: `tank_damage`, `caster_mob`, `pack`, `cc
 
 A rule has `id`, `desc`, `source`, `expect_today` (`PASS`, `FAIL` or `?`), `why_expect`, `check`, and `pass_if`. The check says what is measured (`metric`: `count`, `ratio`, `latency`, `uptime`, `first`, `rate`, `walk_metric`), which trigger and response events it pairs, and `within_s` for a latency. `pass_if` is a comparison such as `>= 0.8`; `min_n` and `min_reps` say when there is too little evidence to judge. `pool: true` scores one verdict from the summed k/n over every valid repeat instead of a majority vote.
 
+A count check may carry `where_fallback` beside `where`: when the recording has no aura rows at all (an agent whose combat log never writes aura events cannot answer an aura check), the fallback filter is read instead and the result's evidence says which form was read. `min_opportunity_s` then applies to the trial's `opportunity` block, turning a `PASS` or `FAIL` into `INCONCLUSIVE` when the chance never lasted that long.
+
 ```json
 {
   "id": "paladin-holy-heal-latency",
@@ -180,21 +182,27 @@ The rows print under `## Player data` (the heading names the data source) with t
 forever-agent trials score ./runs/2026-11-25-priest --class-rules
 ```
 
-`--class-rules` adds the class rules, off by default: they read the run's own record (the trial's party roles and the events), not a spell list, so a default score stays exactly the bench's.
+`--class-rules` adds the class rules, off by default: they read the run's own record (the trial's party roles, the recording's marks and samples, and the events), not a spell list, so a default score stays exactly the bench's.
 
 | Rule | What it reads |
 |---|---|
 | `HEAL-ASSIGNMENT` | the party's heal rows by caster and target, against the roles the trial names (the player's role or forced role, the bot's role, the extras' roles) |
 
-The rule measures one fight per repeat. A healer is the party member whose role is `healer`; it is judged only with at least 10 heal events of its own. The tanks are the party members whose role is `tank`. The main healer is the judged healer with the most healing (a tie at the top is no main healer). It passes when all three hold:
+The rule measures one fight per repeat: `fight_start` (the pull, the fight's first hostile action) to `fight_end`, or to the last in-combat sample when the end mark is missing. Only heal rows inside that window and outside the recording's `excluded` spans (GM heals and the like, written by the normaliser from the marks) count: a heal before the pull, after the fight or inside an excluded span never sets a share. A fight shorter than 30 s is `INCONCLUSIVE`, because too few heals fit in it to read a distribution.
+
+A healer is the party member whose role is `healer`; it is judged only with at least 10 **placed** heal events of its own (a placed heal is one on a party member the setup named). The tanks are the party members whose role is `tank`. The main healer is the judged healer with the most healing (a tie at the top is no main healer). It passes when all three hold:
 
 - the main healer puts at least 60% of its healing on the tanks;
 - every other judged healer puts at most 40% of its healing on the tanks;
 - the other healers healed at least 2 distinct non-tank party members between them.
 
-It reports `INCONCLUSIVE`, never `FAIL`, when the recording cannot carry the verdict: no `events.jsonl`, no heal rows, no tank role in the party, no healer role, a tank or healer the setup proves no guid for, fewer than 10 heal events by every healer ("too few heals"), a single judged healer ("one healer only" — a split needs a second healer), a heal row with no readable amount or one whose target is not a party member the setup named (the shares would be wrong), or two healers tied on healing. A healer's heals on itself count in its own total but neither for the tank nor as cover of the rest.
+Why those numbers: 60% is a clear majority for the healer whose job is the tank, and 40% is its mirror (the pair sums to 100), so the two lines describe one split between the tank healer and the group healer. Ten placed heals is about one every 3 s in the 30 s fight the rule needs, the least that has a distribution; two distinct allies is a spread, where one could be a single off-target.
 
-The `edge` trial `priest-holy-low-mana-innervate-ally` stages the case the class rules were written for: a level 60 Holy priest hire at 15% mana in a 90 s fight, with a Balance druid hire. Its rules are the ordinary bench rules, not the class ones: `DRU-BAL-INNERVATE-LOWMANA-TARGET` passes only when the druid's Innervate lands on the priest while the priest's own mana reads below 35% (a cast on the druid itself or on a target at or above 35% does not pass), and `min_opportunity_s` 5 makes the rule `INCONCLUSIVE` ("opportunity 0 s < 5 s") when the priest never sat that low, instead of failing it from an empty opportunity. `DRU-BAL-INNERVATE-NOT-SELF-TARGET` fails a self-cast, and `PRI-LOWMANA-ACTED` is the precondition that the priest cast something (3 casts).
+Heals on pets or units the setup did not name are left out of the shares and reported in an `other` count, so one pet heal cannot silence the rule; they never make it `INCONCLUSIVE` by themselves. It reports `INCONCLUSIVE`, never `FAIL`, when the recording cannot carry the verdict: no `events.jsonl`, no usable fight window, a fight under 30 s, no heal rows, no tank role in the party, no healer role, a tank or healer the setup proves no guid for, fewer than 10 placed heals by every healer ("too few placed heals"), a single judged healer ("one healer only" — a split needs a second healer), a placed heal row with no readable amount, or two healers tied on healing. A healer's heals on itself count in its own total but neither for the tank nor as cover of the rest.
+
+The shares are of **gross** healing: the heal log's `amount` is the heal's original amount (`SMSG_SPELL_HEAL_LOG`'s `OriginalHeal`) and the combat log carries no overheal, so a heal that mostly overheated still counts in full. What the rule cannot see: overheal, absorb or shield healing (a shield is not a heal row), the mana spent per heal, whether a heal was needed at the time, a pet's own healing, or a heal on a unit the setup did not name.
+
+The `edge` trial `priest-holy-low-mana-innervate-ally` stages the case the class rules were written for: a level 60 Holy priest hire at 15% mana in a 90 s fight, with a Balance druid hire. Its rules are the ordinary bench rules, not the class ones: `DRU-BAL-INNERVATE-LOWMANA-TARGET` counts the landed Innervate aura on the priest while the priest's own mana reads below 35% (`dst_power_lt`); a recording with no aura rows at all cannot answer an aura check, so it counts the cast instead and says which form it read in the evidence (`where_fallback`). A cast on the druid itself or on a target at or above 35% does not count, and `min_opportunity_s` 5 makes the rule `INCONCLUSIVE` ("opportunity 0 s < 5 s") when the priest never sat that low, instead of failing it from an empty opportunity. `DRU-BAL-INNERVATE-NOT-SELF-TARGET` is the druid's self-casts over its own casts (`ratio`, `pass_if "== 0"`): a druid that cast nothing is `INCONCLUSIVE` (no denominator), a self-cast while the priest sat low is `FAIL`, and the same self-cast in a fight where the priest never sat low is `INCONCLUSIVE` from the opportunity floor. `PRI-LOWMANA-ACTED` is the precondition that the priest cast something (3 casts). What the two Innervate rules cannot see: whether Innervate was off its cooldown, the mana the spell actually returned, or a landing on a unit the client never saw (a recording without that aura row cannot show it).
 
 No shipped trial stages two healers yet (the live damage situations hurt one victim), so on today's trial set the rule reports "one healer only" and stays `INCONCLUSIVE`; it judges any run whose party does name two healers.
 

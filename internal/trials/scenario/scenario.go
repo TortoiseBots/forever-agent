@@ -133,7 +133,7 @@ var checkFields = stringSet("metric", "where", "num", "den", "trigger", "respons
 	"skip_trigger_while",
 	"debounce_responder_s", "debounce_responder_spells", "debounce_responder_across_reps",
 	"per", "min_alive_s", "name", "aura", "unit", "phase", "alive", "triggers", "min_n",
-	"spell", "stat")
+	"spell", "stat", "where_fallback")
 
 var triggerFields = stringSet("kind", "src", "dst", "spell", "spell_id", "dst_hp_gt", "dst_hp_lt",
 	"dst_hp_le", "in_combat", "t_from", "t_to", "dst_has_aura", "dst_lacks_aura",
@@ -509,6 +509,19 @@ func checkRule(ruleVal any, trialID string, errs *[]string) {
 				doc = map[string]any{}
 			}
 			checkNumDen(doc, label, trialID, rid, errs, metric == "ratio")
+		}
+	}
+	// where_fallback is where's stand-in for a recording with no aura rows, so it is a full
+	// where filter itself, only makes sense beside a where, and only a count check carries the
+	// evidence note that says which form it read.
+	if fallback := check["where_fallback"]; fallback != nil {
+		if metric != "count" {
+			errAdd(errs, fmt.Sprintf("%s/%s: where_fallback is only read by a count check", trialID, rid))
+		}
+		if !pyjson.Truthy(check["where"]) {
+			errAdd(errs, fmt.Sprintf("%s/%s: where_fallback without a where", trialID, rid))
+		} else {
+			checkFilter(fallback, "where_fallback", trialID, rid, errs, true, true, nil)
 		}
 	}
 	if trig := check["trigger"]; trig != nil {

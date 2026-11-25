@@ -86,13 +86,20 @@
   "rules": [
     {
       "id": "DRU-BAL-INNERVATE-LOWMANA-TARGET",
-      "desc": "Innervate lands on the low-mana healer: in a fight where the Holy priest hire is at 15 percent mana, the Balance druid hire casts Innervate on that priest while its own mana reads below 35 percent. A cast on itself, or on a target at or above 35 percent mana, does not pass",
+      "desc": "Innervate reaches the low-mana healer: in a fight where the Holy priest hire is at 15 percent mana, the Balance druid hire's Innervate lands on that priest while its own mana reads below 35 percent. With aura rows in the recording the rule counts the landed Innervate aura; a recording without aura rows falls back to the cast and says so in the result. A cast on itself, or on a target at or above 35 percent mana, does not pass",
       "source": "ai/playerbot/strategy/druid/BalanceDruidStrategy.cpp:290-301 (the Balance buff strategy fires innervate in combat at ACTION_HIGH + 1); ai/playerbot/strategy/druid/DruidTriggers.h:503-531 (InnervateTrigger: a target under AiPlayerbot.InnervateManaThreshold, from boost targets or FindBestInnervateTarget); ai/playerbot/strategy/druid/DruidInnervateHelper.h:14 (FindBestInnervateTarget walks the group's mana users, never the caster itself); ai/playerbot/PlayerbotAIConfig.cpp:741 (AiPlayerbot.InnervateManaThreshold default 25); TortoiseBots upstream/dev 0c56cf649",
       "expect_today": "PASS",
-      "why_expect": "the priest is the only party member on mana and reads 15-18 percent at the pull, well under the 25 percent threshold, so FindBestInnervateTarget returns the priest and the combat row fires at ACTION_HIGH + 1; the rule's own 35 percent target gate is the bench's margin over the module's 25, so a cast at any point while the priest is still low counts",
+      "why_expect": "the priest is the only party member on mana and reads 15-18 percent at the pull, well under the 25 percent threshold, so FindBestInnervateTarget returns the priest and the combat row fires at ACTION_HIGH + 1; the rule's own 35 percent target gate is the bench's margin over the module's 25, so a landing at any point while the priest is still low counts",
       "check": {
         "metric": "count",
         "where": {
+          "kind": "aura_on",
+          "src": "$extra1",
+          "dst": "$bot",
+          "spell": "Innervate",
+          "dst_power_lt": 35
+        },
+        "where_fallback": {
           "kind": "cast",
           "src": "$extra1",
           "dst": "$bot",
@@ -105,20 +112,25 @@
     },
     {
       "id": "DRU-BAL-INNERVATE-NOT-SELF-TARGET",
-      "desc": "The druid never innervates itself: no Innervate cast of the druid hire aims at the druid in the fight, so a self-cast cannot stand in for the missing cast on the healer",
+      "desc": "The druid never innervates itself while it has work to do: no Innervate cast of the druid hire aims at the druid in the fight, and the rule is only judged when the druid cast at all and the low ally held the opportunity, so a fight the druid sat out is INCONCLUSIVE, not a pass",
       "source": "ai/playerbot/strategy/druid/DruidInnervateHelper.h:14 (FindBestInnervateTarget walks the group's mana users, the caster is not one of its candidates); ai/playerbot/strategy/druid/DruidTriggers.h:503-531 (InnervateTrigger.IsTargetValid reads the chosen target only); TortoiseBots upstream/dev 0c56cf649",
       "expect_today": "PASS",
-      "why_expect": "the module's own target finder never returns the caster, so a self-target is a defect this rule names",
+      "why_expect": "the module's own target finder never returns the caster, so a self-target is a defect this rule names; the ratio over the druid's own casts makes a silent druid INCONCLUSIVE (den 0) and min_opportunity_s 5 makes a fight where the priest never sat low INCONCLUSIVE too",
       "check": {
-        "metric": "count",
-        "where": {
+        "metric": "ratio",
+        "num": {
           "kind": "cast",
           "src": "$extra1",
           "dst": "$extra1",
           "spell": "Innervate"
+        },
+        "den": {
+          "kind": "cast",
+          "src": "$extra1"
         }
       },
-      "pass_if": "== 0"
+      "pass_if": "== 0",
+      "min_opportunity_s": 5
     },
     {
       "id": "PRI-LOWMANA-ACTED",
