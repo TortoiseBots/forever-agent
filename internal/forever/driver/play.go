@@ -104,6 +104,11 @@ type PlayLimits struct {
 	Recover    time.Duration // one wipe's whole recovery, before the run ends unrecovered
 	CorpseWord time.Duration // between the release whispers and the corpse-run ones
 	Loot       time.Duration // the loot of one fight
+	// BossHealMana and BossTankHP are the pre-boss gate's floors, per cent: a party still short after both rest windows
+	// may be pulled at the healer's mana and the tank's health, or not at all (`boss-not-ready`). The gate fails
+	// closed: a tank or healer missing from the roster, dead, a ghost, or without a readable bar is a deficiency too.
+	BossHealMana int
+	BossTankHP   int
 }
 
 // DefaultPlayLimits is the player run's table of defaults, from the spec's round P2a.
@@ -134,6 +139,8 @@ func DefaultPlayLimits() PlayLimits {
 		Recover:      10 * time.Minute,
 		CorpseWord:   10 * time.Second,
 		Loot:         10 * time.Second,
+		BossHealMana: 50,
+		BossTankHP:   70,
 	}
 }
 
@@ -215,6 +222,12 @@ func (l PlayLimits) withDefaults() PlayLimits {
 	if l.Loot == 0 {
 		l.Loot = d.Loot
 	}
+	if l.BossHealMana == 0 {
+		l.BossHealMana = d.BossHealMana
+	}
+	if l.BossTankHP == 0 {
+		l.BossTankHP = d.BossTankHP
+	}
 	return l
 }
 
@@ -277,6 +290,8 @@ type playRun struct {
 
 	// sightBlocked is the last look's verdict of the pull in hand: the tank could not see the skull.
 	sightBlocked bool
+	// gateStatsErr records the pre-boss gate's first failed member-stats request (the wait's own error is recorded once).
+	gateStatsErr bool
 	// refused is set when the last engage's tank order was refused by the module (its whisper), and refusedOut when
 	// engageSeen spent its bounds on refusals: the pull stops then.
 	refused    bool
@@ -297,9 +312,12 @@ type playRun struct {
 	walkAt int
 	// stepIdx is the leg's next step (P4): a step a pack interrupted is begun again after the fight.
 	stepIdx int
-	// pack is the group being pulled or fought (-1 between pulls); bossRun says the pull is the leg's boss.
-	pack    int
-	bossRun bool
+	// pack is the group being pulled or fought (-1 between pulls); bossRun says the pull is the leg's boss, and
+	// bossGUID is the boss's unit as this pull last saw it (a pull's missing snapshot is judged against the kill latch
+	// only for that unit).
+	pack     int
+	bossRun  bool
+	bossGUID wire.GUID
 	// pullWalk says the walk in progress is a pull's own approach (to the plan's stand, or a retry's step): the walk
 	// skips a pack in the way and the patrol hold, so a pull never starts a nested one.
 	pullWalk bool

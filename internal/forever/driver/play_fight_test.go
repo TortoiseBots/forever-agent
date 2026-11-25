@@ -78,6 +78,7 @@ func newPlayFightRig(t *testing.T, plan *dungeon.Plan, mut func(*PlayFake)) *pla
 	clock := NewVClock(time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC))
 	fake := NewPlayFake(route, clock, "Ownerchar", playBots[:]...)
 	fake.SetBotHP("Botone", 900, 900)
+	fake.SetBotPower("Bottwo", 0, 1000, 1000) // the configured healer: a mana pool the pre-boss gate reads
 	if mut != nil {
 		mut(fake)
 	}

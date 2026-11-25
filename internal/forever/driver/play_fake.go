@@ -67,6 +67,9 @@ type PlayFake struct {
 	// NoAnswer names the bots (by lower-cased name, like Moved) that do not answer the corpse-run whisper: they stay
 	// ghosts, and a recovery that needs them cannot finish (§3.10's wipe-unrecovered).
 	NoAnswer map[string]bool
+	// RosterOffline names the bots (by lower-cased name) whose party row stays while the roster pushes it offline: the
+	// row is there, the member is not. The owner table still has the bot; only the roster's last push disagrees.
+	RosterOffline map[string]bool
 	// Graveyard is where a released ghost stands, on the plan's portal map: the plan's portal, 40 yd out, unless a test
 	// scripts another point.
 	Graveyard Vec3
@@ -130,6 +133,9 @@ type PlayFake struct {
 	TriggerFails bool
 	// OnWalk, when set, is asked before a walk of that destination: a test scripts the party's state there.
 	OnWalk func(f *PlayFake, to Vec3)
+	// OnRest, when set, is asked before the party is sat down: the pre-boss gate's rows are scripted there, after the
+	// pull's gather and before the gate's first read.
+	OnRest func(f *PlayFake)
 	// PathFunc, when set, answers the walker's route: a test scripts a partial route (the navmesh's edge) or none.
 	PathFunc func(from, to Vec3) navmesh.Route
 
@@ -179,6 +185,9 @@ type PlayFake struct {
 	NoAggro map[wire.GUID]int
 	// OnRezPoll is asked on every poll of the resurrect offer: a test scripts a death during the character's wait.
 	OnRezPoll func(f *PlayFake)
+	// OnUnits, when set, is asked before every read of the view: a test scripts a unit that leaves a snapshot or two (a
+	// delayed push, a range transition) with RemoveUnit and puts it back with AddUnit. The hook must not read the view.
+	OnUnits func(f *PlayFake)
 }
 
 // The fake's fight numbers: a scripted unit's health when a test gave it none, and what the group takes off a unit
@@ -205,7 +214,7 @@ func NewPlayFake(route *Route, clock *VClock, self string, bots ...string) *Play
 	f := &PlayFake{
 		GoldenOwner: owner, Route: route, SelfName: self, SelfPhase: PhaseAlive,
 		BotPos: map[string]Vec3{}, BotHP: map[string][2]int{}, Moved: map[string]bool{}, Stuck: map[string]bool{},
-		NoAnswer: map[string]bool{}, Rolls: map[wire.GUID][]string{}, NoLoot: map[wire.GUID]bool{},
+		NoAnswer: map[string]bool{}, RosterOffline: map[string]bool{}, Rolls: map[wire.GUID][]string{}, NoLoot: map[wire.GUID]bool{},
 		NoAggro: map[wire.GUID]int{}, UseNoChange: map[uint32]bool{},
 		BotPower: map[string][3]int{}, BotRegen: map[string]int{}, powerAt: map[string]time.Time{},
 		selfHP: [2]int{1000, 1000},
@@ -605,10 +614,11 @@ func (f *PlayFake) rosterLive() []PartyMember {
 		Ghost: f.SelfPhase == PhaseGhost, HP: f.selfHP[0], MaxHP: f.selfHP[1], Pos: f.SelfPos, Map: f.SelfMap,
 	}}
 	for _, b := range f.GoldenOwner.Bots {
-		if !b.Online || !b.InParty {
+		key := strings.ToLower(b.Name)
+		off := f.RosterOffline[key]
+		if !b.InParty || (!b.Online && !off) {
 			continue
 		}
-		key := strings.ToLower(b.Name)
 		hp, maxHP := 900, 900
 		if v, ok := f.BotHP[key]; ok {
 			hp, maxHP = v[0], v[1]
@@ -626,7 +636,7 @@ func (f *PlayFake) rosterLive() []PartyMember {
 			}
 		}
 		out = append(out, PartyMember{
-			Name: b.Name, GUID: f.botGUID(b.Name), Online: true, Dead: b.Dead, Ghost: b.Ghost,
+			Name: b.Name, GUID: f.botGUID(b.Name), Online: b.Online && !off, Dead: b.Dead, Ghost: b.Ghost,
 			HP: hp, MaxHP: maxHP, PowerType: p[0], Power: p[1], MaxPower: p[2],
 			Pos: f.botPos(b), Map: b.Map,
 		})
@@ -831,7 +841,12 @@ func (f *PlayFake) friendTarget(g wire.GUID) bool {
 }
 
 // Rest sits the agent down; the fake's party is always rested.
-func (f *PlayFake) Rest(ctx context.Context, limit time.Duration) error { return nil }
+func (f *PlayFake) Rest(ctx context.Context, limit time.Duration) error {
+	if f.OnRest != nil {
+		f.OnRest(f)
+	}
+	return nil
+}
 
 // Phase is the character's state.
 func (f *PlayFake) Phase() PlayerPhase { return f.SelfPhase }
@@ -976,6 +991,9 @@ func (f *PlayFake) Self() (Vec3, uint32, uint64, bool) {
 
 // Units is the scripted view, with the packs whose aggro is due settled first.
 func (f *PlayFake) Units() []Unit {
+	if f.OnUnits != nil {
+		f.OnUnits(f)
+	}
 	f.settle()
 	return f.units
 }

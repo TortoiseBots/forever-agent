@@ -279,7 +279,7 @@ func TestPlayBossPullGathersTheParty(t *testing.T) {
 }
 
 // TestPlayBossPullWaitsForTheBars: after the rest's own cap passes with the healer still short, the boss pull waits
-// (bounded by the rest's cap) for the party's bars before it is ordered.
+// (bounded by two rest windows, the review of 2026-11-24's gate) for the party's bars before it is ordered.
 func TestPlayBossPullWaitsForTheBars(t *testing.T) {
 	plan := playFightPlan()
 	plan.Legs[0].To = dungeon.Point{X: 40, Y: 10}
@@ -288,6 +288,8 @@ func TestPlayBossPullWaitsForTheBars(t *testing.T) {
 		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{40, 10, 0}, HP: 700, MaxHP: 700})
 		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{40, 10, 0}, HP: 700, MaxHP: 700})
 		f.SpawnBosses()
+		// The healer spends its pool on the first fight and drinks it back slowly: the rest's own cap passes at 10 s
+		// with it at 35%, and the gate's second window is where it comes back over its bar (70% at 24 s).
 		drained := false
 		f.OnFightTick = func(f *PlayFake) {
 			if drained {
@@ -295,6 +297,7 @@ func TestPlayBossPullWaitsForTheBars(t *testing.T) {
 			}
 			drained = true
 			f.SetBotPower("Bottwo", 0, 100, 1000)
+			f.BotRegen["bottwo"] = 25
 		}
 	})
 	rig.cfg.Limits.Rest = 10 * time.Second
@@ -334,6 +337,18 @@ func TestPlayBossPullWaitsForTheBars(t *testing.T) {
 	}
 	if bossPull-timeout < int64(10*time.Second/time.Millisecond) {
 		t.Fatalf("the boss was pulled %d ms after the rest's timeout; want the pull to wait the rest's cap (10 s) more", bossPull-timeout)
+	}
+	var again bool
+	for i := range tf.Events {
+		if tf.Events[i].Ev == "boss_rest_again" {
+			again = true
+		}
+		if tf.Events[i].Ev == "boss_not_ready" || tf.Events[i].Ev == "boss_pull_min_bars" {
+			t.Fatalf("the gate took %q; want the party ready inside the second window", tf.Events[i].Ev)
+		}
+	}
+	if !again {
+		t.Fatal("the trace has no boss_rest_again: the gate did not rest the party a second time")
 	}
 }
 

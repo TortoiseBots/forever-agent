@@ -279,6 +279,7 @@ func TestPlayStepsRunBeforeTheBoss(t *testing.T) {
 	clock := NewVClock(time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC))
 	fake := NewPlayFake(route, clock, "Ownerchar", playBots[:]...)
 	fake.SetBotHP("Botone", 900, 900)
+	fake.SetBotPower("Bottwo", 0, 1000, 1000) // the pre-boss gate reads the healer's mana
 	fake.SpawnBosses()
 	fake.AddObject(PlayObject{Entry: 4072, Pos: Vec3{30, -40, 0}, State: "ready"})
 	ports := PlayPorts{Owner: fake.Module, Group: fake, Player: fake, World: fake, Walker: fake, Clock: clock}
