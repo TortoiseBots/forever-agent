@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math"
 	"slices"
 	"strconv"
 	"strings"
@@ -114,6 +115,10 @@ type PlayFake struct {
 	Looted      []wire.GUID
 	LootRefused []wire.GUID
 	Votes       []PlayVote
+	// agentAttacks is every unit the agent started its own attack on, in order (a re-attack after a walk is another).
+	agentAttacks []wire.GUID
+	// chaseAt is when a mob chasing the agent last moved; the fake's mobs follow the character at its own run speed.
+	chaseAt time.Time
 	// Rolls is the items whose roll is open on a corpse, NoLoot the corpses the character may not loot, and
 	// LootFail how many times Loot on that corpse answers a transient non-ErrCannotLoot error.
 	Rolls    map[wire.GUID][]string
@@ -169,7 +174,10 @@ type PlayFake struct {
 	// "I dont see my rti attack target" to the agent; SightRefusals counts them per bot.
 	ModuleSight  func(from, to Vec3) bool
 	RefuseOrders int
-	refusals     map[string]int
+	// WhisperOnce scripts the live module's one whisper for a mark it cannot find: the order is still refused, but the
+	// Refusals count stands at one, as it did live (three orders, one whisper, 2026-11-24).
+	WhisperOnce bool
+	refusals    map[string]int
 	// AttackCode, when set, is asked for the unit the tank's attack order lands on: a code it returns is the module's
 	// refusal of that order (the live `not-attackable` on a friendly quest giver) and the order does nothing.
 	AttackCode func(target wire.GUID) string
@@ -244,6 +252,9 @@ func (f *PlayFake) SelfGUID() wire.GUID { return f.selfGUID }
 func (f *PlayFake) SetBotHP(name string, hp, maxHP int) {
 	f.BotHP[strings.ToLower(name)] = [2]int{hp, maxHP}
 }
+
+// SetSelfHP gives the agent's own character its health and max health (the roster row the agent's own pull reads).
+func (f *PlayFake) SetSelfHP(hp, maxHP int) { f.selfHP = [2]int{hp, maxHP} }
 
 // ClearBosses puts one dead unit of every plan boss in the view: the run's clear is every boss dead.
 func (f *PlayFake) ClearBosses() {
@@ -362,8 +373,10 @@ func (f *PlayFake) engage(guid wire.GUID, d time.Duration) {
 }
 
 // settle applies the packs whose aggro is due: every living unit of them that is not already fighting turns on the
-// party. A unit keeps the target it has (an add does not take a fighting pack's members).
+// party. A unit keeps a target that is already fighting for the party (an add does not take a fighting pack's member),
+// but the bots' order takes the mob off the character: the module's own threat, as the tank's order does on the server.
 func (f *PlayFake) settle() {
+	f.chase()
 	now := f.Clock.Now()
 	rest := f.pending[:0]
 	for _, a := range f.pending {
@@ -373,7 +386,7 @@ func (f *PlayFake) settle() {
 		}
 		for i := range f.units {
 			u := &f.units[i]
-			if u.Dead || u.Friendly || !slices.Contains(a.guids, u.GUID) || !u.Target.IsZero() {
+			if u.Dead || u.Friendly || !slices.Contains(a.guids, u.GUID) || (!u.Target.IsZero() && u.Target != f.selfGUID) {
 				continue
 			}
 			if n := f.NoAggro[u.GUID]; n > 0 {
@@ -387,6 +400,107 @@ func (f *PlayFake) settle() {
 		}
 	}
 	f.pending = rest
+}
+
+// playMobChaseYd is how fast a mob that is fighting the character moves toward it (a player's run speed, the walk's
+// own 7 yd/s), playMobReachYd is how near it comes (a body's reach), and playMeleeReachYd is a melee body's own reach:
+// the character's swing only touches a mob that stands inside it.
+const (
+	playMobChaseYd   = 7.0
+	playMobReachYd   = 2.0
+	playMeleeReachYd = 5.0
+)
+
+// playAssistYd is the fake's stand-in for the core's creature assistance radius (10 yd): a hostile within it of the
+// unit the character hits is drawn in by the hit too, as the server's social aggro does.
+const playAssistYd = 10.0
+
+// engageAgent is the server's own answer to the character's swing: the hostile unit the character swings at inside its
+// own reach turns on the character, and so do its pack-mates and any other hostile within playAssistYd of it (the
+// server's social aggro), unless something else already holds them or their pack's aggro is still due (the module's
+// pull). A unit the scripted pull's NoAggro swallows does not hear the character's swing either.
+func (f *PlayFake) engageAgent(guid wire.GUID) {
+	hit, ok := unitByGUID(f.units, guid)
+	if !ok || hit.Dead || hit.Friendly || dist3(hit.Pos, f.SelfPos) > playMeleeReachYd {
+		return
+	}
+	for _, a := range f.pending {
+		if slices.Contains(a.guids, guid) {
+			return
+		}
+	}
+	join := map[wire.GUID]bool{guid: true}
+	for _, g := range f.packOf(guid) {
+		join[g] = true
+	}
+	for _, u := range f.units {
+		if u.Dead || u.Friendly || f.bossEntry(u.Entry) {
+			continue // a plan boss is the run's own boss pull, not a neighbour drawn in by a swing
+		}
+		if dist3(u.Pos, hit.Pos) <= playAssistYd {
+			join[u.GUID] = true
+		}
+	}
+	for i := range f.units {
+		u := &f.units[i]
+		if !join[u.GUID] || u.Dead || u.Friendly || !u.Target.IsZero() {
+			continue
+		}
+		if u.GUID != guid && f.NoAggro[u.GUID] > 0 {
+			continue
+		}
+		due := false
+		for _, a := range f.pending {
+			if slices.Contains(a.guids, u.GUID) {
+				due = true
+				break
+			}
+		}
+		if due {
+			continue
+		}
+		u.Target = f.selfGUID
+		if f.AggroAt.IsZero() {
+			f.AggroAt = f.Clock.Now()
+		}
+	}
+}
+
+// bossEntry says whether an entry is one of the route's bosses: a boss is pulled by the run's own boss flow (and its
+// adds' marks), never drawn in as a swing's social neighbour.
+func (f *PlayFake) bossEntry(entry uint32) bool {
+	for _, leg := range f.Route.Legs {
+		if leg.Boss != nil && leg.Boss.Entry == entry {
+			return true
+		}
+	}
+	return false
+}
+
+// chase moves every mob that is fighting the character toward it at playMobChaseYd, up to playMobReachYd: the mob a
+// pulled character runs from follows it to the party.
+func (f *PlayFake) chase() {
+	now := f.Clock.Now()
+	last := f.chaseAt
+	f.chaseAt = now
+	if last.IsZero() {
+		return
+	}
+	step := now.Sub(last).Seconds() * playMobChaseYd
+	if step <= 0 {
+		return
+	}
+	for i := range f.units {
+		u := &f.units[i]
+		if u.Dead || u.Friendly || u.Target != f.selfGUID {
+			continue
+		}
+		d := dist3(u.Pos, f.SelfPos)
+		if d <= playMobReachYd {
+			continue
+		}
+		f.units[i].Pos = lerpVec(u.Pos, f.SelfPos, math.Min(1, step/d))
+	}
 }
 
 // packOf is the units one unit's plan group claims, or the unit alone when no group holds it.
@@ -505,6 +619,11 @@ func (m *PlayModule) Attack(ctx context.Context, name string) (botcmd.Reply, err
 	if err == nil {
 		if m.f.tankBlind(name) {
 			m.f.BlindOrders++
+			// The live module whispers its sight refusal once for a mark it cannot find (2026-11-24: three orders, one
+			// whisper): WhisperOnce scripts that, so a test reads the pull's own refusal bounds, not the fake's answer.
+			if m.f.WhisperOnce && m.f.refusals[strings.ToLower(name)] > 0 {
+				return rep, err
+			}
 			if m.f.refusals == nil {
 				m.f.refusals = map[string]int{}
 			}
@@ -735,8 +854,14 @@ func (f *PlayFake) Select(guid wire.GUID) error {
 	return nil
 }
 
-// Attack starts the agent's own attack.
-func (f *PlayFake) Attack(guid wire.GUID) error { f.Attacked = guid; return nil }
+// Attack starts the agent's own attack: the unit turns on the character unless something else already holds it (the
+// module's own pull is the business of the pack's aggro, not the fake's).
+func (f *PlayFake) Attack(guid wire.GUID) error {
+	f.Attacked = guid
+	f.agentAttacks = append(f.agentAttacks, guid)
+	f.engageAgent(guid)
+	return nil
+}
 
 // StopAttack ends it.
 func (f *PlayFake) StopAttack() error { f.Attacked = wire.GUID{}; return nil }

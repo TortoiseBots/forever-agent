@@ -53,6 +53,9 @@ type Unit struct {
 	// view does not know). The patrol hold reads them: the reaction through Reactions, the flags for UnitNotAttackable.
 	Faction int32
 	Flags   uint32
+	// Critter marks a creature of the critter type (the ambient, non-attackable kind: rabbits, frogs): it never
+	// aggroes on a player, so the pull's clearance does not count it.
+	Critter bool
 }
 
 // UnitNotAttackable is the unit flags that make a unit impossible to attack for a player (UnitDefines.h):

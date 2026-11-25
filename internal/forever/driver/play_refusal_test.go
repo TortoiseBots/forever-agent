@@ -96,28 +96,48 @@ func TestPlayPullRefusedOnceThenAnswered(t *testing.T) {
 	}
 }
 
-// TestPlayPullRefusedForeverIsBounded: the agent's ray says the tank sees the skull, the module never does. The run
-// steps toward the skull at most PlayRefuseTries times, never nearer than PlaySightTouchYd, and stops pull-failed (as
-// before), not later than PlayRefuseTime after the first refusal plus one pull window.
+// TestPlayPullRefusedForeverIsBounded: the agent's ray says the tank sees the skull, the module never does, and (as the
+// live module does, 2026-11-24: three orders, one whisper) it does not whisper again for the same mark. The refusal's
+// own bounds still govern: PlayRefuseTries steps toward the skull and PlayRefuseTime from the first refusal, then the
+// agent pulls the mob itself; a pull that fails there too stops pull-failed inside those bounds. The live run gave up
+// 58 s in with ninety seconds on the clock, because the two silent orders spent the pull's two-try loop.
 func TestPlayPullRefusedForeverIsBounded(t *testing.T) {
 	rig := refusalRig(t, func(Vec3, Vec3) bool { return false }, 0)
+	rig.fake.WhisperOnce = true
 	walks := logPlayWalks(rig.fake)
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
 	if res.Stop != "pull-failed" {
 		t.Fatalf("stop = %q; want pull-failed", res.Stop)
 	}
-	if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n < 3 || n > PlayRefuseTries+1 {
-		t.Fatalf("the tank was ordered %d times; want 3..%d (the first order and one per step toward the skull)", n, PlayRefuseTries+1)
-	}
-	if d := dist3(rig.fake.SelfPos, Vec3{42, 22, 0}); d < PlaySightTouchYd-0.01 {
-		t.Fatalf("the agent ended %.1f yd from the skull; want no nearer than %.0f", d, PlaySightTouchYd)
-	}
-	firstAt := playActionTime(t, rig.fake.Actions, ".bot attack Botone")
-	if took := rig.fake.Clock.Now().Sub(firstAt); took > PlayRefuseTime+2*time.Minute {
-		t.Fatalf("the refusals took %s; want them bounded by PlayRefuseTime (%s)", took, PlayRefuseTime)
-	}
 	if len(*walks) == 0 {
 		t.Fatalf("no walk at all")
+	}
+	if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n < PlayRefuseTries {
+		t.Fatalf("the tank was ordered %d times; want the refusals' own tries (at least %d)", n, PlayRefuseTries)
+	}
+	// The refusal's steps are the limits' own, not the pull's outer two tries: the module's one whisper is no reason
+	// to stop at two.
+	steps := 0
+	for _, ev := range playEventList(t, rig) {
+		if ev.Ev == "pull_step" {
+			if refused, ok := ev.D["refused"].(bool); ok && refused {
+				steps++
+			}
+		}
+	}
+	if steps != PlayRefuseTries {
+		t.Fatalf("the refusal stepped %d times; want exactly PlayRefuseTries = %d", steps, PlayRefuseTries)
+	}
+	ev := playEvents(t, rig)
+	if n := playEventCount(t, rig, "agent_pull"); n != 1 {
+		t.Fatalf("agent_pull events = %d; want the one bounded try after the refusals", n)
+	}
+	// The whole pull is bounded by the refusals' time plus the agent pull's own two clocks, not by the run's cap.
+	bound := PlayRefuseTime + DefaultPlayLimits().PullReach + DefaultPlayLimits().PullBack + 30*time.Second
+	events := playEventList(t, rig)
+	last := events[len(events)-1].T
+	if took := last - ev["pull_refused"].T; took > int64(bound/time.Millisecond) {
+		t.Fatalf("the refused pull lasted %d ms from its first refusal; want under %v", took, bound)
 	}
 }
 
@@ -149,11 +169,12 @@ func TestPlayPullNoRefusalPortUnchanged(t *testing.T) {
 	}
 }
 
-// TestPlayPullRefusalNearTheSkullIsNotAStop: the agent already stands 4.5 yd from the skull (inside the pull's own
-// touch distance) and the tank trails it; the module refuses the first order once. The refusal must not be an
-// immediate stop on the first try: the party steps to the mob, waits (bounded) for the tank, re-marks and re-orders,
-// and the retry is answered.
-func TestPlayPullRefusalNearTheSkullIsNotAStop(t *testing.T) {
+// TestPlayPullRefusalNearTheSkullIsTheAgentsOwnPull: the agent stands 4.5 yd from the skull, inside its own melee
+// reach, and the module refuses the first tank order it gets. The order and its explicit refusal come first (the
+// agent's pull is a fallback, the review of 2026-11-24); then the remaining step-closer retries are skipped because
+// the mob is at the character's feet, and the agent hits it itself, the mob turns on it, and the tank takes it once it
+// is beside it (its order re-sent when the refusal left the module silent).
+func TestPlayPullRefusalNearTheSkullIsTheAgentsOwnPull(t *testing.T) {
 	plan := playFightPlan()
 	plan.Legs[0].PullGroups[0] = dungeon.PullGroup{
 		Entries:   []uint32{11320, 11319},
@@ -165,30 +186,31 @@ func TestPlayPullRefusalNearTheSkullIsNotAStop(t *testing.T) {
 		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 18, 0}})
 		f.AddUnit(Unit{GUID: skull, Entry: 11319, Pos: Vec3{42, 22, 0}})
 		f.SpawnBosses()
-		// The tank's own live unit trails the agent: the refusal's step is read from it.
+		// The tank's own live unit trails the agent.
 		f.AddUnit(Unit{GUID: f.botGUID("Botone"), Pos: Vec3{42, 19.5, 0}, Friendly: true})
 		f.RefuseOrders = 1
 	})
 	rig.ports.Refusals = rig.fake
-	walks := logPlayWalks(rig.fake)
+	rig.cfg.Out = t.TempDir()
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
 	if res.Stop != "clear" {
 		t.Fatalf("stop = %q; want clear (one refusal near the skull is not the pull's end)", res.Stop)
+	}
+	ev := playEvents(t, rig)
+	if _, ok := ev["agent_pull"]; !ok {
+		t.Fatalf("the trace has no agent_pull: the agent did not pull the mob at its feet")
+	}
+	if why, _ := ev["agent_pull"].D["why"].(string); why != "reach" {
+		t.Fatalf("agent_pull why = %q; want reach (the skull stood inside the agent's own reach)", why)
+	}
+	if len(rig.fake.agentAttacks) == 0 || rig.fake.agentAttacks[0] != skull {
+		t.Fatalf("the agent's own attacks = %v; want the skull first", rig.fake.agentAttacks)
 	}
 	if rig.fake.BlindOrders != 1 {
 		t.Fatalf("the module refused %d orders; want 1 (the scripted one)", rig.fake.BlindOrders)
 	}
 	if n := playCountLines(rig.fake.Actions, ".bot attack Botone"); n < 2 {
 		t.Fatalf("the tank was ordered %d times; want the refused order and the retry", n)
-	}
-	var stepped bool
-	for _, w := range *walks {
-		if dist3(w.To, Vec3{42, 22, 0}) < 0.1 {
-			stepped = true
-		}
-	}
-	if !stepped {
-		t.Fatalf("the party never stepped to the mob; walks %v", *walks)
 	}
 }
 
