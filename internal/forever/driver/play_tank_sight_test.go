@@ -250,6 +250,7 @@ func TestPlayTankSightLeadStepsForward(t *testing.T) {
 		t.Fatalf("the tank's last look was from %v; want north of the ledge (y >= 11) within the tries", last)
 	}
 	if rig.fake.BlindOrders != 0 {
+		dumpPlay(t, rig)
 		t.Fatalf("the module refused %d order(s); want none (the tank was in sight before the first order)", rig.fake.BlindOrders)
 	}
 	if n := playEventCount(t, rig, "agent_pull"); n != 0 {

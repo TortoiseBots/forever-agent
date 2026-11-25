@@ -117,18 +117,21 @@ const (
 	// sample asks the ray a character standing there would.
 	//
 	// PlayAgentLeadYd is how far the agent steps ahead of the tank on one try (2 yd): the tank's follow trails a body
-	// behind, so the agent's own stand alone brings the tank no sight.
+	// behind, so the agent's own stand alone brings the tank no sight. PlaySightLeadArriveYd is the arrival tolerance
+	// of one of those steps (0.5 yd): a step is one path sample, and PlayArriveYd would swallow a whole one and leave
+	// the agent standing where it was for every try.
 	//
 	// PlayTankSightTries bounds the search's lead steps (8). PlayTankSightSpots and PlayTankSightTime bound one
 	// search's whole budget: 24 queries and 60 s from the pull's first look, the skull pick and the stand walk on the
 	// path together, then the pull goes on as it stands and the module is the judge. At the module's 250 ms rate the
 	// query budget is spent well inside the time one.
-	PlaySrvSightStepYd = 2.0
-	PlayLosEyeYd       = 2.0
-	PlayAgentLeadYd    = 2.0
-	PlayTankSightTries = 8
-	PlayTankSightTime  = 60 * time.Second
-	PlayTankSightSpots = 24
+	PlaySrvSightStepYd    = 2.0
+	PlayLosEyeYd          = 2.0
+	PlayAgentLeadYd       = 2.0
+	PlaySightLeadArriveYd = 0.5
+	PlayTankSightTries    = 8
+	PlayTankSightTime     = 60 * time.Second
+	PlayTankSightSpots    = 24
 )
 
 // pull is the pack in the way: the agent first walks to the plan's stand with the party beside it, then the skull goes
@@ -681,13 +684,13 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 			continue
 		}
 		stand = at
-		if dist3(p.self, at) > PlayArriveYd {
-			p.pullWalk = true
-			p.walkTo(ctx, at, false, false)
-			p.pullWalk = false
-			if p.stopReason != "" || p.stall != "" {
-				return false, true
-			}
+		// The stand walked to is the sample the server cleared: the arrival tolerance is the lead step's own, not the
+		// pull's PlayArriveYd (which could stop the agent short of the sample it asked about).
+		p.pullWalk = true
+		p.walkToWithin(ctx, at, PlaySightLeadArriveYd, false)
+		p.pullWalk = false
+		if p.stopReason != "" || p.stall != "" {
+			return false, true
 		}
 		walked = true
 		break
@@ -724,7 +727,7 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 			return false, true
 		}
 		p.pullWalk = true
-		p.walkTo(ctx, next, false, false)
+		p.walkToWithin(ctx, next, PlaySightLeadArriveYd, false)
 		p.pullWalk = false
 		if p.stopReason != "" || p.stall != "" {
 			return false, true
@@ -749,19 +752,41 @@ func (p *playRun) tankSightSamples(group int, points []Vec3, u Unit) []Vec3 {
 	return out
 }
 
-// leadPoint is the next spot the agent steps to in the sight search: the first path sample at least PlayAgentLeadYd
-// from where the agent stands and at least PlaySightTouchYd from the unit. ok is false when the path has none left.
+// leadPoint is the next spot the agent steps to in the sight search: the first path sample ahead of the agent's own
+// stand at least PlayAgentLeadYd from it (the path's last sample ahead when the usable path is shorter than a step,
+// so the search still advances), never a sample at or behind the agent and never one within PlaySightTouchYd of the
+// unit. The samples start at the TANK's position, so the search starts from the sample nearest the agent, never from
+// the first one: a search from index 0 names the ground BEHIND the agent (where the tank stood) and walks the agent
+// back toward the tank, which is the live failure (#262). ok is false when the path has no sample left ahead.
 func (p *playRun) leadPoint(samples []Vec3, u Unit) (Vec3, bool) {
 	p.refreshSelf()
-	for _, at := range samples {
+	from := nearestSample(samples, p.self)
+	lead, have := Vec3{}, false
+	for i := from + 1; i >= 0 && i < len(samples); i++ {
+		at := samples[i]
 		if dist3(at, u.Pos) < PlaySightTouchYd {
 			break
 		}
 		if dist3(at, p.self) >= PlayAgentLeadYd {
 			return at, true
 		}
+		lead, have = at, true
+	}
+	if have {
+		return lead, true
 	}
 	return Vec3{}, false
+}
+
+// nearestSample is the index of the sample nearest at, -1 when there is none.
+func nearestSample(samples []Vec3, at Vec3) int {
+	best, idx := math.Inf(1), -1
+	for i, s := range samples {
+		if d := dist3(s, at); d < best {
+			best, idx = d, i
+		}
+	}
+	return idx
 }
 
 // tankSightBefore is the pull's sight before its first order (#262 steps 3 and 4). With the server's port the skull goes
