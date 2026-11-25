@@ -3,7 +3,7 @@
   "name": "scholomance",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-25: the Turtle boss 14695 Lord Blackwood has no ForeverCore map-289 spawn and 40 of 410 segments do not walk on the Forever tiles)",
   "map": 289,
   "entrance": {"x": 190.819, "y": 126.329, "z": 137.227},
   "entrance_trigger": 2567,
@@ -35,7 +35,8 @@
     "Kormok: the trigger 16047 and Kormok 16118 share one point at -24.898 141.242 84.0468 with Ras Frostwhisper; Kormok's spawn 1068112 has spawn_flags 2 (SPAWN_FLAG_DISABLED: never spawned) and the trigger only spawns him on a spell hit. Their pull is gone; the Ras leg is three hall packs and the boss.",
     "Adds no spawn row names: Ras Frostwhisper's Frostbolt Volley/Fear/Chill Nova, the Dark Summoner 11582 summons a Risen Lackey on cast, the Necromancer 10477 casts Call of the Grave and Corpse Explosion, Instructor Malicia casts Call of the Grave. The plan's kill_first and cc lists are in the plan row.",
     "Patrols (creature_movement, movement type 2): 22 spawns, among them Ras Frostwhisper (61 yd, 24 s), five Risen Guards (98-158 yd, 39-63 s), three Diseased Ghouls (98-110 yd, 39-44 s), Vectus (a 0 yd scripted teleport loop) and the students. No patrol block is written: the run leader's rows cannot carry one, and the patrol paths are for the mapping walk.",
-    "2026-10-24 leg 0 fix: the landing-to-Malicia walk is 554 yd of navmesh (east ring, west hall, the 104.8 hall, the lower corridor) and passes 40 census packs within 30 yd; the leg is now those 40 pulls in route order, each with an approach and a stand, instead of one move row (the r28c slotC first run wiped five times on them)."
+    "2026-10-24 leg 0 fix: the landing-to-Malicia walk is 554 yd of navmesh (east ring, west hall, the 104.8 hall, the lower corridor) and passes 40 census packs within 30 yd; the leg is now those 40 pulls in route order, each with an approach and a stand, instead of one move row (the r28c slotC first run wiped five times on them).",
+    "Forever check (2026-11-25, issue #223 batch 4, ForeverCore world DB, tools/dungeongen/export-forever.sh map 289: 419 normal spawns): plan-export --forever writes 10 legs, 411 steps, 165 pulls, 236 moves, 440 pack units and 10 boss rows and refuses no field. plan-probe --forever on the Forever map-289 tiles misses a core spawn for 2 of 454 unit rows: the Turtle boss 14695 Lord Blackwood has no map-289 spawn in the core. 40 of 410 segments do not walk (38 rows find no floor within 5 yd, mostly the x 137-219 y -91 to 102 corridor whose rows keep z 87-131 while the floor sits at 75-143, and 2 rows the Forever walk stops short of); 410 segments: 93 ok, 277 warn, 40 bad. plan-check --forever fails 3 of 524 points with 488 findings (181 fail: water 8, off-floor 3, edge 179, ledge 7, short hop 84, aggro 44, boss_aggro 11, patrol 20, climb_anchor 23, joiners 109); trash-check reports 284 danger, 15 patrol, 15 own and 96 clear segments of 410. The plan keeps Lord Blackwood and every other spawn, leg and step: its content is shared with the Turtle stack."
   ],
   "legs": [
     {

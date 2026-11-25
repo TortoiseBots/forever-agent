@@ -3,7 +3,7 @@
   "name": "stratholme_undead",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-25: plan-export --forever refuses legs[4].boss.hold (Baron Rivendare); the module's plan table has no hold rows)",
   "map": 329,
   "entrance": {"x": 3590.87, "y": -3643.22, "z": 138.491},
   "entrance_trigger": 2214,
@@ -35,7 +35,8 @@
     "Patrols: 23 of the map's 36 movement-type-2 spawns stand within 25 yd of a plan point (the three Eyes of Naxxramas 10411, the Patchwork Horrors 10414, the gargoyles 10408/10409, the plague ghouls 10405, Stonespine 10809); the plan carries no patrol block, so a single-unit pull of one is found where it stands, and one that walks into a fight is not in the rows.",
     "The north-west street past 0.14 (3574 -3346) leaves six hostiles of the next block (3535-3545 -3340..-3356: 10390/10391/10381, 20.6-25.7 yd from the nearest plan point) outside the pulls: within aggro + 5 yd, so a pull that drifts or a knockback can add them; the mapping walk picks the stands.",
     "Adds with no spawn row: Ravaged Cadaver 10381 summons a Broken Cadaver on death, Thuzadin Necromancer 10400 a Skeletal Servant (12420) on spawn, Eye of Naxxramas 10411 gargoyles on aggro, the abominations' event Ramstein and the Black Guards.",
-    "Back entrance (2214) of map 329; the live side is stratholme_live (its bosses are another migration on the same map)."
+    "Back entrance (2214) of map 329; the live side is stratholme_live (its bosses are another migration on the same map).",
+    "Forever check (2026-11-25, issue #223 batch 4, ForeverCore world DB, tools/dungeongen/export-forever.sh map 329: 499 normal spawns): plan-export --forever refuses legs[4].boss.hold (Baron Rivendare's event), because the module's plan table has no hold rows, so no run-leader rows are written and plan-probe and trash-check have no migration to read. plan-check --forever takes all 289 points on the Forever map-329 tiles with 120 findings (87 fail: edge 20, short hop 6, aggro 4, patrol 1, hop_len 5, climb_anchor 3, joiners 81). The plan keeps the hold and every other spawn, leg and step: its content is shared with the Turtle stack."
   ],
   "legs": [
     {

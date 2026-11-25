@@ -49,12 +49,13 @@ Blackfathom Deeps' Velthelaxx wing; Razorfen Kraul's Bramblehide Rootshaper, Gna
 Scarlet Graveyard's Scarlet Jailer pack, Duke Dreadmoore and Scorn; Scarlet Library's Brother Wystan; Scarlet
 Armory's Quartermaster Daghelm; Scarlet Cathedral's Mograine hold, which the module has no hold row for; Razorfen
 Downs' Death's Head Worshipper, Servitor and Battleguard packs and Death Prophet Rakameg; Zul'Farrak's Zel'jeb the
-Ancient wing, the Farraki Arena, Gahz'rilla, Sezz'ziz and Nekrum Gutchewer), the plan
+Ancient wing, the Farraki Arena, Gahz'rilla, Sezz'ziz and Nekrum Gutchewer; Blackrock Depths' Shan-xi Watershaper;
+Scholomance's Lord Blackwood), the plan
 keeps it, `forever_status` says `refused` with the missing content named,
 and `alt_entries` is the only per-server field (object entries at one position). The plans that can be cleared for
 Forever say `exported`; a plan whose Forever data does not match says `refused` with the field or spawns named
-(Uldaman's item, ritual and hold rows, Sunken Temple's unit wait and hold, and Maraudon Purple's spawn positions and
-one segment are the batch-3 examples).
+(Uldaman's item, ritual and hold rows, Sunken Temple's unit wait and hold, Maraudon Purple's spawn positions and one
+segment, and the batch-4 spawn positions, holds, unit waits and gossip are the examples).
 
 ## What it writes
 

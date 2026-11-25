@@ -3,7 +3,7 @@
   "name": "stratholme_live",
   "kind": "dungeon",
   "status": "draft (census-fixed, not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-25: 18 of 231 unit rows miss a ForeverCore map-329 spawn of their entry within the row's radius (10813 Balnazzar is Dathrohan's update entry; 16101 and 16102 are summoned) and 2 of 79 segments stop short on the Forever tiles)",
   "map": 329,
   "entrance": {"x": 3392.92, "y": -3395.03, "z": 143.135},
   "entrance_trigger": 2216,
@@ -39,7 +39,8 @@
     "Untracked adds, no spawn row to list: the Eye of Naxxramas 10411's gargoyles (spell 16380) on aggro; Willey's Crimson Riflemen 11054 (three every 10 s from nine fixed points) and his gate 175969 (closed on aggro, open on death); a Crimson Initiate's Gallant 10424 at 3593.44 -3086.3 and a Gallant's/Battle Mage's Monk 11043 at 3434.52 -3064.54 on group death; Dathrohan's 32 skeletons; the rat trap's thirty plagued critters.",
     "Doors: the gate-trap portcullises 175350/175351 (open, closed 20 s by the rat trap) and Willey's 175969; the three GO_FLAG_LOCKED live-side doors with no script (The Bastion Door 175967 at 3645.56 -3136.76, Hall of the High Command 176194 at 3541.94 -3068.55 under group 29, Hoard Door 175968 at 3567.34 -3050.77) carry DB state 1 like every SM/Deadmines/SFK door the live runs walked through; the mapping walk checks the Bastion Door first.",
     "Patrols: the draft lists no patrol blocks; 21 movement-type-2 spawns exist, most of them the single-member pulls (leg 0 groups 8, 10, 11, 13, 18, 19, 24, 26, 27, 30, 33; leg 2 groups 5, 6). The run leader's rows cannot carry the path; the driver meets them where they stand.",
-    "Needs (not in the plan): Postmaster Malown's summon, Timmy the Cruel, Ysida's cage and the 45-minute Baron run, the Service entrance and the Slaughter Square gate (undead side); live side of map 329 (left entrance 2217 is equivalent); Baron Rivendare is stratholme_undead."
+    "Needs (not in the plan): Postmaster Malown's summon, Timmy the Cruel, Ysida's cage and the 45-minute Baron run, the Service entrance and the Slaughter Square gate (undead side); live side of map 329 (left entrance 2217 is equivalent); Baron Rivendare is stratholme_undead.",
+    "Forever check (2026-11-25, issue #223 batch 4, ForeverCore world DB, tools/dungeongen/export-forever.sh map 329: 499 normal spawns): plan-export --forever writes 3 legs, 80 steps, 51 pulls, 26 moves, 225 pack units and 3 boss rows and refuses no field. plan-probe --forever on the Forever map-329 tiles misses a core spawn within the row's radius for 18 of 231 unit rows: 10390 Skeletal Guardian 8 stand 41.8-181.9 yd and 10391 Skeletal Berserker 7 stand 46.3-175.6 yd from any core spawn of their entry, while 16101 Jarien, 16102 Sothos and the boss row's 10813 Balnazzar have no map-329 spawn (the two are summoned at Dathrohan and 10813 is his update entry). 2 of 79 segments do not walk (the Forever walk stops 19.5 and 27.3 yd short of the pull group 25 and 26 rows); 79 segments: 56 ok, 21 warn, 2 bad. plan-check --forever takes all 231 points with 96 findings (55 fail: edge 23, short hop 15, aggro 1, patrol 1, hop_len 5, climb_anchor 4, joiners 47); trash-check reports 49 danger, 3 patrol, 11 own and 16 clear segments of 79. The plan keeps every spawn, leg and step: its content is shared with the Turtle stack."
   ],
   "legs": [
     {

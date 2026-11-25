@@ -3,7 +3,7 @@
   "name": "dire_maul_north",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-25: 12 of 273 unit rows miss a ForeverCore map-429 spawn of their entry within the row's radius and 2 of 93 segments stop short on the Forever tiles)",
   "map": 429,
   "entrance": {"x": 254.92, "y": -19.463, "z": -2.5596},
   "entrance_trigger": 3189,
@@ -37,7 +37,8 @@
     "The guards' gossip (Mol'dar's Moxie 22818, Fengus' Ferocity 22817, Slip'kik's Savvy 22820) is a buff a player can take before the pull; the bots do not gossip. Guard Fengus and Guard Slip'kik patrol (852 and 465 yd loops): their boss steps stand at their spawn points and the run leader waits/searches for them.",
     "Two packs stand inside a boss's 20 yd detection: leg 1 pull group 8 (4 units at 405-409 329-339, 19.5 yd from Fengus) and leg 2 pull group 9 (2 Warlocks at 577-585 545-549, 18.2 yd from Slip'kik). Either boss joins those fights; he is then dead for his own boss step (the driver notes 'already dead').",
     "Nothing expressible in the rows: entrance/teleports/portal, level_band, hire_composition, cc_priority, no_cc, patrols, the patrolling bosses, the pool variant.",
-    "One of three wings of map 429."
+    "One of three wings of map 429.",
+    "Forever check (2026-11-25, issue #223 batch 4, ForeverCore world DB, tools/dungeongen/export-forever.sh map 429: 1047 normal spawns): plan-export --forever writes 5 legs, 94 steps, 71 pulls, 18 moves, 226 pack units and 5 boss rows and refuses no field. plan-probe --forever on the Forever map-429 tiles misses a core spawn within the row's radius for 12 of 273 unit rows (11441 Gordok Brute 5, 11444 Gordok Mage-Lord 1 and 13036 Gordok Mastiff 6: the plan's stands lie 10.6-91.6 yd from any core spawn of their entry) and 2 of 93 segments do not walk (the Forever walk stops 2.7 yd short of the pull group 13 row and 68.3 yd short of pull group 14, one of them steep); 93 segments: 53 ok, 38 warn, 2 bad. plan-check --forever takes all 243 points with 54 findings (29 fail: edge 6, ledge 1, short hop 1, aggro 1, patrol 7, hop_len 5, climb_anchor 12, joiners 21); trash-check reports 34 danger, 45 patrol, 7 own and 7 clear segments of 93. The plan keeps every spawn, leg and step: its content is shared with the Turtle stack."
   ],
   "legs": [
     {

@@ -3,7 +3,7 @@
   "name": "dire_maul_east",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-25: 32 of 334 unit rows miss a ForeverCore map-429 spawn of their entry within the row's radius; every exported segment walks)",
   "map": 429,
   "entrance": {"x": -203.166, "y": -322.997, "z": -2.72467},
   "entrance_trigger": 3184,
@@ -33,7 +33,8 @@
     "Leg 0 zevrim_thornhoof: the courtyard and the south pod field, then Zevrim (the Conservatory Door's gossip refuses until Zevrim is DONE). Leg 1 hydrospawn: the basin. Leg 2 lethtendris: her balcony. Leg 3 alzzin_the_wildshaper: the cave descent and the cave.",
     "The Conservatory Door (176907 at 131.286 -278.89 -56.5211) blocks the way to Alzzin and opens only through Old Ironbark's gossip (npc_ecorcefer, after Zevrim). The plan has no gossip step: the operator opens it, or a later plan adds gossip + wait_for.",
     "Seven basin packs are leg 0's last pulls before Zevrim (the imps and Hellcaller at -70 -444, the rogues at -86 -463, the lashers at -31 -467, the imps at -8 -456, the Fel Lash at 50 -454, the Shadowstalker at 86 -450 and the trio at 70 -428): the navmesh route from the courtyard to Zevrim descends the spiral through the basin, so a live pack there would be met on the walk. Leg 1 keeps the rest of the basin.",
-    "Not planned: Pusillin 14354 (friendly until the chase; drops the Crescent Key), Old Ironbark 11491 (the door's gossip NPC), Isalien 16097 (summoned at her brazier; the trigger 16045 is a civilian trigger), Pimgib 14349 (Lethtendris' pet: her boss row's first)."
+    "Not planned: Pusillin 14354 (friendly until the chase; drops the Crescent Key), Old Ironbark 11491 (the door's gossip NPC), Isalien 16097 (summoned at her brazier; the trigger 16045 is a civilian trigger), Pimgib 14349 (Lethtendris' pet: her boss row's first).",
+    "Forever check (2026-11-25, issue #223 batch 4, ForeverCore world DB, tools/dungeongen/export-forever.sh map 429: 1047 normal spawns): plan-export --forever writes 4 legs, 197 steps, 89 pulls, 104 moves, 267 pack units and 4 boss rows and refuses no field. plan-probe --forever on the Forever map-429 tiles misses a core spawn within the row's radius for 32 of 334 unit rows (11455 Wildspawn Felsworn 4, 11456 Wildspawn Shadowstalker 5, 11464 Warpwood Tangler 4, 11465 Warpwood Stomper 15, 13021 Warpwood Crusher 1 and 13197 Fel Lash 3: the plan's packs and patrol starts stand 10.5-62.8 yd from any core spawn of their entry) and every one of the 196 segments walks (136 ok, 60 warn). plan-check --forever takes all 275 points with 234 findings (67 fail: edge 86, ledge 3, short hop 37, aggro 1, patrol 11, hop_len 3, climb_anchor 9, joiners 84); trash-check reports 59 danger, 31 patrol, 19 own and 87 clear segments of 196. The plan keeps every spawn, leg and step: its content is shared with the Turtle stack."
   ],
   "legs": [
     {
