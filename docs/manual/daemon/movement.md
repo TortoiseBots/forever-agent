@@ -162,6 +162,8 @@ module on the server to answer the query; a build without it answers an error na
 | `a`, `b` | string | The two sides: a character or bot name, `target` (the character's own selection), a guid as the daemon prints it (`0x` and hex), or a ground spot `x,y,z`. |
 | `map` | number | The map id, needed when both sides are spots. |
 
+A side that is none of those forms, and two spots without `map`, are refused `-32602` with nothing sent.
+
 | Field | Meaning |
 |---|---|
 | `a`, `b` | The sides the server resolved, in its own words (a `target` side answers what the character had selected). |

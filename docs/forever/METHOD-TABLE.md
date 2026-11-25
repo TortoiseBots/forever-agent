@@ -205,6 +205,7 @@ sent is in the model.
 | `loot_close` | implemented |
 | `loot_method` | implemented |
 | `loot_take` | implemented |
+| `los` | implemented |
 | `mail_delete` | implemented |
 | `mail_list` | implemented |
 | `mail_read` | implemented |
