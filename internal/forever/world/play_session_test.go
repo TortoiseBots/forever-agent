@@ -1114,3 +1114,52 @@ func TestPlaySessionGroupMemberFactsKeepTheTwoReadings(t *testing.T) {
 	}
 	t.Fatal("the facts have no Bottank")
 }
+
+// TestPlayServerSightRemembersAnOlderModule: once the module says it has no sight command — the core refusing the
+// `.tb` word, or the module's dispatcher answering its unknown-command code — the run asks it no more for the rest of
+// the run. An older module costs one quiet wait per pull and per refusal otherwise, and each wait is what the pull's
+// own bounds are spent on.
+func TestPlayServerSightRemembersAnOlderModule(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer func(sent string) string
+	}{
+		{"the core refuses the word", func(string) string { return "Command 'tb' does not exist" }},
+		{"the module answers unknown-command", func(sent string) string {
+			if i := strings.LastIndex(sent, " #"); i >= 0 {
+				return "error code=unknown-command cmd=tb " + sent[i+1:]
+			}
+			return "error code=unknown-command cmd=tb"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, sc := newPlaySession(t)
+			prev := PlayLosQueryEvery
+			PlayLosQueryEvery = time.Millisecond
+			t.Cleanup(func() { PlayLosQueryEvery = prev })
+			target := unitGUID(3)
+			var asks []string
+			sc.onSay = func(text string) {
+				asks = append(asks, text)
+				if line := tc.answer(text); line != "" {
+					sc.sys(line)
+				}
+			}
+			st := newPlayServerSight(s)
+			if in, _, known := st.TankSees("Bottwo", target); known || in {
+				t.Fatalf("the older module's first answer = (%v, %v); want unknown", in, known)
+			}
+			if len(asks) != 1 {
+				t.Fatalf("sent %d line(s) for the one query, want 1", len(asks))
+			}
+			for i := range 3 {
+				if in, _, known := st.PointSees(driver.Vec3{float32(i), 2, 3}, target); known || in {
+					t.Fatalf("query %d = (%v, %v); want unknown", i+2, in, known)
+				}
+			}
+			if len(asks) != 1 {
+				t.Fatalf("sent %d line(s); want no query after the module said it has no sight command", len(asks))
+			}
+		})
+	}
+}

@@ -141,6 +141,9 @@ type playServerSight struct {
 	s       *session
 	last    time.Time
 	spacing time.Duration
+	// unsupported says the module already answered that it has no sight command (an older build): it is asked no more
+	// for the rest of the run, so each later pull and refusal does not pay a quiet wait for the same answer.
+	unsupported bool
 }
 
 var _ driver.ServerSight = (*playServerSight)(nil)
@@ -170,14 +173,21 @@ func spotText(at driver.Vec3) string {
 }
 
 // ask sends one sight query and reads its answer. A rate refusal is waited out once and that one query is retried;
-// a second rate refusal, an error and an older module's missing command are unknown.
+// a second rate refusal, an error and an older module's missing command are unknown. A missing command is remembered:
+// the run does not ask that module again.
 func (w *playServerSight) ask(ctx context.Context, a, b string) (in bool, dist float64, known bool) {
+	if w.unsupported {
+		return false, 0, false
+	}
 	for attempt := 0; ; attempt++ {
 		if err := w.rate(ctx); err != nil {
 			return false, 0, false
 		}
 		rep, err := w.los(ctx, a, b)
 		if err != nil {
+			if errors.Is(err, tbcmd.ErrLOSUnsupported) {
+				w.unsupported = true
+			}
 			return false, 0, false
 		}
 		if rep.Reason != sightcmd.Rate {
