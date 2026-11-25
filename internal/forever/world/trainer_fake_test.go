@@ -54,6 +54,10 @@ type trainerWorld struct {
 	// twoOptions opens a menu with two "Train me." options (ids trainerOption and trainerOption+1); selecting the
 	// second answers a list of trainerID+1.
 	twoOptions bool
+	// spells, when set, is the list the trainer answers with instead of trainerSpells (a zero-cost row, say).
+	spells []npc.TrainerSpell
+	// learnedAnswer, when set, is the learned-spell packet the purchase answers with instead of the default one.
+	learnedAnswer []byte
 }
 
 // newTrainerWorld plants one trainer of the given flags at the character's own position and answers its packets. The
@@ -147,20 +151,20 @@ func (tr *trainerWorld) answer(f *itemWorld, core uint32, payload []byte) {
 		if tr.twoOptions && option == trainerOption+1 {
 			// The second row is another trainer service: its list carries its own id.
 			tr.selected = option
-			tr.deliver(wire.SMSGTrainerList, trainerListPayload(trainerNPCGUID, trainerID+1, trainerSpells()))
+			tr.deliver(wire.SMSGTrainerList, trainerListPayload(trainerNPCGUID, trainerID+1, tr.offers()))
 			return
 		}
 		if option != trainerOption {
 			f.t.Fatalf("the select names %s menu %d option %d", g, menu, option)
 		}
 		tr.selected = option
-		tr.deliver(wire.SMSGTrainerList, trainerListPayload(trainerNPCGUID, trainerID, trainerSpells()))
+		tr.deliver(wire.SMSGTrainerList, trainerListPayload(trainerNPCGUID, trainerID, tr.offers()))
 	case wire.CMSGTrainerList:
 		tr.listSends++
 		if g := guidOf(payload); g != trainerNPCGUID {
 			f.t.Fatalf("CMSG_TRAINER_LIST names %s", g)
 		}
-		tr.deliver(wire.SMSGTrainerList, trainerListPayload(trainerNPCGUID, trainerID, trainerSpells()))
+		tr.deliver(wire.SMSGTrainerList, trainerListPayload(trainerNPCGUID, trainerID, tr.offers()))
 	case wire.CMSGTrainerBuySpell:
 		tr.buys++
 		b := wire.NewReader(payload)
@@ -180,7 +184,7 @@ func (tr *trainerWorld) answer(f *itemWorld, core uint32, payload []byte) {
 			// arrives as an ActivePlayerData update.
 			if o, ok := tr.world.Object(itemSelf); ok && o.Info.Player != nil {
 				cost := uint64(0)
-				for _, sp := range trainerSpells() {
+				for _, sp := range tr.offers() {
 					if sp.SpellID == tr.lastSpell {
 						cost = uint64(sp.MoneyCost)
 					}
@@ -202,6 +206,10 @@ func (tr *trainerWorld) answer(f *itemWorld, core uint32, payload []byte) {
 			tr.deliver(wire.SMSGLearnedSpells, learnedSpellsTaughtPayload(tr.taught, tr.lastSpell))
 			return
 		}
+		if tr.learnedAnswer != nil {
+			tr.deliver(wire.SMSGLearnedSpells, tr.learnedAnswer)
+			return
+		}
 		tr.deliver(wire.SMSGLearnedSpells, learnedSpellsPayload(tr.lastSpell))
 	}
 }
@@ -209,6 +217,14 @@ func (tr *trainerWorld) answer(f *itemWorld, core uint32, payload []byte) {
 // guidOf reads the packed GUID that begins a client packet.
 func guidOf(payload []byte) wire.GUID {
 	return wire.ReadPackedGUID(wire.NewReader(payload))
+}
+
+// offers is the list the fake's trainer answers with: the fixed rows, or the test's own.
+func (tr *trainerWorld) offers() []npc.TrainerSpell {
+	if tr.spells != nil {
+		return tr.spells
+	}
+	return trainerSpells()
 }
 
 // trainerSpells is the list the fake's trainer offers.

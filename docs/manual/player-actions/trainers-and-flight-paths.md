@@ -4,7 +4,7 @@ title: Trainers and flight paths
 description: Read a trainer's list and buy spells, and read a flight master's nodes and take a taxi flight.
 tags: [player-actions, trainers, taxi, flight-paths, npc]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T02:05:00Z }
 sources:
   - id: trainer-methods
     resource: internal/forever/world/serve_trainer_methods.go
@@ -66,9 +66,34 @@ real client's window greys the row out:
 - a price above the purse, or an inventory that is not known or has lost an update (the agent fails closed here
   rather than pay blind).
 
-Success is a learned-spell answer that names the spell, and the fare must leave the purse in the following update; a
-learned-spell answer without the charge is an error, not a purchase. The answer's event carries `cost`,
-`copper_before` and `copper_after`.
+Success is a learned-spell answer that names the spell or the rank it teaches (the answer whose superseded spell is
+the bought one), and the fare must leave the purse in the following update; a learned-spell answer without the
+charge is an error, not a purchase. The answer's event carries `cost`, `copper_before` and `copper_after`.
+
+# Trainer act steps
+
+The same flow as `act` steps ([all the steps](act-steps.md)): `trainer` opens the list, `learn` buys from it.
+
+| Step | Arguments | What it does |
+|---|---|---|
+| `trainer` | `option=N` (optional) | Opens the current trainer and prints its list. `option=` names the gossip "Train me." row to select. |
+| `learn` | `spell=N` | Buys one spell from the list the `trainer` step read, and needs that list for the same NPC. |
+
+A creature can carry several Trainer rows, one per trainer service, and the core picks the service from the gossip
+option selected. A menu with several "Train me." rows therefore needs `option=` to say which one to open; without it
+the step takes the first row and logs a line that names the ids. The value is a gossip option id, not a trainer id.
+
+`learn` passes on the server's learned-spell answer that names the bought spell, or on the answer for the rank a
+castable list spell is taught as: that answer names the taught rank, and its superseded spell is the bought one.
+The fare must leave the purse in the update that follows the answer. A refusal names the server's reason.
+
+A bad `option=` is refused before the list is asked for, with one of these texts:
+
+- `option="two" is not a gossip option id` — the value is not a number.
+- `the menu's 2 trainer option(s) [7 8] carry no option 9` — no trainer row has that id, and the refusal lists the
+  ids the menu has.
+- `entry 1234 has no gossip menu, so option= cannot pick a trainer row (CMSG_TRAINER_LIST asks it directly)` — the
+  trainer has no gossip menu, so the step asks it for its list directly and there is no row to pick.
 
 # Flight-path methods
 
