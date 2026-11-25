@@ -9,10 +9,17 @@ package world
 // and add-on frames, the group changes and a re-entry (PLAYER_ENTERING_WORLD), with the world pushed wherever the
 // group changed so PARTY_MEMBERS_CHANGED arrives at the right place in the stream.
 //
-// The add-on message's 255-byte text limit is the server's (addonmsg.MaxText): a longer frame is refused by the
-// transport and the refusal is kept on its sent row (the real client sends no chunking of its own; an add-on's
-// protocol chunks itself, as the bot module's TBM protocol does). A Lua handler that raises is recorded in the
-// add-on's own errors and the dispatch goes on, so a broken add-on never takes the daemon with it.
+// The add-on message's 255-byte text limit is the server's (addonmsg.MaxText): a longer field is refused in the
+// sidecar before it becomes an Out (and the transport refuses it again), and the refusal is kept on its sent row
+// (the real client sends no chunking of its own; an add-on's protocol chunks itself, as the bot module's TBM
+// protocol does). The rows state keeps are bounded in turn (addonHostTextKeep, addonHostSentBytes), so a broken
+// sidecar cannot make the daemon hold megabytes per send. A Lua handler that raises is recorded in the add-on's
+// own errors and the dispatch goes on, so a broken add-on never takes the daemon with it.
+//
+// Prefixes the session held before the add-on started (the bot module's protocol prefixes, for one) are reserved:
+// the add-on cannot register them, cannot send under them, and is not fed the frames delivered under them. It is
+// fed only the frames of the prefixes it registered itself, and addon_stop takes off only those, leaving the
+// session's list as it was.
 //
 // The sidecar is another process and a call can take CallTimeout to answer (a looping handler is killed only when
 // the budget runs out), so the sidecar calls run on the host's own goroutine: the loop prepares one job (the world
@@ -31,10 +38,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/pjerra/forever-agent/internal/events"
 	"github.com/pjerra/forever-agent/internal/forever/addonhost"
 	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
+	"github.com/pjerra/forever-agent/internal/forever/pbc"
+	"github.com/pjerra/forever-agent/internal/forever/tbmproto"
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
@@ -42,8 +52,13 @@ const (
 	// addonHostStepMS is how often the daemon's own loop ticks a real-clock add-on (OnUpdate) and feeds it new
 	// events. A manual-clock host only moves on addon_tick.
 	addonHostStepMS = 100
-	// addonHostKeep bounds the sent and received rows state keeps; the totals are not tracked beyond it.
+	// addonHostKeep bounds the sent and received rows state keeps; the sent rows' bytes are capped separately.
 	addonHostKeep = 50
+	// addonHostTextKeep bounds one sent row's text and error (a marker shows the cut), and addonHostSentBytes
+	// bounds what all kept sent rows hold together. The sidecar's own field limits keep a row small; these are
+	// the backstop for a sidecar that broke the contract, so state cannot be made to hold hundreds of megabytes.
+	addonHostTextKeep  = 512
+	addonHostSentBytes = 64 << 10
 	// addonHostPages bounds one feed: a burst larger than this waits for the next loop turn instead of holding the
 	// session's events for longer.
 	addonHostPages = 4
@@ -53,8 +68,9 @@ const (
 	addonHostMethodBound = 10 * time.Second
 )
 
-// serveAddonStartParams is addon_start's: the add-on's folder (its .toc is found in it), the clock and any extra
-// prefixes to keep registered beside the ones the add-on asks for.
+// serveAddonStartParams is addon_start's: the add-on's folder (its .toc is found in it), the clock and the
+// add-on's extra prefixes (registered up front beside the ones it registers while loading; they count as the
+// add-on's own, not the session's).
 type serveAddonStartParams struct {
 	Dir      string   `json:"dir"`
 	Clock    string   `json:"clock,omitempty"` // real (default): ticks with the wall clock; manual: only addon_tick advances it
@@ -173,7 +189,8 @@ type serveAddonHost struct {
 	name       string
 	version    string
 	files      []string
-	registered []string // the add-on's prefixes, as reported by the sidecar
+	registered []string // the add-on's own prefixes (the ones it asked for and the ones it sent under)
+	reserved   []string // prefixes the session held at addon_start: the add-on may not register, send under or receive them
 	manual     bool
 	lastTick   time.Time
 	cursor     uint64
@@ -265,6 +282,10 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 	type addonPrep struct {
 		world  addonhost.World
 		cursor uint64
+		// held is the prefix list the session held before the add-on started: those prefixes are the session's
+		// (the bot module's protocol prefixes, for one), so the add-on may not register, send under or receive
+		// them.
+		held []string
 	}
 	v, err := st.call(ctx, func(s *session) (any, error) {
 		if st.addon != nil && st.addon.h != nil {
@@ -280,7 +301,7 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 		}
 		// The cursor goes in before anything the add-on does while loading: a frame the server delivers during
 		// the load (or a plugin's own startup) is still fed, never skipped as already seen.
-		return addonPrep{world: addonWorldOf(s), cursor: s.EventLog().Seq()}, nil
+		return addonPrep{world: addonWorldOf(s), cursor: s.EventLog().Seq(), held: s.addonRegisteredPrefixes()}, nil
 	})
 	if err != nil {
 		return serveAddonHostState{}, err
@@ -291,16 +312,25 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 	if err != nil {
 		return serveAddonHostState{}, err
 	}
-	res, outs, err := h.Load(prep.world, true)
+	// The reserved set is complete before the add-on's code runs: the prefixes the session held plus the daemon's
+	// own protocol prefixes, whether or not this session happened to register them.
+	reserved := append([]string(nil), prep.held...)
+	for _, prefix := range []string{pbc.Prefix, tbmproto.Prefix} {
+		if !slices.Contains(reserved, prefix) {
+			reserved = append(reserved, prefix)
+		}
+	}
+	res, outs, err := h.Load(prep.world, true, reserved)
 	if err != nil {
 		h.Close()
 		return serveAddonHostState{}, fmt.Errorf("addon_start: loading the add-on: %w", err)
 	}
 	a := &serveAddonHost{dir: p.Dir, manual: manual, lastTick: time.Now(), cursor: prep.cursor,
-		jobs: make(chan *addonJob, 1), results: make(chan addonJobResult, 1), idle: make(chan struct{}, 1),
+		reserved: reserved,
+		jobs:     make(chan *addonJob, 1), results: make(chan addonJobResult, 1), idle: make(chan struct{}, 1),
 		quit: make(chan struct{}), workerDone: make(chan struct{})}
 	for _, prefix := range p.Prefixes {
-		if !slices.Contains(a.registered, prefix) {
+		if !slices.Contains(a.reserved, prefix) && !slices.Contains(a.registered, prefix) {
 			a.registered = append(a.registered, prefix)
 		}
 	}
@@ -314,9 +344,10 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 		st.performAddonOuts(a, outs)
 		a.name, a.version, a.files = res.Name, res.Version, res.Files
 		for _, prefix := range res.Prefixes {
-			if !slices.Contains(a.registered, prefix) {
-				a.registered = append(a.registered, prefix)
+			if slices.Contains(a.reserved, prefix) || slices.Contains(a.registered, prefix) {
+				continue
 			}
+			a.registered = append(a.registered, prefix)
 		}
 		if err := a.ensureRegistered(s); err != nil {
 			st.addon = nil
@@ -583,18 +614,58 @@ func (st *serveState) applyAddon(a *serveAddonHost, res addonJobResult) {
 }
 
 // performAddonOuts performs the add-on's requests on this session, in order, and keeps one row per request with
-// the sink's refusal on it (the client would not tell the add-on either).
+// the sink's refusal on it (the client would not tell the add-on either). The rows are bounded: one row's text is
+// cut with a marker, and the kept rows are trimmed so their total stays under addonHostSentBytes.
 func (st *serveState) performAddonOuts(a *serveAddonHost, outs []addonhost.Out) {
 	sink := a.sink(st)
 	for _, o := range outs {
-		row := serveAddonSent{Kind: o.Out, Prefix: o.Prefix, Channel: o.Channel, Text: o.Text, To: o.To}
+		row := boundedSentRow(serveAddonSent{Kind: o.Out, Prefix: o.Prefix, Channel: o.Channel, Text: o.Text, To: o.To})
 		if err := sink(o); err != nil {
-			row.Error = err.Error()
+			row.Error = boundedRowText(err.Error())
 		}
 		a.sent = append(a.sent, row)
 	}
+	a.trimSent()
+}
+
+// boundedRowText keeps one row's text short, marking the cut. The cut lands on a UTF-8 boundary.
+func boundedRowText(s string) string {
+	if len(s) <= addonHostTextKeep {
+		return s
+	}
+	cut := addonHostTextKeep
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "..."
+}
+
+// boundedSentRow bounds the fields a row keeps of one request.
+func boundedSentRow(row serveAddonSent) serveAddonSent {
+	row.Prefix = boundedRowText(row.Prefix)
+	row.Channel = boundedRowText(row.Channel)
+	row.Text = boundedRowText(row.Text)
+	row.To = boundedRowText(row.To)
+	row.Error = boundedRowText(row.Error)
+	return row
+}
+
+// sentBytes is what a set of rows holds, which the total cap bounds.
+func sentBytes(rows []serveAddonSent) int {
+	total := 0
+	for _, r := range rows {
+		total += len(r.Kind) + len(r.Prefix) + len(r.Channel) + len(r.Text) + len(r.To) + len(r.Error)
+	}
+	return total
+}
+
+// trimSent keeps at most addonHostKeep rows and trims the oldest until the kept text is under the total cap.
+func (a *serveAddonHost) trimSent() {
 	if len(a.sent) > addonHostKeep {
 		a.sent = append([]serveAddonSent(nil), a.sent[len(a.sent)-addonHostKeep:]...)
+	}
+	for len(a.sent) > 1 && sentBytes(a.sent) > addonHostSentBytes {
+		a.sent = append([]serveAddonSent(nil), a.sent[1:]...)
 	}
 }
 
@@ -767,8 +838,17 @@ func addonTypeWord(channel string) string {
 	return strings.ToUpper(channel)
 }
 
-// ensurePrefix makes sure the session holds one prefix the add-on sends under.
+// ensurePrefix makes sure the session holds one prefix the add-on sends under. A prefix the session held before
+// the add-on started is the session's (the bot module's protocol prefixes, for one), and so is one the session
+// registered after the start that the add-on never asked for: sending under either would forge another client's
+// protocol as this character, so both are refused with an error on the row.
 func (a *serveAddonHost) ensurePrefix(s *session, prefix string) error {
+	if slices.Contains(a.reserved, prefix) {
+		return fmt.Errorf("add-on message: %q is a prefix this session holds; the add-on cannot send under it", prefix)
+	}
+	if held := s.addonRegisteredPrefixes(); slices.Contains(held, prefix) && !slices.Contains(a.registered, prefix) {
+		return fmt.Errorf("add-on message: %q is a prefix this session holds; the add-on cannot send under it", prefix)
+	}
 	if !slices.Contains(a.registered, prefix) {
 		a.registered = append(a.registered, prefix)
 	}
@@ -818,7 +898,7 @@ func (a *serveAddonHost) unregister(s *session) error {
 func sentRows(outs []addonhost.Out) []serveAddonSent {
 	rows := make([]serveAddonSent, 0, len(outs))
 	for _, o := range outs {
-		rows = append(rows, serveAddonSent{Kind: o.Out, Prefix: o.Prefix, Channel: o.Channel, Text: o.Text, To: o.To})
+		rows = append(rows, boundedSentRow(serveAddonSent{Kind: o.Out, Prefix: o.Prefix, Channel: o.Channel, Text: o.Text, To: o.To}))
 	}
 	return rows
 }
@@ -854,6 +934,11 @@ func (a *serveAddonHost) harvest(s *session) []addonCall {
 				}
 			}
 			if ev.Kind == events.KindAddon {
+				// Only the add-on's own prefixes are fed to it: a frame on a prefix the session holds (the bot
+				// module's, for one) is the session's traffic, not the loaded add-on's.
+				if prefix, _ := ev.Data["prefix"].(string); !slices.Contains(a.registered, prefix) {
+					continue
+				}
 				a.receive(ev)
 			}
 			g, ok := addonGameEvent(ev)

@@ -15,14 +15,19 @@
 -- table, math, date). os, io, loadfile, loadstring, dofile, require, package and debug stay local to the host, so
 -- an add-on cannot write files, read the protocol or load code of its own choosing.
 --
--- An add-on is untrusted. Three bounds are its whole reach: the environment (an explicit allow-list, with its
+-- An add-on is untrusted. These bounds are its whole reach: the environment (an explicit allow-list, with its
 -- own copies of the string functions and no route to the shared string table), text-only chunks (bytecode starts
--- with ESC and is refused before loadstring, and so is a NUL byte), and a send budget enforced in mock.lua (20
--- sends per call, 10 per second, 100 queued), over which the op answers an error and is marked throttled.
+-- with ESC and is refused before loadstring, and so is a NUL byte), a send budget enforced in mock.lua (20
+-- sends per call, 10 per second, 100 queued), the server's own field limits on every send (a prefix of 1..16
+-- bytes, an add-on text of 255, a chat line of 511, a target of 64, at most 64 prefixes), the pattern caps below,
+-- and the reserved prefixes the session holds. Over the budget or a field limit the op answers an error and is
+-- marked throttled; the daemon stops a sidecar that writes a protocol line over its own cap.
 --
 -- Ops:
 --   hello   {}                        the host has read its scripts and is ready
---   load    {world, in_world, addon}  run the addon's files (name, title, version, files:[{name,source}]), fire
+--   load    {world, in_world, addon, reserved}
+--                                     run the addon's files (name, title, version, files:[{name,source}]); reserved
+--                                     lists the session's prefixes, which the add-on may not use; fire
 --                                     ADDON_LOADED, then PLAYER_LOGIN and PLAYER_ENTERING_WORLD when the
 --                                     character is in world
 --   world   {world}                   the units the add-on may ask about (player, target, party, raid); fires
@@ -51,6 +56,7 @@ local concat = table.concat
 local tremove = table.remove
 local byte_, find_ = string.byte, string.find
 local match_, lower_, gsub_ = string.match, string.lower, string.gsub
+local gmatch_, sub_ = string.gmatch, string.sub
 local getmetatable_ = getmetatable
 local error_ = error
 
@@ -64,6 +70,58 @@ dofile(here .. "/mock.lua")
 -- string.dump is not part of what an add-on may reach. Removing it from the shared table also hides it from the
 -- implicit string method lookup ("").dump, which an add-on could otherwise read through the string metatable.
 string.dump = nil
+
+-- ── bounded text ────────────────────────────────────────────────────────────
+-- Everything the host writes back about the add-on (an error, a chat line, a file name, a result field) is
+-- bounded by the size it takes on the wire, not just in bytes: json.lua escapes a control byte, a quote or a
+-- backslash to six characters. A state or load reply therefore stays under the daemon's protocol cap whatever the
+-- add-on printed or named, instead of being killed as if it had misbehaved.
+local MAX_TEXT = 2048
+local MAX_IDENTITY = 256
+local MAX_FILES, MAX_FILES_JSON = 64, 8192
+
+-- jsonLen is the encoded size of s, conservatively (every escaped byte counts six; the short escapes are two).
+local function jsonLen(s) return #gsub_(s, '[%c"\\]', "XXXXXX") end
+
+local function safeText(v)
+    local t = type_(v)
+    if t == "string" then return v end
+    if t == "number" or t == "boolean" then return tostring_(v) end
+    -- A table's __tostring is add-on code: it is never called here, so an error object cannot run anything (or
+    -- answer a table) while the host writes its reply.
+    return "<" .. t .. ">"
+end
+
+local function boundedText(v, limit)
+    local s = safeText(v)
+    limit = limit or MAX_TEXT
+    if #s > limit then return sub_(s, 1, limit) .. "..." end
+    return s
+end
+
+-- ── bounded patterns ────────────────────────────────────────────────────────
+-- Lua 5.1's pattern matcher recurses on the pattern without a limit, so a pattern such as 200000 "a?" items can
+-- overflow the C stack and kill the interpreter. The add-on is untrusted, so its pattern functions (and the
+-- shared ones, which method syntax reaches through the string metatable) refuse a pattern over MAX_PATTERN bytes
+-- and a subject over MAX_SUBJECT bytes.
+local MAX_PATTERN, MAX_SUBJECT = 512, 1024 * 1024
+
+local function boundPattern(name, fn, findPlain)
+    return function(s, p, a, b)
+        if type_(s) == "string" and #s > MAX_SUBJECT then
+            error_(name .. ": the subject is over " .. MAX_SUBJECT .. " bytes", 2)
+        end
+        if not (findPlain and b) and type_(p) == "string" and #p > MAX_PATTERN then
+            error_(name .. ": the pattern is over " .. MAX_PATTERN .. " bytes", 2)
+        end
+        return fn(s, p, a, b)
+    end
+end
+string.find = boundPattern("string.find", find_, true)
+string.match = boundPattern("string.match", match_)
+string.gmatch = boundPattern("string.gmatch", gmatch_)
+string.gfind = string.gmatch
+string.gsub = boundPattern("string.gsub", gsub_)
 
 -- ── the add-on's environment ────────────────────────────────────────────────
 -- E is the add-on's global table: the mocked API, the safe Lua library, and whatever the add-on defines.
@@ -133,10 +191,20 @@ local function loadChunk(source, name)
 end
 
 -- ── bounded logs ────────────────────────────────────────────────────────────
-local errors = {}
+-- The error list is what addon_state answers: bounded per entry and in encoded size, like the chat log.
+local MAX_ERRORS, MAX_ERRORS_TOTAL = 20, 8192
+local errors, errorBytes = {}, 0
+local function dropError()
+    local old = tremove(errors, 1)
+    if old then errorBytes = errorBytes - jsonLen(old.where) - jsonLen(old.error) - 24 end
+end
 local function recordError(where, err)
-    errors[#errors + 1] = { where = where, error = tostring_(err) }
-    while #errors > 20 do tremove(errors, 1) end
+    where, err = boundedText(where), boundedText(err)
+    local size = jsonLen(where) + jsonLen(err) + 24
+    errors[#errors + 1] = { where = where, error = err }
+    errorBytes = errorBytes + size
+    while #errors > MAX_ERRORS do dropError() end
+    while errorBytes > MAX_ERRORS_TOTAL and #errors > 1 do dropError() end
 end
 
 -- ── events ──────────────────────────────────────────────────────────────────
@@ -154,7 +222,7 @@ local function fireEvent(ev, args)
             if cb then
                 E.this = f
                 local ok, err = pcall_(cb, f, ev)
-                if not ok then recordError("OnEvent " .. ev .. " (" .. tostring_(f.name or f.kind) .. ")", err) end
+                if not ok then recordError("OnEvent " .. ev .. " (" .. boundedText(f.name or f.kind) .. ")", err) end
             end
         end
     end
@@ -214,7 +282,7 @@ local function runSlash(line)
             end
         end
     end
-    error("no slash command '" .. word .. "' is registered", 0)
+    error("no slash command '" .. boundedText(word) .. "' is registered", 0)
 end
 
 -- ── ops ─────────────────────────────────────────────────────────────────────
@@ -223,22 +291,41 @@ local loaded = false
 local addonName, title, version = "Addon", nil, ""
 local files = {}
 
+-- boundedFiles is the .toc's file list as the reports carry it: at most MAX_FILES names inside MAX_FILES_JSON
+-- encoded bytes, then a "..." marker. A folder with hundreds of long names (legal: the .toc and the sources are
+-- 8 MiB in all) can therefore not push a load or state reply over the daemon's protocol cap.
+local function boundedFiles()
+    local out, total = {}, 0
+    for _, name in ipairs_(files) do
+        local n = jsonLen(name) + 4
+        if #out >= MAX_FILES or total + n > MAX_FILES_JSON then
+            out[#out + 1] = "..."
+            break
+        end
+        out[#out + 1] = name
+        total = total + n
+    end
+    return jsonArray(out)
+end
+
 function ops.hello() return {} end
 
 function ops.load(p)
     if loaded then error("the add-on is already loaded", 0) end
     local addon = p.addon or {}
-    addonName = addon.name or "Addon"
-    title = addon.title
-    version = addon.version or ""
+    addonName = boundedText(addon.name or "Addon", MAX_IDENTITY)
+    if addon.title ~= nil then title = boundedText(addon.title, MAX_IDENTITY) end
+    version = boundedText(addon.version or "", MAX_IDENTITY)
     setWorld(p.world)
+    -- The prefixes this session held before the add-on started are the session's, not the add-on's.
+    addonhost_set_reserved(p.reserved)
     for _, file in ipairs_(addon.files or {}) do
-        local name = tostring_(file.name)
+        local name = boundedText(file.name)
         local chunk, err = loadChunk(tostring_(file.source), name)
-        if not chunk then error("cannot load " .. name .. ": " .. tostring_(err), 0) end
+        if not chunk then error("cannot load " .. name .. ": " .. boundedText(err), 0) end
         setfenv(chunk, E)
         local ok, rerr = pcall_(chunk)
-        if not ok then error(name .. " raised while loading: " .. tostring_(rerr), 0) end
+        if not ok then error(name .. " raised while loading: " .. boundedText(rerr), 0) end
         files[#files + 1] = name
     end
     loaded = true
@@ -247,7 +334,7 @@ function ops.load(p)
         fireEvent("PLAYER_LOGIN", {})
         fireEvent("PLAYER_ENTERING_WORLD", {})
     end
-    return { name = addonName, title = title or addonName, version = version, files = jsonArray(files),
+    return { name = addonName, title = title or addonName, version = version, files = boundedFiles(),
         prefixes = jsonArray(addonhost_prefixes()) }
 end
 
@@ -274,7 +361,7 @@ function ops.tick(p)
         local cb = f.scripts.OnUpdate
         if cb and addonhost_visible(f) then
             local ok, err = pcall_(cb, f, dt)
-            if not ok then recordError("OnUpdate " .. tostring_(f.name or f.kind), err) end
+            if not ok then recordError("OnUpdate " .. boundedText(f.name or f.kind), err) end
         end
     end
     return { clock = clock }
@@ -287,16 +374,34 @@ function ops.cmd(p)
 end
 
 function ops.state()
-    return { clock = clock, loaded = loaded, name = addonName, version = version, files = jsonArray(files),
+    return { clock = clock, loaded = loaded, name = addonName, version = version, files = boundedFiles(),
         prefixes = jsonArray(addonhost_prefixes()), errors = jsonArray(errors),
         chat = jsonArray(addonhost_chat_log()), frames = #addonhost_frames() }
 end
 
 -- ── main loop ───────────────────────────────────────────────────────────────
+-- Every field the daemon may perform is a string, and the object kind is one this client does: an entry that fails
+-- that (a table in a field, or a kind nobody asked for) is dropped instead of being encoded.
+local OUT_KINDS = { addon = true, chat = true, target = true }
+local function outField(v)
+    if v == nil then return nil end
+    if type_(v) == "string" then return v end
+    return "<" .. type_(v) .. ">"
+end
 local outbox = addonhost_outbox()
 local function drain()
-    for i = 1, #outbox do emit(outbox[i]) end
-    for i = #outbox, 1, -1 do outbox[i] = nil end
+    for i = 1, #outbox do
+        local e = outbox[i]
+        if type_(e) == "table" then
+            local kind = outField(e.out)
+            if type_(e.out) == "string" and OUT_KINDS[kind] then
+                emit({ out = kind, prefix = outField(e.prefix), text = outField(e.text),
+                    channel = outField(e.channel), type = outField(e.type), to = outField(e.to),
+                    name = outField(e.name) })
+            end
+        end
+        outbox[i] = nil
+    end
 end
 
 -- The send budget's error, as the caller sees it: a call over it answers an error (with throttled set, so the
@@ -313,12 +418,16 @@ for line in io.lines() do
         addonhost_begin_op()
         local fn = ops[req.op]
         if not fn then
-            emit({ id = req.id, error = "host.lua: unknown op " .. tostring_(req.op) })
+            emit({ id = req.id, error = "host.lua: unknown op " .. boundedText(req.op) })
         else
             local invoked, res = pcall_(fn, req)
+            -- The failure text is made here, before drain, with a type check only: an error object's __tostring is
+            -- add-on code, and running it after drain would leave its sends in the outbox for the next op.
+            local failure = nil
+            if not invoked then failure = boundedText(res) end
             drain()
-            if not invoked then
-                emit({ id = req.id, error = tostring_(res), throttled = addonhost_throttled() or nil })
+            if failure then
+                emit({ id = req.id, error = failure, throttled = addonhost_throttled() or nil })
             elseif addonhost_throttled() then
                 emit({ id = req.id, error = throttledError(), throttled = true })
             else

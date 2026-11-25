@@ -6,10 +6,11 @@ package world
 // handler error leaves the daemon serving, and a handler that loops leaves it answering too (the sidecar's calls
 // run off the session loop). No real add-on's files are here: tinyAddon is written for this test.
 //
-// Mutations these tests catch: registering the add-on's list without the session's own (the PBC union), letting
-// the transport truncate instead of refusing (TestServeAddonHostRefusesTooLongFrame sees a 300-byte packet),
-// swallowing the sink's error (the refusal row loses its `error`), feeding only add-on frames and not the session
-// events (the system-line test loses `sys welcome`), and a host that dies on a Lua error (the serve stops).
+// Mutations these tests catch: registering the add-on's list without the session's own (the reserved prefixes),
+// letting the transport truncate instead of refusing (TestServeAddonHostRefusesTooLongFrame sees a 300-byte
+// packet), swallowing the sink's error (the refusal row loses its `error`), feeding the add-on a frame under a
+// prefix the session holds, feeding only add-on frames and not the session events (the system-line test loses
+// `sys welcome`), and a host that dies on a Lua error (the serve stops).
 
 import (
 	"context"
@@ -417,8 +418,10 @@ func TestServeAddonHostReceivesFrames(t *testing.T) {
 	f.wait(t)
 }
 
-// A frame past the server's 255-byte text limit is refused by the transport, not truncated and not sent: the
-// refusal is on the sent row and the fake sees no such packet.
+// A frame past the server's 255-byte text limit is refused in the client before it becomes an Out: the handler
+// error names the limit, the call is marked throttled, no sent row keeps the text and the fake sees no such
+// packet. (The transport would refuse it too; this is the earlier gate, the one that keeps the daemon from holding
+// a multi-megabyte row.)
 func TestServeAddonHostRefusesTooLongFrame(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
@@ -430,21 +433,15 @@ func TestServeAddonHostRefusesTooLongFrame(t *testing.T) {
 	hook.connection(t).writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "long"))
 
 	st := waitAddonState(t, a, hook, func(s serveAddonHostState) bool {
-		for _, sent := range s.Sent {
-			if strings.HasPrefix(sent.Text, "xxx") {
-				return true
-			}
-		}
-		return false
+		return s.Throttled && len(s.Errors) > 0
 	})
-	var refusal *serveAddonSent
-	for i := range st.Sent {
-		if strings.HasPrefix(st.Sent[i].Text, "xxx") {
-			refusal = &st.Sent[i]
-		}
+	if !strings.Contains(st.Errors[0].Error, "255") {
+		t.Fatalf("errors %+v do not name the 255-byte limit", st.Errors)
 	}
-	if refusal == nil || !strings.Contains(refusal.Error, "255") {
-		t.Fatalf("the long frame's row %+v does not carry the 255-byte refusal", refusal)
+	for _, sent := range st.Sent {
+		if strings.HasPrefix(sent.Text, "xxx") {
+			t.Fatalf("the refused frame was kept as a sent row: %+v", sent)
+		}
 	}
 	for _, m := range hook.messages("TINY") {
 		if len(m.Text) > addonmsg.MaxText {
@@ -761,4 +758,151 @@ end)
 	}
 	a.stop(t)
 	f.wait(t)
+}
+
+// A prefix the session held before the add-on started is the session's, not the add-on's: the add-on cannot
+// register it, cannot send under it, and is never fed a frame delivered under it. addon_stop takes off only the
+// prefixes the add-on added, so the session's stay registered.
+//
+// Mutations these tests catch: a union that lets the add-on register the session's prefix (it forges the bot
+// module's protocol as this character), every delivered frame fed to the add-on (it reads the session's traffic),
+// and an unregister that drops the whole list at addon_stop (the bot module's prefix goes with it).
+func TestServeAddonHostReservesSessionPrefixes(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	hook := &addonHostWire{t: t}
+	a := startAddonHostServe(t, f, hook)
+	// The session registers its own prefix first, as the bot module's protocol does before an add-on starts.
+	a.mustCall(t, "addon_send", map[string]any{"channel": "party", "prefix": "KEEP", "text": "session line"})
+	waitRegistered(t, hook, "KEEP", true)
+	dir := addonFileDir(t, "ReservedAddon", `
+RegisterAddonMessagePrefix("MINE")
+print("register KEEP " .. tostring(RegisterAddonMessagePrefix("KEEP")))
+print("register TBM " .. tostring(RegisterAddonMessagePrefix("TBM")))
+local ok, err = pcall(SendAddonMessage, "KEEP", "forged", "PARTY")
+print("send " .. tostring(ok) .. " " .. tostring(err))
+local fr = CreateFrame("Frame", "ReservedFrame")
+fr:RegisterEvent("CHAT_MSG_ADDON")
+fr:SetScript("OnEvent", function() print("got " .. tostring(arg1) .. "|" .. tostring(arg2)) end)
+`)
+	var started serveAddonHostState
+	json.Unmarshal(a.mustCall(t, "addon_start", map[string]any{"dir": dir, "clock": "manual"}), &started)
+	if !containsString(started.Prefixes, "MINE") || containsString(started.Prefixes, "KEEP") {
+		t.Fatalf("the add-on's prefixes %v: KEEP is the session's and MINE the add-on's", started.Prefixes)
+	}
+	waitRegistered(t, hook, "MINE", true)
+	waitRegistered(t, hook, "KEEP", true) // the add-on's start left the session's prefix registered
+	c := hook.connection(t)
+	f.deliverAddon(c, chat.TypeParty, addonmsg.LanguageAddon, "KEEP", "", "session traffic")
+	f.deliverAddon(c, chat.TypeParty, addonmsg.LanguageAddon, "MINE", "", "addon traffic")
+	st := waitAddonState(t, a, hook, func(s serveAddonHostState) bool {
+		return strings.Contains(joinedChat(s), "got MINE|addon traffic")
+	})
+	joined := joinedChat(st)
+	if strings.Contains(joined, "session traffic") {
+		t.Fatalf("the add-on read a frame under the session's prefix: %q", joined)
+	}
+	if !strings.Contains(joined, "register KEEP false") {
+		t.Fatalf("RegisterAddonMessagePrefix(\"KEEP\") did not answer false: %q", joined)
+	}
+	if !strings.Contains(joined, "register TBM false") {
+		t.Fatalf("RegisterAddonMessagePrefix(\"TBM\") did not answer false: %q", joined)
+	}
+	if !strings.Contains(joined, "send false") || !strings.Contains(joined, "belongs to the session") {
+		t.Fatalf("the send under the session's prefix was not refused: %q", joined)
+	}
+	if len(st.Received) != 1 || st.Received[0].Prefix != "MINE" {
+		t.Fatalf("received %+v, want only the add-on's own frame", st.Received)
+	}
+	for _, m := range hook.messages("KEEP") {
+		if m.Text == "forged" {
+			t.Fatal("the add-on sent a frame under the session's prefix")
+		}
+	}
+
+	a.mustCall(t, "addon_stop", nil)
+	waitRegistered(t, hook, "MINE", false)
+	waitRegistered(t, hook, "KEEP", true)
+	a.stop(t)
+	f.wait(t)
+}
+
+// The review's five 15 MiB sends: the client's own 255-byte limit refuses each one, so the daemon keeps no sent row
+// for them and addon_state stays small. Without it, five rows of 15 MiB sat in the daemon and every state reply
+// re-encoded them.
+//
+// Mutations these tests catch: no field limit in the client (state holds ~75 MiB), a limit that truncates instead
+// of refusing (the fake sees a 15 MiB packet), and a refusal that is not marked in state.
+func TestServeAddonHostRefusesOversizeAddonText(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	hook := &addonHostWire{t: t}
+	a := startAddonHostServe(t, f, hook)
+	dir := addonFileDir(t, "BigAddon", `
+RegisterAddonMessagePrefix("BIGP")
+local big = string.rep("A", 15 * 1024 * 1024)
+local fr = CreateFrame("Frame", "BigFrame")
+fr:RegisterEvent("CHAT_MSG_SYSTEM")
+fr:SetScript("OnEvent", function()
+    if arg1 == "big" then
+        for i = 1, 5 do SendAddonMessage("BIGP", big, "PARTY") end
+    end
+end)
+`)
+	json.Unmarshal(a.mustCall(t, "addon_start", map[string]any{"dir": dir, "clock": "manual"}), &serveAddonHostState{})
+	waitRegistered(t, hook, "BIGP", true)
+	hook.connection(t).writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "big"))
+	st := waitAddonState(t, a, hook, func(s serveAddonHostState) bool {
+		return s.Throttled && len(s.Errors) > 0
+	})
+	if !strings.Contains(st.Errors[0].Error, "255") {
+		t.Fatalf("errors %+v do not name the 255-byte limit", st.Errors)
+	}
+	if len(st.Sent) != 0 {
+		t.Fatalf("the daemon kept %d sent rows for the refused sends", len(st.Sent))
+	}
+	if b, err := json.Marshal(st); err != nil {
+		t.Fatal(err)
+	} else if len(b) > 1<<20 {
+		t.Fatalf("addon_state is %d bytes for five refused sends", len(b))
+	}
+	for _, m := range hook.messages("BIGP") {
+		if len(m.Text) > addonmsg.MaxText {
+			t.Fatalf("the fake received a %d-byte add-on message", len(m.Text))
+		}
+	}
+	if !st.Running {
+		t.Fatalf("the host ended on a refused send: %+v", st)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// The kept sent rows are bounded even when a broken sidecar hands over long fields: one row's text is cut with a
+// marker, at most addonHostKeep rows stay, and their total is under addonHostSentBytes, so every addon_state reply
+// re-encodes a bounded amount.
+//
+// Mutation this test catches: rows kept at their full length (60 x 600 KiB here).
+func TestServeAddonHostBoundsSentRows(t *testing.T) {
+	st := &serveState{}
+	a := &serveAddonHost{}
+	text := strings.Repeat("x", 600*1024)
+	outs := make([]addonhost.Out, 60)
+	for i := range outs {
+		outs[i] = addonhost.Out{Out: "addon", Prefix: text, Channel: text, Text: text, To: text}
+	}
+	st.performAddonOuts(a, outs)
+	if len(a.sent) >= addonHostKeep {
+		t.Fatalf("kept %d rows at full length, want fewer than %d under the total cap", len(a.sent), addonHostKeep)
+	}
+	if got := sentBytes(a.sent); got > addonHostSentBytes {
+		t.Fatalf("the kept rows hold %d bytes, want at most %d", got, addonHostSentBytes)
+	}
+	for _, row := range a.sent {
+		if len(row.Text) > addonHostTextKeep+len("...") || !strings.HasSuffix(row.Text, "...") {
+			t.Fatalf("a row keeps %d bytes of text without the cut marker", len(row.Text))
+		}
+	}
 }

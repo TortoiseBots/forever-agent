@@ -4,6 +4,11 @@
 
 local json = {}
 
+-- json.lua reads and writes the host's own protocol lines, not the add-on's text: it keeps the real pattern
+-- functions, so a request or a result over the add-on's subject cap still parses (host.lua bounds the add-on's
+-- copies, not the host's decoding).
+local find, match, gsub = string.find, string.match, string.gsub
+
 json.null = setmetatable({}, { __tostring = function() return "null" end })
 local arrayMark = {}
 
@@ -16,7 +21,7 @@ end
 local escapes = { ['"'] = '\\"', ['\\'] = '\\\\', ['\b'] = '\\b', ['\f'] = '\\f', ['\n'] = '\\n', ['\r'] = '\\r', ['\t'] = '\\t' }
 
 local function encodeString(s)
-    return '"' .. string.gsub(s, '[%c"\\]', function(c)
+    return '"' .. gsub(s, '[%c"\\]', function(c)
         return escapes[c] or string.format("\\u%04x", string.byte(c))
     end) .. '"'
 end
@@ -100,7 +105,7 @@ end
 local decodeValue
 
 local function skip(s, i)
-    return (string.find(s, "[^ \t\r\n]", i)) or (#s + 1)
+    return (find(s, "[^ \t\r\n]", i)) or (#s + 1)
 end
 
 local function decodeString(s, i)
@@ -132,7 +137,7 @@ local function decodeString(s, i)
                 error("json: bad escape \\" .. e)
             end
         else
-            local k = string.find(s, '["\\]', j)
+            local k = find(s, '["\\]', j)
             if not k then error("json: unterminated string") end
             out[#out + 1] = string.sub(s, j, k - 1)
             j = k
@@ -186,7 +191,7 @@ decodeValue = function(s, i)
     elseif string.sub(s, i, i + 3) == "null" then
         return json.null, i + 4
     end
-    local num = string.match(s, "^-?%d+%.?%d*[eE]?[-+]?%d*", i)
+    local num = match(s, "^-?%d+%.?%d*[eE]?[-+]?%d*", i)
     if not num or num == "" then error("json: unexpected character at " .. i) end
     return tonumber(num), i + #num
 end

@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -84,7 +87,7 @@ func startAddon(t *testing.T, title, src string) *Host {
 func loadFake(t *testing.T) *Host {
 	t.Helper()
 	h := startAddon(t, "Tiny", fakeAddon)
-	if _, _, err := h.Load(World{Player: Unit{Name: "Tester", Player: true, Online: true}}, true); err != nil {
+	if _, _, err := h.Load(World{Player: Unit{Name: "Tester", Player: true, Online: true}}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	return h
@@ -94,7 +97,7 @@ func loadFake(t *testing.T) *Host {
 // as an Out the caller performs.
 func TestHostLoadsAndSends(t *testing.T) {
 	h := startAddon(t, "Tiny", fakeAddon)
-	res, outs, err := h.Load(World{Player: Unit{Name: "Tester", Player: true, Online: true}}, true)
+	res, outs, err := h.Load(World{Player: Unit{Name: "Tester", Player: true, Online: true}}, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +191,7 @@ hidden:Hide()
 hidden:SetScript("OnUpdate", function() error("a hidden frame's OnUpdate ran") end)
 `
 	h := startAddon(t, "Tick", src)
-	if _, _, err := h.Load(World{}, true); err != nil {
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	var outs []Out
@@ -225,7 +228,7 @@ print((require == nil) and "norequire" or "require")
 print((debug == nil) and "nodebug" or "debug")
 `
 	h := startAddon(t, "Sandbox", src)
-	if _, _, err := h.Load(World{}, true); err != nil {
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	st, _, err := h.State()
@@ -255,7 +258,7 @@ SLASH_SPIN1 = "/spin"
 SlashCmdList["SPIN"] = function() Spin = true end
 `
 	h := startAddon(t, "Spin", src)
-	if _, _, err := h.Load(World{}, true); err != nil {
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.Command("/spin"); err != nil {
@@ -343,7 +346,7 @@ SlashCmdList["BOMB"] = function()
 end
 `
 	h := startAddon(t, "Bomb", src)
-	if _, _, err := h.Load(World{}, true); err != nil {
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if got := addressSpaceLimit(t, h.cmd.Process.Pid); got != MemoryLimit {
@@ -401,7 +404,7 @@ func TestStartKeepsSourcesExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := h.Load(World{}, true); err != nil {
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	st, _, err := h.State()
@@ -553,7 +556,7 @@ SlashCmdList["FLOOD"] = function()
 end
 `
 	h := startAddon(t, "Flood", src)
-	if _, _, err := h.Load(World{}, true); err != nil {
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	outs, err := h.Command("/flood")
@@ -587,7 +590,7 @@ SlashCmdList["FLOOD"] = function()
 end
 `
 	h := startAddon(t, "Flood", src)
-	if _, _, err := h.Load(World{}, true); err != nil {
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	for i := 1; i <= 3; i++ {
@@ -605,9 +608,9 @@ end
 //
 // Mutation this test catches: only the per-call timeout (every Tick answers, and the host lives on).
 func TestHostStopsAddonThatStaysSlow(t *testing.T) {
-	oldTimeout, oldSlow := CallTimeout, SlowCallLimit
-	CallTimeout, SlowCallLimit = 2*time.Second, 10*time.Millisecond
-	t.Cleanup(func() { CallTimeout, SlowCallLimit = oldTimeout, oldSlow })
+	oldTimeout, oldSlow, oldBudget := CallTimeout, SlowCallLimit, CPUBudget
+	CallTimeout, SlowCallLimit, CPUBudget = 2*time.Second, 10*time.Millisecond, time.Hour
+	t.Cleanup(func() { CallTimeout, SlowCallLimit, CPUBudget = oldTimeout, oldSlow, oldBudget })
 	src := `
 local hot = 0
 local f = CreateFrame("Frame", "SlowFrame")
@@ -616,7 +619,7 @@ f:SetScript("OnUpdate", function()
 end)
 `
 	h := startAddon(t, "Slow", src)
-	if _, _, err := h.Load(World{}, true); err != nil {
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	var err error
@@ -631,24 +634,36 @@ end)
 	}
 }
 
-// The add-on's environment is an explicit allow-list: a test compares every global it can see with the list the
-// host means to give it. Adding loadstring, getfenv or any other host function to the sandbox fails here.
+// The add-on's environment is an explicit allow-list: the test compares every global it can see with the list the
+// host means to give it, and every member of the library tables it can see (string, table, math) with an allowed
+// list of their own. Adding loadstring, getfenv, a host function to the sandbox or one more member to a library
+// table fails here. A member a build does not provide (the 5.0 compatibility names vary) is tolerated; one this
+// list does not name is not.
 func TestHostEnvironmentAllowList(t *testing.T) {
 	src := `
 local names = {}
 for k in pairs(_G) do names[#names + 1] = tostring(k) end
 table.sort(names)
 print(table.concat(names, "\n"))
+local function members(name, t)
+    local n = {}
+    for k in pairs(t) do n[#n + 1] = tostring(k) end
+    table.sort(n)
+    print(name .. " " .. table.concat(n, ","))
+end
+members("string", string)
+members("table", table)
+members("math", math)
 `
 	h := startAddon(t, "Env", src)
-	if _, _, err := h.Load(World{}, true); err != nil {
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	st, _, err := h.State()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(st.Chat) != 1 {
+	if len(st.Chat) != 4 {
 		t.Fatalf("chat %+v", st.Chat)
 	}
 	got := strings.Split(st.Chat[0].Text, "\n")
@@ -673,6 +688,46 @@ print(table.concat(names, "\n"))
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("the add-on's globals\n got %v\nwant %v", got, want)
 	}
+	allowed := map[string][]string{
+		"string": {"byte", "char", "find", "format", "gfind", "gmatch", "gsub", "len", "lower", "match", "rep",
+			"reverse", "sub", "upper"},
+		"table": {"concat", "foreach", "foreachi", "getn", "insert", "maxn", "remove", "setn", "sort"},
+		"math": {"abs", "acos", "asin", "atan", "atan2", "ceil", "cos", "cosh", "deg", "exp", "floor", "fmod",
+			"frexp", "huge", "ldexp", "log", "log10", "max", "min", "mod", "modf", "pi", "pow", "rad", "random",
+			"randomseed", "sin", "sinh", "sqrt", "tan", "tanh"},
+	}
+	for _, line := range st.Chat[1:] {
+		name, members, ok := strings.Cut(line.Text, " ")
+		if !ok {
+			t.Fatalf("member line %q", line.Text)
+		}
+		allow, ok := allowed[name]
+		if !ok {
+			t.Fatalf("a library table nobody listed: %q", line.Text)
+		}
+		for _, member := range strings.Split(members, ",") {
+			if !slicesContains(allow, member) {
+				t.Fatalf("%s.%s is not on the allow-list %v", name, member, allow)
+			}
+		}
+	}
+	for _, required := range []string{"string find", "string match", "string gmatch", "string gsub", "table sort",
+		"math random"} {
+		name, member, _ := strings.Cut(required, " ")
+		found := false
+		for _, line := range st.Chat[1:] {
+			if n, ms, ok := strings.Cut(line.Text, " "); ok && n == name {
+				for _, m := range strings.Split(ms, ",") {
+					if m == member {
+						found = true
+					}
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("%s.%s is missing from the environment", name, member)
+		}
+	}
 }
 
 // The add-on cannot reach string.dump by any route, and it cannot write through the string metatable into the
@@ -696,7 +751,7 @@ string.format = function() return "FORGED" end
 SendAddonMessage("TINY", string.format("%d", 7) .. " " .. tostring(GetTime()), "PARTY")
 `
 	h := startAddon(t, "Strings", src)
-	_, outs, err := h.Load(World{Player: Unit{Name: "Tester", Player: true, Online: true}}, true)
+	_, outs, err := h.Load(World{Player: Unit{Name: "Tester", Player: true, Online: true}}, true, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -797,5 +852,363 @@ func TestReadAddonFileRefusesSwappedSymlink(t *testing.T) {
 	}
 	if got, err := readAddonFile(root, path, "Tiny.lua", maxAddonBytes); err == nil {
 		t.Fatalf("a source swapped for a symlink outside the folder was read: %q", got)
+	}
+}
+
+// ── the CPU budget, the field limits and the protocol cap ───────────────────
+
+// fakeCallClock makes each Call report runs[n] of run time: the host reads its clock at the start and at the reply
+// of every call, so the test's clock hands out one duration per call.
+func fakeCallClock(h *Host, runs []time.Duration) {
+	base := time.Unix(1_700_000_000, 0)
+	n := 0
+	first := true
+	h.now = func() time.Time {
+		if first {
+			first = false
+			return base
+		}
+		first = true
+		base = base.Add(runs[n%len(runs)])
+		n++
+		return base
+	}
+}
+
+// The CPU budget is over a rolling window, not a strike count a fast call can reset: a call that spins just under
+// the per-call limit on every call, and calls that alternate a slow one with a fast one, both stop the add-on.
+// A normal add-on is never stopped by it.
+//
+// Mutations these tests catch: only the per-call timeout, and the strike counter reset by any fast call (the
+// 1.4 s handler runs forever under both).
+func TestHostStopsAddonOverItsCPUBudget(t *testing.T) {
+	src := `
+SLASH_NOOP1 = "/noop"
+SlashCmdList["NOOP"] = function() end
+`
+	for _, c := range []struct {
+		name string
+		runs []time.Duration
+	}{
+		{"just under the slow-call limit", []time.Duration{1400 * time.Millisecond}},
+		{"alternating slow and fast", []time.Duration{2900 * time.Millisecond, 100 * time.Millisecond}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := startAddon(t, "Budget", src)
+			if _, _, err := h.Load(World{}, true, nil); err != nil {
+				t.Fatal(err)
+			}
+			fakeCallClock(h, c.runs)
+			var err error
+			for range 3 {
+				if _, _, err = h.State(); err != nil {
+					break
+				}
+			}
+			if err == nil || !strings.Contains(err.Error(), "run time") {
+				t.Fatalf("three calls of %v each answered without stopping the add-on: %v", c.runs, err)
+			}
+			if _, _, err := h.State(); err == nil {
+				t.Fatal("the add-on kept its host after going over the CPU budget")
+			}
+		})
+	}
+	t.Run("a normal add-on", func(t *testing.T) {
+		h := startAddon(t, "Budget", src)
+		if _, _, err := h.Load(World{}, true, nil); err != nil {
+			t.Fatal(err)
+		}
+		fakeCallClock(h, []time.Duration{20 * time.Millisecond})
+		for i := range 40 {
+			if _, _, err := h.State(); err != nil {
+				t.Fatalf("state %d: %v", i, err)
+			}
+		}
+	})
+}
+
+// An add-on cannot make the daemon hold a 15 MiB field: the client refuses a text over the server's 255-byte limit
+// before it becomes an Out, the call is marked throttled and the host keeps answering. The review's five sends in
+// one call produce no Out at all.
+//
+// Mutations these tests catch: no field check in the client (the review's five 15 MiB Out lines come back), and a
+// refusal that kills the host on the first overrun (State stops answering).
+func TestHostRefusesOversizeSends(t *testing.T) {
+	src := `
+SLASH_BIG1 = "/big"
+SlashCmdList["BIG"] = function()
+    local big = string.rep("A", 15 * 1024 * 1024)
+    for i = 1, 5 do SendAddonMessage("TINY", big, "PARTY") end
+end
+`
+	h := startAddon(t, "Big", src)
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	outs, err := h.Command("/big")
+	if !errors.Is(err, ErrThrottled) {
+		t.Fatalf("five 15 MiB sends answered %v, want the over-limit error", err)
+	}
+	if !strings.Contains(err.Error(), "255") {
+		t.Fatalf("the refusal %q does not name the 255-byte limit", err)
+	}
+	if len(outs) != 0 {
+		biggest := 0
+		for _, o := range outs {
+			biggest = max(biggest, len(o.Text))
+		}
+		t.Fatalf("the refused sends came back as %d Outs, the longest %d bytes", len(outs), biggest)
+	}
+	st, _, err := h.State()
+	if err != nil {
+		t.Fatalf("the host did not survive the refusal: %v", err)
+	}
+	if !st.Throttled {
+		t.Fatalf("state %+v does not mark the add-on throttled", st)
+	}
+}
+
+// The server's 64-prefix cap covers the session's whole registration list, not just the add-on's part: two
+// reserved prefixes leave 62 for the add-on, a prefix already registered still answers true at the cap, and the
+// next new one and a reserved one answer false.
+//
+// Mutations these tests catch: a per-add-on-only cap (the 63rd registration answers true and the session's list
+// later overflows), and a capacity check that runs before the duplicate check (re-registering answers false).
+func TestHostCapsRegisteredPrefixes(t *testing.T) {
+	src := `
+local n = 0
+for i = 1, 62 do if RegisterAddonMessagePrefix(string.format("P%02d", i)) then n = n + 1 end end
+print("registered " .. n)
+print("again " .. tostring(RegisterAddonMessagePrefix("P01")))
+print("over " .. tostring(RegisterAddonMessagePrefix("P63")))
+print("reserved " .. tostring(RegisterAddonMessagePrefix("PBC")))
+`
+	h := startAddon(t, "Prefixes", src)
+	if _, _, err := h.Load(World{}, true, []string{"PBC", "TBM"}); err != nil {
+		t.Fatal(err)
+	}
+	st, _, err := h.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, c := range st.Chat {
+		lines = append(lines, c.Text)
+	}
+	for _, want := range []string{"registered 62", "again true", "over false", "reserved false"} {
+		found := false
+		for _, line := range lines {
+			if line == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("chat %q does not hold %q", lines, want)
+		}
+	}
+	if len(st.Prefixes) != 62 {
+		t.Fatalf("the add-on reports %d prefixes, want 62", len(st.Prefixes))
+	}
+}
+
+// A legal add-on folder can carry hundreds of long file names (its .toc and sources may be 8 MiB in all). The load
+// and state replies report at most 64 names inside 8 KiB, then a "..." marker, so a legal folder can never push a
+// reply over the daemon's protocol line cap and be killed as if its sidecar had misbehaved.
+//
+// Mutation this test catches: an unbounded file list (400 real names here make a load reply over 64 KiB).
+func TestHostReportsManyFilesWithinTheProtocolCap(t *testing.T) {
+	requireLua(t)
+	dir := filepath.Join(t.TempDir(), "ManyAddon")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("a", 150)
+	var toc strings.Builder
+	toc.WriteString("## Title: Many\n## Version: 1\n")
+	for i := range 400 {
+		name := fmt.Sprintf("%s%03d.lua", long, i)
+		toc.WriteString(name + "\n")
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ManyAddon.toc"), []byte(toc.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h, err := Start(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { h.Close() })
+	res, _, err := h.Load(World{}, true, nil)
+	if err != nil {
+		t.Fatalf("a legal folder with 400 file names could not load: %v", err)
+	}
+	last := ""
+	if len(res.Files) > 0 {
+		last = res.Files[len(res.Files)-1]
+	}
+	if len(res.Files) == 0 || len(res.Files) > 65 || last != "..." {
+		t.Fatalf("the load reports %d files (last %q), want at most 65 ending in \"...\"", len(res.Files), last)
+	}
+	st, _, err := h.State()
+	if err != nil {
+		t.Fatalf("state after the many-name load: %v", err)
+	}
+	if len(st.Files) != len(res.Files) {
+		t.Fatalf("state reports %d files, the load %d", len(st.Files), len(res.Files))
+	}
+}
+
+// A sidecar that writes a protocol line over MaxProtocolLine is killed and its host marked failed: with a 16 MiB
+// line cap, the review's five 15 MiB sends made the daemon read and keep about 800 MB. The test's sidecar replaces
+// the client's SendAddonMessage with one that skips its own checks, as a broken or replaced script would.
+//
+// Mutation this test catches: a scanner that accepts any line the sidecar writes.
+func TestHostKillsSidecarOnOversizeProtocolLine(t *testing.T) {
+	requireLua(t)
+	old := hostScripts
+	t.Cleanup(func() { hostScripts = old })
+	read := func(name string) []byte {
+		t.Helper()
+		b, err := fs.ReadFile(luaFiles, "lua/"+name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	unbounded := []byte(`
+-- Test sidecar: the client sends without its own field checks.
+function SendAddonMessage(prefix, text, channel, target)
+    local box = addonhost_outbox()
+    box[#box + 1] = { out = "addon", prefix = tostring(prefix), text = tostring(text), channel = tostring(channel) }
+end
+`)
+	hostScripts = fstest.MapFS{
+		"lua/host.lua": {Data: read("host.lua")},
+		"lua/json.lua": {Data: read("json.lua")},
+		"lua/mock.lua": {Data: append(read("mock.lua"), unbounded...)},
+	}
+	src := `
+SLASH_BIG1 = "/big"
+SlashCmdList["BIG"] = function()
+    local big = string.rep("A", 15 * 1024 * 1024)
+    for i = 1, 5 do SendAddonMessage("TINY", big, "PARTY") end
+end
+`
+	h := startAddon(t, "Big", src)
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	outs, err := h.Command("/big")
+	if !errors.Is(err, ErrStopped) {
+		t.Fatalf("an over-cap protocol line answered %v (%d Outs), want the sidecar stopped", err, len(outs))
+	}
+	if !strings.Contains(err.Error(), "protocol line") {
+		t.Fatalf("the error %q does not name the protocol line cap", err)
+	}
+	if _, _, err := h.State(); err == nil {
+		t.Fatal("the sidecar kept its host after writing an over-cap line")
+	}
+}
+
+// A sidecar that crashes (any abnormal exit) is a dead add-on host, never a daemon error: later calls answer
+// ErrStopped with the exit recorded, and nothing panics or blocks.
+func TestHostTreatsCrashedSidecarAsStopped(t *testing.T) {
+	h := loadFake(t)
+	if err := h.cmd.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-h.exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the sidecar's crash was not seen")
+	}
+	if _, _, err := h.State(); !errors.Is(err, ErrStopped) {
+		t.Fatalf("a call to a crashed sidecar answered %v, want ErrStopped", err)
+	}
+}
+
+// Lua 5.1's pattern matcher recurses on the pattern without a limit: the review's pattern (200000 "a?" items)
+// segfaults lua5.1. The add-on's find/match/gmatch/gsub and the shared ones (reached by method syntax) refuse a
+// pattern over 512 bytes and a subject over 1 MiB, and the host keeps answering.
+//
+// Mutations these tests catch: the wrapper only on the add-on's copies (the method route still segfaults or
+// spends minutes), and a wrapper with no subject bound.
+func TestHostRefusesHugePatterns(t *testing.T) {
+	src := `
+local subject = string.rep("a", 400000)
+local pattern = string.rep("a?", 200000) .. "b"
+local ok, err = pcall(string.find, subject, pattern)
+print("find " .. tostring(ok) .. " " .. tostring(err))
+local ok2, err2 = pcall(function() return ("aaa"):find(pattern) end)
+print("method " .. tostring(ok2) .. " " .. tostring(err2))
+local ok3, err3 = pcall(function() return (string.rep("a", 1024 * 1024 + 1)):find("a") end)
+print("subject " .. tostring(ok3) .. " " .. tostring(err3))
+local ok4 = pcall(string.match, "abc", "b")
+print("match " .. tostring(ok4))
+`
+	h := startAddon(t, "Patterns", src)
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	st, _, err := h.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, c := range st.Chat {
+		lines = append(lines, c.Text)
+	}
+	for _, want := range []string{"find false", "method false", "subject false", "match true"} {
+		found := false
+		for _, line := range lines {
+			if strings.HasPrefix(line, want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("chat %q does not hold %q", lines, want)
+		}
+	}
+}
+
+// An error object's __tostring is add-on code. The host must not run it while writing a reply (after drain its
+// sends would wait for the next op) and a table error must not reach a field: its text is "<table>" and the send
+// the metamethod would make never happens.
+//
+// Mutations these tests catch: tostring of the error after drain (the "late" send comes back on the next call),
+// and a field validation that lets a table through.
+func TestHostErrorObjectRunsNoCodeAfterDrain(t *testing.T) {
+	src := `
+local mt = { __tostring = function()
+    SendAddonMessage("TINY", "late", "PARTY")
+    return "tostring ran"
+end }
+SLASH_BAD1 = "/bad"
+SlashCmdList["BAD"] = function() error(setmetatable({}, mt)) end
+`
+	h := startAddon(t, "Bad", src)
+	if _, outs, err := h.Load(World{}, true, nil); err != nil || len(outs) != 0 {
+		t.Fatalf("load %v %+v", err, outs)
+	}
+	outs, err := h.Command("/bad")
+	if err == nil {
+		t.Fatal("the raising command answered without an error")
+	}
+	if !strings.Contains(err.Error(), "<table>") || strings.Contains(err.Error(), "tostring ran") {
+		t.Fatalf("the error text %q is not the safe table form", err)
+	}
+	if len(outs) != 0 {
+		t.Fatalf("the error object's __tostring ran add-on code: %+v", outs)
+	}
+	_, outs, err = h.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, o := range outs {
+		if o.Text == "late" {
+			t.Fatalf("a send made by __tostring was performed on the next call: %+v", outs)
+		}
 	}
 }

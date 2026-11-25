@@ -11,10 +11,14 @@
 //
 // A loaded add-on is untrusted code, and these are the bounds it runs under: its chunks are text only (a source
 // starting with ESC is bytecode and is refused, as is one holding a NUL byte); its environment is an explicit
-// allow-list with its own string functions and no route to the shared string table (lua/host.lua); its sends are
-// budgeted per call, per second and in the queue (lua/mock.lua, and Call's own cap); and maxStrikes calls in a
-// row over the send budget or the slow-call limit stop the sidecar. A call over its budget answers ErrThrottled
-// and the add-on is marked throttled (State.Throttled); the host keeps answering.
+// allow-list with its own string functions and no route to the shared string table (lua/host.lua), whose pattern
+// functions refuse a pattern over 512 bytes and a subject over 1 MiB (Lua 5.1's matcher recurses on the pattern);
+// every field of a client call is limited to the server's own bounds before it can become a protocol line
+// (lua/mock.lua); its sends are budgeted per call, per second and in the queue (lua/mock.lua, and Call's own cap);
+// the time its calls take is bounded over a rolling window (CPUBudget in CPUBudgetWindow); and maxStrikes calls in
+// a row over the send budget or the slow-call limit stop the sidecar. A call over its budget answers ErrThrottled
+// and the add-on is marked throttled (State.Throttled); the host keeps answering. A sidecar that writes a protocol
+// line over MaxProtocolLine, or breaks the frame format, is killed and the add-on is marked failed.
 //
 // The add-on's folder is read once, in this process, before the interpreter starts: every .toc and source path is
 // resolved and must stay beneath the folder's own resolved path, so neither a symlink nor a ".." line can make the
@@ -33,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,6 +50,10 @@ import (
 
 //go:embed lua/*.lua
 var luaFiles embed.FS
+
+// hostScripts is the set of lua files Start writes beside the add-on. A test replaces it with a sidecar that
+// breaks the protocol (an unbounded send), which no add-on can make the real scripts do.
+var hostScripts fs.FS = luaFiles
 
 // DefaultLua is the interpreter the host runs when none is given.
 const DefaultLua = "lua5.1"
@@ -100,6 +109,23 @@ func slowCallLimit() time.Duration {
 	}
 	return CallTimeout
 }
+
+// The CPU budget of one add-on over a rolling window: the wall time its calls take to answer, summed. That is the
+// time the add-on occupied its sidecar (a call is normally milliseconds; the window is what keeps that time under
+// a share of the host), not the process's own CPU counters, and it is what the fake-clock tests below drive. A
+// per-call limit alone lets a handler that spins just under it, or alternates a slow call with a fast one that
+// resets the strike count, hold a core forever; the window bounds the work however it is split. Over the budget
+// the sidecar is stopped and the add-on is marked failed (a call answers ErrStopped with the reason).
+var (
+	CPUBudget       = 3 * time.Second
+	CPUBudgetWindow = 10 * time.Second
+)
+
+// MaxProtocolLine bounds one line the sidecar writes on the protocol: an Out line is a few hundred bytes under
+// the client's own field limits, and a reply's bounded logs stay well under it. A longer line is not a frame this
+// protocol can read (and the sidecar has already misbehaved), so the process is killed and the add-on marked
+// failed: without the cap, five 15 MiB sends in one call made the daemon hold about 800 MB of kept rows.
+const MaxProtocolLine = 64 << 10
 
 // ErrStopped is returned by calls after the sidecar has exited or was stopped.
 var ErrStopped = errors.New("addon host stopped")
@@ -200,6 +226,16 @@ type Host struct {
 	throttled bool
 	outWindow time.Time // the wall second outCount counts in
 	outCount  int       // Outs this second, the backstop for the sidecar's own budget
+	// cpu is the run time of the calls inside CPUBudgetWindow, oldest first; now is the clock they are measured
+	// with (time.Now unless a test sets it). Guarded by mu with the rest.
+	cpu []cpuUse
+	now func() time.Time
+}
+
+// cpuUse is one call's run time, for the CPU budget's rolling window.
+type cpuUse struct {
+	at  time.Time
+	run time.Duration
 }
 
 // addonTOC is one add-on folder read and checked before the interpreter starts: the .toc's title and version and
@@ -248,7 +284,7 @@ func Start(addonDir string) (*Host, error) {
 	}
 	defer os.RemoveAll(scripts) // read by the time hello answers (or the start failed)
 	for _, name := range []string{"host.lua", "json.lua", "mock.lua"} {
-		b, err := luaFiles.ReadFile("lua/" + name)
+		b, err := fs.ReadFile(hostScripts, "lua/"+name)
 		if err == nil {
 			err = os.WriteFile(filepath.Join(scripts, name), b, 0o600)
 		}
@@ -281,30 +317,44 @@ func Start(addonDir string) (*Host, error) {
 		protoR.Close()
 		return nil, err
 	}
-	go func() {
-		sc := bufio.NewScanner(protoR)
-		sc.Buffer(make([]byte, 64*1024), 16*1024*1024)
-		for sc.Scan() {
-			select {
-			case h.lines <- append([]byte(nil), sc.Bytes()...):
-			case <-h.quit:
-			}
-		}
-		protoR.Close()
-		err := h.cmd.Wait()
-		h.waitMu.Lock()
-		if err == nil {
-			err = errors.New("exited")
-		}
-		h.err = err
-		h.waitMu.Unlock()
-		close(h.exited)
-	}()
+	go h.watch(protoR)
 	if _, _, err := h.Call("hello", nil); err != nil {
 		h.Close()
 		return nil, err
 	}
 	return h, nil
+}
+
+// watch reads the sidecar's protocol lines into h.lines until it exits, and reaps it. A line longer than
+// MaxProtocolLine cannot be read at all: the sidecar wrote what this protocol does not allow, so it is killed and
+// its exit recorded as the host's failure (Call answers ErrStopped with it). Never a daemon error.
+func (h *Host) watch(r io.ReadCloser) {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 8*1024), MaxProtocolLine)
+	var lineErr error
+	for sc.Scan() {
+		select {
+		case h.lines <- append([]byte(nil), sc.Bytes()...):
+		case <-h.quit:
+		}
+	}
+	if err := sc.Err(); err != nil {
+		lineErr = fmt.Errorf("%w: it wrote a protocol line over %d bytes (%v), so it was stopped", ErrStopped, MaxProtocolLine, err)
+		h.kill()
+	}
+	r.Close()
+	err := h.cmd.Wait()
+	h.waitMu.Lock()
+	switch {
+	case lineErr != nil:
+		h.err = lineErr
+	case err == nil:
+		h.err = errors.New("exited")
+	default:
+		h.err = err
+	}
+	h.waitMu.Unlock()
+	close(h.exited)
 }
 
 // findTOC returns the add-on's .toc file name: the one file of that kind in its folder (sorted, so a folder with
@@ -497,10 +547,13 @@ func under(root, resolved string) bool {
 }
 
 // Load runs the load op: the .toc's files, ADDON_LOADED, then PLAYER_LOGIN and PLAYER_ENTERING_WORLD when the
-// character is in world.
-func (h *Host) Load(world World, inWorld bool) (LoadResult, []Out, error) {
+// character is in world. reserved lists the prefixes the caller's session already holds: the add-on may neither
+// register them nor send under them (the sidecar refuses both with a Lua error), because they belong to the
+// session (the bot module's protocol prefixes, for one) and not to the loaded code.
+func (h *Host) Load(world World, inWorld bool, reserved []string) (LoadResult, []Out, error) {
 	var res LoadResult
-	raw, outs, err := h.Call("load", map[string]any{"world": world, "in_world": inWorld, "addon": h.addon})
+	raw, outs, err := h.Call("load", map[string]any{"world": world, "in_world": inWorld, "addon": h.addon,
+		"reserved": reserved})
 	if err != nil {
 		return res, outs, err
 	}
@@ -590,7 +643,7 @@ func (h *Host) Call(op string, params any) (json.RawMessage, []Out, error) {
 	if _, err := h.stdin.Write(append(b, '\n')); err != nil {
 		return nil, nil, h.stopped()
 	}
-	began := time.Now()
+	began := h.clock()
 	var outs []Out
 	overBudget := false
 	timer := time.NewTimer(CallTimeout)
@@ -623,15 +676,28 @@ func (h *Host) Call(op string, params any) (json.RawMessage, []Out, error) {
 					continue
 				}
 				h.outCount++
+				// Every field of an Out is text: a value of another type is a broken contract, and the daemon
+				// must never perform or keep it.
 				var o Out
-				json.Unmarshal(line, &o)
+				if err := json.Unmarshal(line, &o); err != nil {
+					h.kill()
+					return nil, outs, fmt.Errorf("%w: it wrote an out line with a field that is not text: %v", ErrStopped, err)
+				}
 				outs = append(outs, o)
 				continue
 			}
 			if m.ID != id {
 				continue // a reply to an earlier call that timed out cannot happen: that kills the process
 			}
-			slow := time.Since(began) > slowCallLimit()
+			now := h.clock()
+			elapsed := now.Sub(began)
+			// The budget is over the rolling window, so no split of the work (a call just under the slow limit,
+			// or alternating slow and fast calls) keeps a core busy forever.
+			if h.overCPUBudget(now, elapsed) {
+				h.kill()
+				return nil, outs, fmt.Errorf("%w: its calls used over %s of run time within %s, so it was stopped", ErrStopped, CPUBudget, CPUBudgetWindow)
+			}
+			slow := elapsed > slowCallLimit()
 			if overBudget || m.Throttled || slow {
 				h.strikes++
 			} else {
@@ -707,6 +773,33 @@ func (h *Host) Throttled() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.throttled
+}
+
+// clock reads the time a call's run time is measured with: the wall clock, or a test's fake one. Call holds mu,
+// so the field needs no lock of its own.
+func (h *Host) clock() time.Time {
+	if h.now != nil {
+		return h.now()
+	}
+	return time.Now()
+}
+
+// overCPUBudget charges one call's run time to the rolling window and reports whether the add-on is now over its
+// budget. Entries older than CPUBudgetWindow are dropped first, so the sum is the work of the last window.
+func (h *Host) overCPUBudget(now time.Time, run time.Duration) bool {
+	cut := 0
+	for cut < len(h.cpu) && !h.cpu[cut].at.Add(CPUBudgetWindow).After(now) {
+		cut++
+	}
+	if cut > 0 {
+		h.cpu = append(h.cpu[:0], h.cpu[cut:]...)
+	}
+	h.cpu = append(h.cpu, cpuUse{at: now, run: run})
+	var sum time.Duration
+	for _, e := range h.cpu {
+		sum += e.run
+	}
+	return sum > CPUBudget
 }
 
 // tail keeps the last max bytes written to it.

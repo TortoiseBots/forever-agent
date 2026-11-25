@@ -294,16 +294,36 @@ are queued on the loop, so a stuck load or tick leaves `status` answering. `addo
 answer off the queue, because a manual clock answers from that tick.
 
 **Registration.** The prefixes the add-on registers with `RegisterAddonMessagePrefix` (plus any `prefixes` argument
-of `addon_start`) are unioned with the list the session already holds and sent through `addonmsg`'s unregister-all +
-registration pair, so the bot module's `PBC` prefix stays registered. A re-entry's fresh session has an empty list,
-so the host's next feed registers again; `addon_stop` removes only the add-on's prefixes and leaves the rest.
+of `addon_start`) are added to the list the session already holds and sent through `addonmsg`'s unregister-all +
+registration pair, so the bot module's `PBC` prefix stays registered. The prefixes the session held before the
+start are reserved, and so are the daemon's own `TBM` and `PBC` prefix whether or not the session had registered
+them: the add-on cannot register or send under them (the client answers `false` and raises on the send, which the
+sink refuses again), and it is fed only the frames of the prefixes it registered itself. `addon_stop` removes only
+the add-on's prefixes and leaves the rest, reserved ones included. A re-entry's fresh session has an empty list, so
+the host's next feed registers again.
+
+**The field limits and the protocol cap.** The client itself refuses a field the server would refuse: a prefix over
+16 bytes, an add-on text over 255, a chat line over 511, a target over 64, or the prefix that would take the
+session's whole registration list past 64. The refusal is an over-limit send (the add-on sees a Lua error and the
+call answers `throttled`), so an oversized field never becomes a protocol line, and the daemon keeps no row with
+that text. As a backstop the daemon kills a sidecar that writes a protocol line over 64 KiB, and keeps at most 50
+sent rows of at most 512 bytes of text each under a total cap, so `addon_state` cannot be made to hold or
+re-encode hundreds of megabytes. The replies are bounded in encoded size too (chat 12 KiB, errors 8 KiB, at most
+64 file names inside 8 KiB and then `...`), so a legal folder with hundreds of long file names cannot push a load
+or state reply over the cap either.
+
+**The CPU budget.** The run time of the add-on's calls is summed over a rolling window (3 s in any 10 s of wall
+clock); over it the sidecar is stopped and the add-on marked failed. A per-call limit alone let a handler that spun
+just under it, or alternated slow and fast calls (each fast one reset the strike count), hold a core forever.
 
 **Frames in.** The host is driven from the session's own event log, in order: a delivered add-on message is
 `CHAT_MSG_ADDON` with the client's four arguments (prefix, text, the channel word — `PARTY`, `RAID`,
 `INSTANCE_CHAT`, `GUILD`, `OFFICER`, `WHISPER` — and the sender), a system notice is `CHAT_MSG_SYSTEM`, a whisper
 to the character is `CHAT_MSG_WHISPER`, and an entry into the world (login, re-entry, teleport) is
-`PLAYER_ENTERING_WORLD`. Where the party or raid changed (`roster`, `destroyed`, `leader`, `kicked`) the daemon
-pushes the world first, so `PARTY_MEMBERS_CHANGED`/`RAID_ROSTER_UPDATE` arrive at their place in the stream. The
+`PLAYER_ENTERING_WORLD`. Only a frame under a prefix the add-on registered itself is fed to it: the session's own
+traffic (the bot module's protocol, for one) is not the loaded add-on's to read. Where the party or raid changed
+(`roster`, `destroyed`, `leader`, `kicked`) the daemon pushes the world first, so
+`PARTY_MEMBERS_CHANGED`/`RAID_ROSTER_UPDATE` arrive at their place in the stream. The
 loop reads the log and translates its rows (so the received rows and the cursor are the loop's), and the resulting
 calls are what the host's goroutine runs. A real clock ticks `OnUpdate` every 100 ms the same way;
 `clock: "manual"` leaves the clock to `addon_tick`, for a test or a caller that wants a fixed sequence.
