@@ -183,6 +183,9 @@ with `-32003` and `los: not supported by this module build`; that is not a parse
 The plan scout's Forever live pass asks it from each pull row's stand to the units of its target pack and records
 the server's answer beside the navmesh ray (see [plan tools](../dungeons/plan-tools.md#plan-scout)).
 
+> **Not yet proven on a live server.** The method has been exercised against a scripted module only; the server-side
+> command is newer than the running builds. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
+
 ```bash
 forever-agent forever rpc ./slot los '{"a":"Mychar","b":"target"}'
 forever-agent forever rpc ./slot los '{"a":"Tanka","b":"-8860,-118,83.5"}'
