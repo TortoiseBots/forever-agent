@@ -43,8 +43,8 @@ func TestForeverRagefireGolden(t *testing.T) {
 	if n := len(rep.Rows.Legs); n != 9 {
 		t.Fatalf("%d legs, want 9", n)
 	}
-	if n := len(rep.Rows.Steps); n != 72 {
-		t.Fatalf("%d steps, want 72", n)
+	if n := len(rep.Rows.Steps); n != 73 {
+		t.Fatalf("%d steps, want 73", n)
 	}
 	if n := len(rep.Units); n != 103 {
 		t.Fatalf("%d unit rows, want 103 (93 pack + 4 boss + 6 patrol)", n)
