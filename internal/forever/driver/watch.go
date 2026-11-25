@@ -99,6 +99,24 @@ type watchRun struct {
 	statusBlind watchBlind
 	eventsBlind watchBlind
 
+	// The decisions read: the module's run id (the record's run=, and the header's check), the cursor of the last
+	// page read, the next incremental read's time, and what the writes added up to. decisionsOff ends the reads (the
+	// module's run changed, or the capture is off); decisionsBlind keeps a failing read to one line until it answers.
+	runID            string
+	decisionsSeq     int
+	decisionsHas     bool
+	decisionsAt      time.Time
+	decisionsRows    int
+	decisionsPages   int
+	decisionsReads   int
+	decisionsBytes   int64
+	decisionsSkipped int
+	decisionsNote    string
+	decisionsPull    string
+	decisionsTrunc   bool
+	decisionsOff     bool
+	decisionsBlind   bool
+
 	// The report card's evidence: the module's own event times grouped by leg and step, the deaths, the rescues and
 	// the party slot each unit id is. Units holds role words, never character names.
 	legs       map[int]*LegRecord
@@ -200,9 +218,9 @@ func (r *Run) Watch(ctx context.Context) Result {
 		}
 	}
 	r.watchFinish(ctx, w)
-	// The run is over: the module's decision rows of it, when the command asked for them. A failed read is a warning
-	// in the summary and never changes the watch's end.
-	r.pullDecisions(ctx)
+	// The run is over: the summary says what the decisions reads wrote, and the warning a failed read left. The reads
+	// happened during the run and before the stop, because the module erases a run's capture when it ends.
+	r.watchDecisionsSummary(w)
 	r.states = append(r.states, StateStop)
 	return r.watchResult(w)
 }
@@ -421,6 +439,10 @@ func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
 		}
 		if !r.watchPollStatus(ctx, w) {
 			return
+		}
+		if !r.now().Before(w.decisionsAt) {
+			r.watchPullDecisions(ctx, w)
+			w.decisionsAt = r.now().Add(decisionsReadEvery)
 		}
 		if !r.watchPollEvents(ctx, w) {
 			return
@@ -783,6 +805,11 @@ func (r *Run) watchPollEvents(ctx context.Context, w *watchRun) bool {
 
 // applyRun copies the module's record into the watcher's bookkeeping and notes the state transitions.
 func (r *Run) applyRun(w *watchRun, st tbcmd.RunState) {
+	// The module's run id is the record's run= key (a newer module prints it): the decisions read compares every
+	// header against it, so a newer run of the same leader is never written under this run's file.
+	if id := st.Extra["run"]; id != "" && w.runID == "" {
+		w.runID = id
+	}
 	prev := w.state
 	w.record = st
 	w.have = true
@@ -1370,6 +1397,11 @@ func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 		cctx, ccancel := context.WithTimeout(fctx, FinishCallTimeout)
 		r.stopCombatlogWatch(cctx)
 		ccancel()
+	}
+	if !r.lost {
+		// The module erases a run's capture when the run ends, so the rows that arrived since the last incremental
+		// read are read here, before the stop (or the wait for a self-ended run) goes any further.
+		r.watchPullDecisions(ctx, w)
 	}
 	if w.have && (w.state == "running" || w.state == "paused" || w.state == "") {
 		reason := r.stopReason

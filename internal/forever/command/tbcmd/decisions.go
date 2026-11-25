@@ -8,11 +8,14 @@ package tbcmd
 // is one line and is never split, so the decode is strict the way the rest of this layer is: a missing key, a word
 // outside the documented set, a repeated row and a count that disagrees are ErrBadReport or ErrBadValue, never a zero.
 // Keys this layer does not type are kept in Extra. The module's own refusals are DecisionsRefusal; a module build
-// without the command is ErrNotSupported.
+// without the command is ErrNotSupported. The one row-level loss is a free text with an escaped control byte (a tab
+// or a newline): that row is left out and counted, because one note must not fail a whole page.
 //
 // Paging: `since=` asks for the rows after that sequence, `next=` is the cursor for the next call and `more=yes` says
 // a newer row waits. The pull below follows the cursor with its own bound, asks never more than the command's own
-// limit allows, and stops when the module says no more, when a page brings no row, or at its page bound.
+// limit allows, and stops when the module says no more, when a page brings no row, or at its page bound. Every page
+// it asks fits the shared reply collector's byte bound: the default page is 25 rows, and a page the collector
+// refused for its length is asked again with half the rows, down to one.
 
 import (
 	"context"
@@ -29,9 +32,10 @@ import (
 const (
 	// decisionsPageMax is the command's own clamp on one page (a larger limit= is cut to this by the module).
 	decisionsPageMax = 200
-	// decisionsPageDefault is the limit the pull asks for when the caller states none: the largest page the command
-	// allows, so the fewest calls.
-	decisionsPageDefault = decisionsPageMax
+	// decisionsPageDefault is the limit the pull asks for when the caller states none. The shared reply collector
+	// stops a whole answer past 64 KiB, and the command's worst row (three free texts cut at 240 bytes each, every
+	// byte percent-encoded) is about 2.3 KB, so a page of 25 rows is the largest that always fits.
+	decisionsPageDefault = 25
 	// decisionsMaxPages bounds one pull: a module that always says more cannot keep the run's end waiting.
 	decisionsMaxPages = 25
 )
@@ -122,7 +126,10 @@ type DecisionsHeader struct {
 type DecisionsPage struct {
 	Header DecisionsHeader
 	Rows   []DecisionRow
-	End    map[string]string
+	// Skipped counts the rows whose free text carried an escaped control byte (a tab or a newline): the module
+	// wrote them, the shared grammar cannot decode them, and the read keeps the rest of the page instead.
+	Skipped int
+	End     map[string]string
 }
 
 // DecisionsPull is a pull's result: every row it read, the run and capture the header named, the pages it took and
@@ -132,6 +139,11 @@ type DecisionsPull struct {
 	Capture string
 	Rows    []DecisionRow
 	Pages   int
+	// Next is the module's cursor after the pages read: the since= of the next read above them. A page whose only
+	// newest row was skipped still moves it.
+	Next int
+	// Skipped counts the rows the pull could not decode (an escaped control byte in a free text) and left out.
+	Skipped int
 	// Truncated says the pull stopped at its own page bound while the module still held newer rows.
 	Truncated bool
 	// Note says why the pull stopped early (a page with no row, or the page bound); empty when it read to the end.
@@ -181,10 +193,32 @@ func (c *Client) PullDecisions(ctx context.Context, target string, since int, ha
 	pull := DecisionsPull{}
 	cursor, hasCursor := since, hasSince
 	head := DecisionsHeader{}
-	for page := 0; page < decisionsMaxPages; page++ {
-		rep, err := c.RunDecisions(ctx, target, cursor, hasCursor, limit)
-		if err != nil {
-			return pull, err
+	pageSize := limit
+	switch {
+	case pageSize <= 0:
+		pageSize = decisionsPageDefault
+	case pageSize > decisionsPageMax:
+		pageSize = decisionsPageMax
+	}
+	for page := range decisionsMaxPages {
+		// A page the shared collector refused was too long for its byte bound: half the rows and ask the same
+		// cursor again, down to one row. A one-row page that still does not fit names the row's cursor. The next
+		// page starts again at the caller's size: one long page does not shrink the whole pull.
+		pageLimit := pageSize
+		var rep DecisionsPage
+		for {
+			var err error
+			rep, err = c.RunDecisions(ctx, target, cursor, hasCursor, pageLimit)
+			if err == nil {
+				break
+			}
+			if !errors.Is(err, command.ErrReplyTooLong) {
+				return pull, err
+			}
+			if pageLimit <= 1 {
+				return pull, fmt.Errorf("%w: even a one-row page from seq %d is over the reply bound", command.ErrReplyTooLong, cursor)
+			}
+			pageLimit /= 2
 		}
 		// A page that was asked for rows above a cursor repeats that cursor; the first page of a pull that asked for
 		// none has no cursor to compare (the module answers its own window).
@@ -199,11 +233,12 @@ func (c *Client) PullDecisions(ctx context.Context, target string, since int, ha
 				ErrBadReport, rep.Header.Run, rep.Header.Lead, rep.Header.Plan, rep.Header.Capture,
 				head.Run, head.Lead, head.Plan, head.Capture)
 		}
-		if len(rep.Rows) == 0 {
+		switch {
+		case len(rep.Rows) == 0 && rep.Skipped == 0:
 			if rep.Header.Next != cursor {
 				return pull, fmt.Errorf("%w: a page with no row moved next to %d from since=%d", ErrBadReport, rep.Header.Next, cursor)
 			}
-		} else {
+		case rep.Skipped == 0:
 			first, last := rep.Rows[0].Seq, rep.Rows[len(rep.Rows)-1].Seq
 			if hasCursor && first <= cursor {
 				return pull, fmt.Errorf("%w: the page starts at seq=%d, not above since=%d", ErrBadReport, first, cursor)
@@ -211,16 +246,34 @@ func (c *Client) PullDecisions(ctx context.Context, target string, since int, ha
 			if rep.Header.Next != last {
 				return pull, fmt.Errorf("%w: the page ends at seq=%d but says next=%d", ErrBadReport, last, rep.Header.Next)
 			}
+		default:
+			// Some rows of the page were left out: the header's next is the newest row the module counted, which is
+			// past the newest row kept here when the skipped one came last. It must still move above the cursor, or
+			// the next call would ask the same question.
+			if len(rep.Rows) > 0 {
+				first, last := rep.Rows[0].Seq, rep.Rows[len(rep.Rows)-1].Seq
+				if hasCursor && first <= cursor {
+					return pull, fmt.Errorf("%w: the page starts at seq=%d, not above since=%d", ErrBadReport, first, cursor)
+				}
+				if rep.Header.Next < last {
+					return pull, fmt.Errorf("%w: the page ends at seq=%d but says next=%d", ErrBadReport, last, rep.Header.Next)
+				}
+			}
+			if hasCursor && rep.Header.Next <= cursor {
+				return pull, fmt.Errorf("%w: a page of skipped rows did not move next past since=%d", ErrBadReport, cursor)
+			}
 		}
 		if pull.Run == "" {
 			pull.Run, pull.Capture = rep.Header.Run, rep.Header.Capture
 		}
 		pull.Pages++
+		pull.Next = rep.Header.Next
 		pull.Rows = append(pull.Rows, rep.Rows...)
+		pull.Skipped += rep.Skipped
 		if !rep.Header.More {
 			return pull, nil
 		}
-		if len(rep.Rows) == 0 {
+		if len(rep.Rows) == 0 && rep.Skipped == 0 {
 			// more=yes with no row: the cursor cannot move, so another call would ask the same question. The rows the
 			// module still counts are past its own window; the pull stops and says so.
 			pull.Note = fmt.Sprintf("the module answered more=yes at seq %d but sent no row; the older rows are past its window", rep.Header.Next)
@@ -344,9 +397,16 @@ func parseDecisionsPage(rep *command.Reply) (DecisionsPage, error) {
 		return out, err
 	}
 	prev := -1
+	skipped := 0
 	for i := 2; i < len(rep.Lines)-1; i++ {
 		rec, err := decodeLine(rep.Lines[i])
 		if err != nil {
+			// A row whose free text carries an escaped control byte is the one loss a page takes instead of failing
+			// whole: the module counted it, the shared grammar cannot read it, and the rest of the page is kept.
+			if rep.Lines[i].Kind == "decision" && errors.Is(err, errControlEscape) {
+				skipped++
+				continue
+			}
 			return out, err
 		}
 		if rec.kind != "decision" {
@@ -362,9 +422,10 @@ func parseDecisionsPage(rep *command.Reply) (DecisionsPage, error) {
 		prev = row.Seq
 		out.Rows = append(out.Rows, row)
 	}
-	if len(out.Rows) != out.Header.Count {
-		return out, fmt.Errorf("%w: decisions count=%d, %d row(s) in the page", ErrBadReport, out.Header.Count, len(out.Rows))
+	if len(out.Rows)+skipped != out.Header.Count {
+		return out, fmt.Errorf("%w: decisions count=%d, %d row(s) in the page", ErrBadReport, out.Header.Count, len(out.Rows)+skipped)
 	}
+	out.Skipped = skipped
 	return out, nil
 }
 

@@ -88,7 +88,7 @@ forever-agent forever raid-watch --leader NAME --plan FILE [--layout FILE]
 | `--frame-every` | `2` | Frame interval in seconds: each tick reads `.tb state` and `.tb threat` and records a frame; `0` turns frames off (2-60). |
 | `--combat-max-mb` | `64` | The combat-log file's size bound; a page that would cross it is not written and the summary says the log is truncated (1-4096). |
 | `--combatlog-watch` | `group` | The core's GM combat-log watch: `group`, `unit` or `off`. A core without the command logs one warning and records the in-range log. |
-| `--decisions-pull` | off | After the run, read the module's decision rows of that run into `<run_id>.decisions.jsonl` beside the record. Needs `--out`; a failed read is a warning in the summary. See [traces and records](../testing/traces-and-records.md#the-decisions-file). |
+| `--decisions-pull` | off | Read the live run's decision rows on a stated interval, and once more just before the stop, into `<run_id>.decisions.jsonl` beside the record. The module erases a run's capture when it ends, so only a watched, live run can be read. Needs `--out`; a failed read is a warning in the summary. See [traces and records](../testing/traces-and-records.md#the-decisions-file). |
 | `--repulls` | `2` | Report card: flag a step re-pulled more than this many times (0-100). |
 | `--member-deaths` | `3` | Report card: flag a member with at least this many deaths and two above the next (1-20). |
 | `--slow-factor` | `2` | Report card: flag a leg over this many times its plan's recorded time (1-20). |

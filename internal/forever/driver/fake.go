@@ -253,10 +253,17 @@ type Fake struct {
 	// FailEvents answers every event read with this error (a read that fails while the status read answers).
 	FailEvents error
 	// Decisions are the rows the fake module answers a decisions read with, DecisionsErr the failure it answers
-	// instead and DecisionsUnsupported a build without the command (tbcmd.ErrNotSupported).
+	// instead and DecisionsUnsupported a build without the command (tbcmd.ErrNotSupported). DecisionsRunID overrides
+	// the run id the answers name (a newer run of the same leader). The fake erases the rows at the run's own end,
+	// stop or done, as the module's capture does.
 	Decisions            []tbcmd.DecisionRow
 	DecisionsErr         error
 	DecisionsUnsupported bool
+	DecisionsRunID       string
+	// DecisionsSkipped is how many rows the fake module's answer counted but left out (a control byte in a text).
+	DecisionsSkipped int
+	// RunIDValue is the module's run id the started run's record prints (run=); empty is "1001".
+	RunIDValue string
 	// OutOfView is the watch's usual observer: neither in the party nor in view of it, so PlayerGUID answers no
 	// member. The binding card still names every bound bot by its counter.
 	OutOfView bool
@@ -327,6 +334,7 @@ type FakeRunScript struct {
 
 // fakeRun is the module's run record and its event ring.
 type fakeRun struct {
+	id               string
 	lead             string
 	plan             string
 	state            string
@@ -913,8 +921,12 @@ func (f *Fake) startRun(a Action) error {
 	if sc.Steps <= 0 {
 		sc.Steps = 12
 	}
+	id := f.RunIDValue
+	if id == "" {
+		id = "1001"
+	}
 	r := &fakeRun{
-		lead: a.Who, plan: a.Plan, state: "running", steps: sc.Steps, pulls: sc.Pulls, phase: "begin",
+		id: id, lead: a.Who, plan: a.Plan, state: "running", steps: sc.Steps, pulls: sc.Pulls, phase: "begin",
 		note: "started", legName: "leg0", kind: "move", started: f.Clock.Now(),
 	}
 	if len(f.route.Legs) > 0 {
@@ -1171,6 +1183,9 @@ func (f *Fake) runState() tbcmd.RunState {
 		Deaths: r.deaths, Wipes: r.wipes, Pauses: r.pauses, Elapsed: int(f.Clock.Now().Sub(r.started).Seconds()),
 		Why: r.why, HasWhy: r.why != "", Ev: r.seq,
 	}
+	if r.id != "" {
+		st.Extra = map[string]string{"run": r.id}
+	}
 	if r.state == "done" || r.state == "stopped" || r.step >= r.steps {
 		// Past the last step the record carries no step description.
 		st.HasLeg, st.HasLegN, st.HasKind = false, false, false
@@ -1265,9 +1280,10 @@ func (f *Fake) RunEvents(ctx context.Context, leader string, since int, hasSince
 	return out, nil
 }
 
-// RunDecisions answers the run's scripted decision rows: every row the test set, or the scripted failure. A module
-// without the command is DecisionsUnsupported.
-func (f *Fake) RunDecisions(ctx context.Context) (tbcmd.DecisionsPull, error) {
+// RunDecisions answers the live run's scripted decision rows above a cursor: every row the test set, or the scripted
+// failure. A module without the command is DecisionsUnsupported. A run that ended (stopped or done) has erased its
+// capture, as the module does, so the answer is no-capture; there is no run at all, no-run.
+func (f *Fake) RunDecisions(ctx context.Context, since int, hasSince bool) (tbcmd.DecisionsPull, error) {
 	f.decisionCalls++
 	if err := ctxErr(ctx); err != nil {
 		return tbcmd.DecisionsPull{}, err
@@ -1284,7 +1300,28 @@ func (f *Fake) RunDecisions(ctx context.Context) (tbcmd.DecisionsPull, error) {
 	if f.DecisionsErr != nil {
 		return tbcmd.DecisionsPull{}, f.DecisionsErr
 	}
-	return tbcmd.DecisionsPull{Run: "r-fake", Rows: append([]tbcmd.DecisionRow(nil), f.Decisions...), Pages: 1}, nil
+	if f.run == nil {
+		return tbcmd.DecisionsPull{}, &tbcmd.DecisionsRefusal{Code: "no-run"}
+	}
+	if f.run.state == "stopped" || f.run.state == "done" {
+		return tbcmd.DecisionsPull{}, &tbcmd.DecisionsRefusal{Code: "no-capture", Msg: "a stopped run's window leaves with its capture"}
+	}
+	name := f.run.id
+	if f.DecisionsRunID != "" {
+		name = f.DecisionsRunID
+	}
+	pull := tbcmd.DecisionsPull{Run: name, Pages: 1, Next: since}
+	for _, row := range f.Decisions {
+		if hasSince && row.Seq <= since {
+			continue
+		}
+		pull.Rows = append(pull.Rows, row)
+	}
+	if len(pull.Rows) > 0 {
+		pull.Next = pull.Rows[len(pull.Rows)-1].Seq
+		pull.Skipped = f.DecisionsSkipped
+	}
+	return pull, nil
 }
 
 // DecisionsCalls is how many decisions reads the fake answered.

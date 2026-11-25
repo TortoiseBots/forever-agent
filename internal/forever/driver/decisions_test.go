@@ -1,7 +1,7 @@
 package driver
 
-// The decisions pull at the end of a run: the watch's and the player run's read, the file it writes beside the
-// record, the summary block it leaves, and the warning a failed read leaves in place of a failure of the run.
+// The decisions read a watch makes while its run lives: the file it appends beside the record, the summary block it
+// leaves, the rows it skips, the run id it refuses, and the warning a failed read leaves in place of a failure.
 
 import (
 	"bufio"
@@ -29,10 +29,19 @@ func scriptedDecisions() []tbcmd.DecisionRow {
 // watchWithRecord is a watch over the one-group plan with a record folder, ready to run.
 func watchWithRecord(t *testing.T, runID string) (*Run, *Fake) {
 	t.Helper()
+	return watchWithRecordCfg(t, runID, nil)
+}
+
+// watchWithRecordCfg is watchWithRecord with the config adjusted before the run is built.
+func watchWithRecordCfg(t *testing.T, runID string, tweak func(*Config)) (*Run, *Fake) {
+	t.Helper()
 	dir := t.TempDir()
 	route := testRoute(t, oneGroupPlan())
 	cfg := watchConfig()
 	cfg.Out = dir
+	if tweak != nil {
+		tweak(&cfg)
+	}
 	f := NewFake(route, cfg)
 	cfg.Party = f.PartyNames()
 	run := New(cfg, route, f, f, f, f.Clock)
@@ -55,11 +64,11 @@ func TestWatchPullsDecisionsAtEnd(t *testing.T) {
 	if res.Stop != "done" || !res.Clear {
 		t.Fatalf("stop %q clear %v, want done", res.Stop, res.Clear)
 	}
-	if got := f.DecisionsCalls(); got != 1 {
-		t.Fatalf("%d decisions read(s), want 1", got)
+	if got := f.DecisionsCalls(); got < 1 {
+		t.Fatalf("%d decisions read(s), want at least the first", got)
 	}
 	block := res.Summary.Decisions
-	if block == nil || block.Rows != 2 || block.Pages != 1 || block.Note != "" || block.Bytes == 0 {
+	if block == nil || block.Rows != 2 || block.Pages < 1 || block.Note != "" || block.Bytes == 0 {
 		t.Fatalf("summary decisions %+v", block)
 	}
 	b, err := os.ReadFile(DecisionsPath(run.cfg.Out, "r-watch"))
@@ -141,61 +150,68 @@ func TestWatchDecisionsFailureIsAWarning(t *testing.T) {
 	}
 }
 
-// fakePlayDecisions is a player run's decisions read: the scripted rows or the scripted failure.
-type fakePlayDecisions struct {
-	rows  []tbcmd.DecisionRow
-	err   error
-	calls int
-}
-
-func (d *fakePlayDecisions) RunDecisions(ctx context.Context) (tbcmd.DecisionsPull, error) {
-	d.calls++
-	if d.err != nil {
-		return tbcmd.DecisionsPull{}, d.err
-	}
-	return tbcmd.DecisionsPull{Run: "r-play", Rows: d.rows, Pages: 1}, nil
-}
-
-// TestPlayPullsDecisions: the player run's end reads the module's rows into its own record when the flag is on.
-func TestPlayPullsDecisions(t *testing.T) {
-	rig := newPlayRig(t, nil)
-	dec := &fakePlayDecisions{rows: scriptedDecisions()}
-	rig.ports.Decisions = dec
-	rig.cfg.PullDecisions = true
-	rig.cfg.Out = t.TempDir()
-	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
-	if !res.Clear {
-		t.Fatalf("stop %q, want clear", res.Stop)
-	}
-	if dec.calls != 1 {
-		t.Fatalf("%d decisions read(s), want 1", dec.calls)
+// TestWatchDecisionsFinalReadBeforeTheStop: the watch reads the rows that arrived since its last incremental read
+// just before it stops the run. The fake erases the capture at the stop, so a read after it would lose them.
+func TestWatchDecisionsFinalReadBeforeTheStop(t *testing.T) {
+	run, f := watchWithRecordCfg(t, "r-watch", func(c *Config) { c.Limits.MaxMinutes = 1 })
+	run.cfg.PullDecisions = true
+	f.ScriptRun(FakeRunScript{Steps: 100, Pulls: 3, ProgressEvery: 5 * time.Second})
+	// The rows appear after every incremental read but before the one-minute budget ends the watch.
+	f.Clock.After(58*time.Second, func() { f.Decisions = scriptedDecisions() })
+	res := run.Watch(context.Background())
+	if res.Stop != "budget" {
+		t.Fatalf("stop %q, want budget", res.Stop)
 	}
 	block := res.Summary.Decisions
-	if block == nil || block.Rows != 2 || block.Bytes == 0 {
+	if block == nil || block.Rows != 2 || block.Note != "" {
 		t.Fatalf("summary decisions %+v", block)
 	}
-	if _, err := os.Stat(DecisionsPath(rig.cfg.Out, rig.cfg.RunID)); err != nil {
+	b, err := os.ReadFile(DecisionsPath(run.cfg.Out, "r-watch"))
+	if err != nil {
 		t.Fatalf("decisions file: %v", err)
 	}
+	if n := strings.Count(string(b), "\n"); n != 2 {
+		t.Fatalf("%d line(s) in the decisions file, want 2", n)
+	}
 }
 
-// TestPlayDecisionsRefusalIsAWarning: the module refuses a player-led run's capture; the summary says so and the run
-// ends as it did.
-func TestPlayDecisionsRefusalIsAWarning(t *testing.T) {
-	rig := newPlayRig(t, nil)
-	rig.ports.Decisions = &fakePlayDecisions{err: &tbcmd.DecisionsRefusal{Code: "no-capture"}}
-	rig.cfg.PullDecisions = true
-	rig.cfg.Out = t.TempDir()
-	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
-	if !res.Clear {
-		t.Fatalf("stop %q, want clear", res.Stop)
+// TestWatchDecisionsRefusesAnotherRun: a newer run of the same leader answered in the watched run's place is refused,
+// never written under this run's file.
+func TestWatchDecisionsRefusesAnotherRun(t *testing.T) {
+	run, f := watchWithRecord(t, "r-watch")
+	run.cfg.PullDecisions = true
+	f.RunIDValue = "5001"
+	f.Decisions = scriptedDecisions()
+	f.DecisionsRunID = "5002"
+	f.ScriptRun(FakeRunScript{Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second, DoneAt: 30 * time.Second})
+	res := run.Watch(context.Background())
+	if res.Stop != "done" || !res.Clear {
+		t.Fatalf("stop %q clear %v, want done", res.Stop, res.Clear)
 	}
 	block := res.Summary.Decisions
-	if block == nil || block.Rows != 0 || !strings.Contains(block.Note, "no capture") {
-		t.Fatalf("summary decisions %+v", block)
+	if block == nil || block.Rows != 0 || !strings.Contains(block.Note, "another run") {
+		t.Fatalf("summary decisions %+v, want a note about another run", block)
 	}
-	if _, err := os.Stat(DecisionsPath(rig.cfg.Out, rig.cfg.RunID)); !os.IsNotExist(err) {
-		t.Fatalf("a decisions file after a refusal: %v", err)
+	if _, err := os.Stat(DecisionsPath(run.cfg.Out, "r-watch")); !os.IsNotExist(err) {
+		t.Fatalf("a decisions file for another run: %v", err)
+	}
+}
+
+// TestWatchDecisionsSkippedRowsAreCounted: a row the shared grammar cannot decode is left out and counted in the
+// summary, never a failed read.
+func TestWatchDecisionsSkippedRowsAreCounted(t *testing.T) {
+	run, f := watchWithRecord(t, "r-watch")
+	run.cfg.PullDecisions = true
+	f.Decisions = scriptedDecisions()
+	f.DecisionsSkipped = 2
+	f.ScriptRun(FakeRunScript{Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second, DoneAt: 30 * time.Second})
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done", res.Stop)
+	}
+	block := res.Summary.Decisions
+	if block == nil || block.Rows != 2 || block.Skipped != 2 || block.Note != "" {
+		t.Fatalf("summary decisions %+v, want 2 rows and 2 skipped", block)
 	}
 }
 

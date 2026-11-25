@@ -86,9 +86,6 @@ func newPlayPorts(ctx context.Context, s *session) driver.PlayPorts {
 		// The packet loop counts the module's sight refusals (feedCommand); the run reads them on its own goroutine,
 		// the same one that pumps the session.
 		Refusals: playRefusals{s: s},
-		// The decisions read is the module's own (a `.tb` read): the player's run is player-led, so the module keeps
-		// no capture for it and answers no-capture; an account without the command permission never sends the line.
-		Decisions: newDungeonCommander(s, s.report.Character.Name),
 	}
 }
 

@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/bughunt"
-	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
 	"github.com/pjerra/forever-agent/internal/forever/fpreflight"
 	"github.com/pjerra/forever-agent/internal/forever/reportcard"
@@ -47,8 +46,6 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 	disband := fs.Bool("disband", false, "disband the group before the bots are logged out")
 	out := fs.String("out", "", "folder for the run's trace, summary, combat log, card and map; the spell judge reads it, so a live verdict needs it")
 	drawMap := fs.Bool("map", false, "after the run, write its map (SVG and HTML replay) into --out; a failure is one log line and never fails the run")
-	pullDecisions := false
-	fs.Var(onOffFlag{v: &pullDecisions, name: "--decisions-pull"}, "decisions-pull", "pull the module's decision rows of the run once it has ended, into <run_id>.decisions.jsonl beside the record (on or off; needs --out)")
 	minActive := fs.Float64("min-active", 30, "seconds a bot must be alive and in combat in the frames to be judged by the spell judge")
 	navmeshDir := fs.String("navmesh", "", "mmaps folder for the live walker (the dry walker is a straight line)")
 	dry := fs.Bool("dry", false, "run the whole machine against the scripted world (no network)")
@@ -77,10 +74,6 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 		fmt.Fprintln(stderr, "forever dungeon-play: --map needs --out (the map is written beside the trace)")
 		return exitUsage
 	}
-	if pullDecisions && *out == "" {
-		fmt.Fprintln(stderr, "forever dungeon-play: --decisions-pull needs --out (the rows are written beside the record)")
-		return exitUsage
-	}
 	if !pf.check("forever dungeon-play", *dry, stderr) {
 		return exitUsage
 	}
@@ -102,7 +95,6 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 		runID = trace.NewRunID(time.Now())
 	}
 	cfg := playConfig(route.Name, names, *maxMinutes, *maxWipes, *lastLeg, *disband, *out, runID)
-	cfg.PullDecisions = pullDecisions
 
 	var res *driver.Result
 	if *dry {
@@ -231,16 +223,8 @@ func playDry(ctx context.Context, route *driver.Route, cfg driver.PlayConfig, ch
 	fake.SpawnPacks()
 	fake.SpawnBosses()
 	ports := driver.PlayPorts{Owner: fake.Module, Group: fake, Player: fake, World: fake, Walker: fake, Clock: clock,
-		Combat: fake, Decisions: playDryDecisions{}}
+		Combat: fake}
 	return driver.Play(ctx, route, ports, cfg)
-}
-
-// playDryDecisions answers as the module does for a player-led run: no capture. A dry run with --decisions-pull
-// exercises the warning path and the summary's note, never a made-up row.
-type playDryDecisions struct{}
-
-func (playDryDecisions) RunDecisions(context.Context) (tbcmd.DecisionsPull, error) {
-	return tbcmd.DecisionsPull{}, &tbcmd.DecisionsRefusal{Code: "no-capture"}
 }
 
 // printPlayResult prints the run's counters; no line names a character or a server.

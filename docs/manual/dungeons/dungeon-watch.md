@@ -94,7 +94,7 @@ on; the summary then says `unsupported` and the log is in range only.
 | `--frame-every` | 2 | The frame interval in seconds (2-60); `0` turns frames off. |
 | `--combat-max-mb` | 64 | The combat log's size bound in MiB (1-4096); a page that would cross it is not written and the summary says the log is truncated. |
 | `--combatlog-watch` | `group` | `group`, `unit` or `off`. |
-| `--decisions-pull` | off | After the run, read the module's decision rows of that run and write them beside the record as `<run_id>.decisions.jsonl` (see [traces and records](../testing/traces-and-records.md#the-decisions-file)). Needs `--out`; a failed read is a warning in the summary and never fails the watch. |
+| `--decisions-pull` | off | Read the live run's decision rows on a stated interval, and once more just before the stop, and append them beside the record as `<run_id>.decisions.jsonl` (see [traces and records](../testing/traces-and-records.md#the-decisions-file)). The module erases a run's capture when it ends, so only a watched, live run can be read. Needs `--out`; a failed read is a warning in the summary and never fails the watch. |
 | `--repulls` | 2 | Report card: flag a step re-pulled more than this many times (0-100). |
 | `--member-deaths` | 3 | Report card: flag a member with at least this many deaths and two above the next (1-20). |
 | `--slow-factor` | 2 | Report card: flag a leg over this many times its plan's recorded time (1-20). |
@@ -153,9 +153,9 @@ With `--out` the watch writes:
   `events`, the frame and combat counters, `pause_log`, `legs`, `step_log`, `death_log`, `loose_pulls`,
   `rescue_log` and the instance's `encounters`.
 - `<run_id>.combatlog.jsonl`: the combat log rows, when the session has a log.
-- `<run_id>.decisions.jsonl`: the module's decision rows of the run, with `--decisions-pull`: one JSON object per
-  line, oldest first. The summary's `decisions` block counts them (`rows`, `pages`, `bytes`, `truncated`) or says why
-  none came (`note`).
+- `<run_id>.decisions.jsonl`: the module's decision rows of the live run, with `--decisions-pull`: one JSON object
+  per line, oldest first. The summary's `decisions` block counts them (`rows`, `pages`, `bytes`, `skipped`,
+  `truncated`) or says why none came (`note`).
 
 The report card (`card: ...`) names the verdict `CLEARED`, `STOPPED AT <leg/step> (<reason>)` or `PAUSED-STUCK AT
 <leg/step> (<pause reason>)`, or `FAILED (<reason>)`, plus the flags (re-pulled steps, member deaths, slow legs)

@@ -22,6 +22,7 @@ package tbcmd
 // ErrBadReport (or ErrBadValue for a value that cannot be read), never a zero substituted for "not known".
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -293,6 +294,11 @@ func isUpperHex(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')
 }
 
+// errControlEscape marks a percent escape of a control byte. The decisions read leaves such a row out (the module
+// counts it, the shared grammar cannot decode a tab or a newline) instead of failing the whole page; every other
+// malformed line still fails.
+var errControlEscape = errors.New("an escaped control byte")
+
 func unhex(c byte) byte {
 	switch {
 	case c >= '0' && c <= '9':
@@ -313,7 +319,7 @@ func checkEncoded(s string) error {
 			}
 			v := unhex(s[i+1])<<4 | unhex(s[i+2])
 			if v < 0x20 || v == 0x7f {
-				return fmt.Errorf("%%%c%c is a control byte", s[i+1], s[i+2])
+				return fmt.Errorf("%%%c%c %w", s[i+1], s[i+2], errControlEscape)
 			}
 			i += 2
 			continue
@@ -382,7 +388,7 @@ func decodeLine(ln command.ReplyLine) (record, error) {
 		}
 		v := ln.Fields[k]
 		if err := checkEncoded(v); err != nil {
-			return record{}, fmt.Errorf("%w: %s=%q: %v", ErrBadReport, k, v, err)
+			return record{}, fmt.Errorf("%w: %s=%q: %w", ErrBadReport, k, v, err)
 		}
 		r.values[k] = v
 		r.keys = append(r.keys, k)

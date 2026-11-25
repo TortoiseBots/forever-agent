@@ -110,11 +110,11 @@ func (c *dungeonCommander) RunEvents(ctx context.Context, leader string, since i
 	return rep, dungeonPortErr(err)
 }
 
-// RunDecisions reads the decision rows of the run this commander addresses: the leader it was built for (a watch) or
-// the character's own run (a player run). A command channel whose permission was never confirmed, or that lost it,
-// is the driver's own sentinel: the read never went out, so it is not a module refusal.
-func (c *dungeonCommander) RunDecisions(ctx context.Context) (tbcmd.DecisionsPull, error) {
-	pull, err := c.client.PullDecisions(ctx, c.tank, 0, false, 0)
+// RunDecisions reads the decision rows of the run this commander addresses from the module's own cursor: the leader
+// it was built for. A command channel whose permission was never confirmed, or that lost it, is the driver's own
+// sentinel: the read never went out, so it is not a module refusal.
+func (c *dungeonCommander) RunDecisions(ctx context.Context, since int, hasSince bool) (tbcmd.DecisionsPull, error) {
+	pull, err := c.client.PullDecisions(ctx, c.tank, since, hasSince, 0)
 	if errors.Is(err, errCommandNotConfirmed) || errors.Is(err, command.ErrNoPermission) {
 		return pull, driver.ErrDecisionsNoPermission
 	}

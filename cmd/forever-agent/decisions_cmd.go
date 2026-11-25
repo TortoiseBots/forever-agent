@@ -166,7 +166,7 @@ func parseDecisionsPullArgs(args []string, stderr io.Writer) (decisionsPullOptio
 	fs.StringVar(&o.leader, "leader", "", "the bot that leads the module's run; with --run, the module read instead of the dashboard")
 	fs.StringVar(&o.runWord, "run", "", "the module's run id; with --leader, the module read instead of the dashboard")
 	fs.IntVar(&o.sinceSeq, "since-seq", 0, "the module read: start above this decision sequence")
-	fs.IntVar(&o.limit, "limit", 200, "the module read: rows asked for per page (1-200)")
+	fs.IntVar(&o.limit, "limit", 25, "the module read: rows asked for per page (1-200; a page over the reply bound is halved)")
 	if err := fs.Parse(args); err != nil {
 		return o, exitUsage
 	}

@@ -8,9 +8,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 )
 
@@ -37,7 +39,7 @@ func TestRunDecisionsEveryKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunDecisions: %v", err)
 	}
-	if want := ".tb run decisions Tankbot since=5 limit=200"; r.seen[0] != want {
+	if want := ".tb run decisions Tankbot since=5 limit=25"; r.seen[0] != want {
 		t.Fatalf("line %q, want %q", r.seen[0], want)
 	}
 	h := page.Header
@@ -91,10 +93,10 @@ func TestPullDecisionsPages(t *testing.T) {
 	if len(runner.seen) != 2 {
 		t.Fatalf("%d call(s): %v", len(runner.seen), runner.seen)
 	}
-	if want := ".tb run decisions Tankbot limit=200"; runner.seen[0] != want {
+	if want := ".tb run decisions Tankbot limit=25"; runner.seen[0] != want {
 		t.Fatalf("first line %q, want %q", runner.seen[0], want)
 	}
-	if want := ".tb run decisions Tankbot since=2 limit=200"; runner.seen[1] != want {
+	if want := ".tb run decisions Tankbot since=2 limit=25"; runner.seen[1] != want {
 		t.Fatalf("second line %q, want %q", runner.seen[1], want)
 	}
 	if len(pull.Rows) != 3 || pull.Rows[0].Seq != 1 || pull.Rows[2].Seq != 3 {
@@ -310,13 +312,213 @@ func TestDecisionsLimitClamp(t *testing.T) {
 	for _, c := range []struct {
 		in   int
 		want string
-	}{{0, "limit=200"}, {-5, "limit=200"}, {1, "limit=1"}, {200, "limit=200"}, {5000, "limit=200"}} {
+	}{{0, "limit=25"}, {-5, "limit=25"}, {1, "limit=1"}, {200, "limit=200"}, {5000, "limit=200"}} {
 		r := oneReply("run-begin #T", decisionsHeader(0, 0, 0, "no"), decisionsEnd(1, 0, "no"))
 		if _, err := NewClient(r).RunDecisions(context.Background(), "Tankbot", 0, false, c.in); err != nil {
 			t.Fatalf("limit %d: %v", c.in, err)
 		}
 		if !strings.HasSuffix(r.seen[0], " "+c.want) {
 			t.Fatalf("limit %d: line %q, want %s", c.in, r.seen[0], c.want)
+		}
+	}
+}
+
+// pageArgs reads the since= and limit= words of a decisions line as the module would.
+func pageArgs(line string) (since, limit int, hasSince bool) {
+	limit = decisionsPageDefault
+	for _, w := range strings.Fields(line) {
+		if v, ok := strings.CutPrefix(w, "since="); ok {
+			since, _ = strconv.Atoi(v)
+			hasSince = true
+		}
+		if v, ok := strings.CutPrefix(w, "limit="); ok {
+			limit, _ = strconv.Atoi(v)
+		}
+	}
+	return since, limit, hasSince
+}
+
+// longDecisionRows is n rows whose three free texts are cut at the stored 240-byte bound and percent-encoded: the
+// worst row the command writes, one line each.
+func longDecisionRows(n int) []string {
+	// 240 spaces is the stored bound, and every one is %20: the 720-byte text the command's worst row carries.
+	text := strings.Repeat("%20", 240)
+	rows := make([]string, 0, n)
+	for seq := 1; seq <= n; seq++ {
+		rows = append(rows, fmt.Sprintf("decision seq=%d t=%d dt=200 state=running phase=walk step=3 record=tick "+
+			"order=%s note=%s say=%s", seq, 1764000000000+int64(seq)*200, text, text, text))
+	}
+	return rows
+}
+
+// collectorRunner answers every page through the real collector: the shared 64 KiB reply bound is what refuses a
+// page, exactly as the module's answer meets it on the wire.
+type collectorRunner struct {
+	rows []string
+	seen []string
+}
+
+func (r *collectorRunner) Run(ctx context.Context, line string, o command.Options) (*command.Reply, error) {
+	r.seen = append(r.seen, line)
+	since, limit, _ := pageArgs(line)
+	first := 0
+	for first < len(r.rows) && rowSeq(r.rows[first]) <= since {
+		first++
+	}
+	end := first + limit
+	if end > len(r.rows) {
+		end = len(r.rows)
+	}
+	next, more := since, "no"
+	if end > first {
+		next = rowSeq(r.rows[end-1])
+	}
+	if end < len(r.rows) {
+		more = "yes"
+	}
+	lines := []string{"run-begin #" + o.Token,
+		fmt.Sprintf("decisions run=r-20261124T190001-a1b2 lead=Tankbot plan=ragefire_chasm capture=cap-7 "+
+			"count=%d since=%d next=%d more=%s #%s", end-first, since, next, more, o.Token)}
+	for _, row := range r.rows[first:end] {
+		lines = append(lines, row+" #"+o.Token)
+	}
+	lines = append(lines, fmt.Sprintf("run-end count=%d records=%d verb=decisions lead=Tankbot next=%d more=%s #%s",
+		end-first+1, end-first+1, next, more, o.Token))
+	return command.Run(ctx, &feedTransport{lines: lines}, line, o)
+}
+
+// rowSeq is a decision line's seq.
+func rowSeq(raw string) int {
+	for _, w := range strings.Fields(raw) {
+		if v, ok := strings.CutPrefix(w, "seq="); ok {
+			n, _ := strconv.Atoi(v)
+			return n
+		}
+	}
+	return 0
+}
+
+// feedTransport feeds the collector one scripted line per packet.
+type feedTransport struct{ lines []string }
+
+func (t *feedTransport) SendCommand(context.Context, string) error { return nil }
+
+func (t *feedTransport) Pump(_ context.Context, feed func(chat.Line), done func() bool) error {
+	for _, s := range t.lines {
+		feed(chat.Line{Type: chat.TypeSystem, Text: s})
+		if done() {
+			return nil
+		}
+	}
+	return nil
+}
+
+// TestPullDecisionsLongRowsFitTheCollector: 200 rows at the command's stored-text bound go through the real
+// collector without one reply-too-long: the page the pull asks for fits the shared 64 KiB bound.
+func TestPullDecisionsLongRowsFitTheCollector(t *testing.T) {
+	cr := &collectorRunner{rows: longDecisionRows(200)}
+	pull, err := NewClient(cr).PullDecisions(context.Background(), "Tankbot", 0, false, 0)
+	if err != nil {
+		t.Fatalf("PullDecisions: %v", err)
+	}
+	if len(pull.Rows) != 200 || pull.Rows[199].Seq != 200 {
+		t.Fatalf("%d row(s), last %d", len(pull.Rows), pull.Rows[len(pull.Rows)-1].Seq)
+	}
+	if len(cr.seen) < 2 {
+		t.Fatalf("one page for 200 rows: %v", cr.seen)
+	}
+}
+
+// TestPullDecisionsHalvesAPageOverTheReplyBound: a page the collector refuses is retried with half the rows, same
+// cursor, so a run whose notes are worst-case long still completes.
+func TestPullDecisionsHalvesAPageOverTheReplyBound(t *testing.T) {
+	var limits []int
+	runner := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		since, limit, hasSince := pageArgs(line)
+		limits = append(limits, limit)
+		if limit > 6 {
+			return nil, command.ErrReplyTooLong
+		}
+		rows := make([]string, 0, limit)
+		raws := []string{"run-begin #T"}
+		for seq := since + 1; seq <= since+limit; seq++ {
+			rows = append(rows, decisionRow(seq))
+		}
+		headerSince := since
+		if !hasSince {
+			headerSince = 0
+		}
+		raws = append(raws, decisionsHeader(len(rows), headerSince, since+limit, "no"))
+		raws = append(raws, rows...)
+		raws = append(raws, decisionsEnd(len(rows)+1, since+limit, "no"))
+		return reply(o, raws...), nil
+	}}
+	pull, err := NewClient(runner).PullDecisions(context.Background(), "Tankbot", 0, false, 0)
+	if err != nil {
+		t.Fatalf("PullDecisions: %v", err)
+	}
+	if got := fmt.Sprint(limits); got != "[25 12 6]" {
+		t.Fatalf("limits %s, want [25 12 6]", got)
+	}
+	if len(pull.Rows) != 6 || pull.Pages != 1 {
+		t.Fatalf("%d row(s) in %d page(s), want 6 in 1", len(pull.Rows), pull.Pages)
+	}
+}
+
+// TestPullDecisionsOneRowStillTooLong: at one row the retry stops and names the cursor the row would have come from.
+func TestPullDecisionsOneRowStillTooLong(t *testing.T) {
+	runner := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		return nil, command.ErrReplyTooLong
+	}}
+	_, err := NewClient(runner).PullDecisions(context.Background(), "Tankbot", 0, false, 0)
+	if !errors.Is(err, command.ErrReplyTooLong) {
+		t.Fatalf("err = %v, want ErrReplyTooLong", err)
+	}
+	if !strings.Contains(err.Error(), "seq 0") {
+		t.Fatalf("the error names no row: %v", err)
+	}
+	if want := "limit=1"; !strings.HasSuffix(runner.seen[len(runner.seen)-1], want) {
+		t.Fatalf("last line %q, want %s", runner.seen[len(runner.seen)-1], want)
+	}
+}
+
+// TestPullDecisionsSkipsARowWithAControlByteText: a tab or newline in a note is the one row-level loss the read takes;
+// every other row of the page is kept and the pull counts the skip.
+func TestPullDecisionsSkipsARowWithAControlByteText(t *testing.T) {
+	cases := map[string]struct {
+		rows    []string
+		want    []int
+		skipped int
+	}{
+		"middle row": {
+			rows: []string{decisionRow(1),
+				"decision seq=2 t=1764000000400 dt=200 state=running phase=walk step=3 record=tick " +
+					"order=attack note=bad%09tab say= #T",
+				decisionRow(3)},
+			want: []int{1, 3}, skipped: 1,
+		},
+		"last row": {
+			rows: []string{decisionRow(1),
+				"decision seq=2 t=1764000000400 dt=200 state=running phase=walk step=3 record=tick " +
+					"order=attack note=line%0Abreak say= #T"},
+			want: []int{1}, skipped: 1,
+		},
+	}
+	for name, c := range cases {
+		next := rowSeq(c.rows[len(c.rows)-1])
+		r := oneReply(append(append([]string{"run-begin #T"}, decisionsHeader(len(c.rows), 0, next, "no")),
+			append(c.rows, decisionsEnd(len(c.rows)+1, next, "no"))...)...)
+		pull, err := NewClient(r).PullDecisions(context.Background(), "Tankbot", 0, false, 0)
+		if err != nil {
+			t.Fatalf("%s: PullDecisions: %v", name, err)
+		}
+		if pull.Skipped != c.skipped || len(pull.Rows) != len(c.want) {
+			t.Fatalf("%s: %d row(s), %d skipped, want %d/%d", name, len(pull.Rows), pull.Skipped, len(c.want), c.skipped)
+		}
+		for i, seq := range c.want {
+			if pull.Rows[i].Seq != seq {
+				t.Fatalf("%s: row %d seq=%d, want %d", name, i, pull.Rows[i].Seq, seq)
+			}
 		}
 	}
 }

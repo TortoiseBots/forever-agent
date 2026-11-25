@@ -84,7 +84,7 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 	navmeshDir := fs.String("navmesh", "", "mmaps folder for the live entry walk")
 	dry := fs.Bool("dry", false, "run the watch machine against the scripted world (no network)")
 	pullDecisions := false
-	fs.Var(onOffFlag{v: &pullDecisions, name: "--decisions-pull"}, "decisions-pull", "pull the module's decision rows of the run once it has ended, into <run_id>.decisions.jsonl beside the record (on or off; needs --out)")
+	fs.Var(onOffFlag{v: &pullDecisions, name: "--decisions-pull"}, "decisions-pull", "read the live run's decision rows on an interval and once more before the stop, into <run_id>.decisions.jsonl beside the record (on or off; needs --out)")
 	var layoutPath string
 	if raid {
 		fs.StringVar(&layoutPath, "layout", "", "raid layout file: one bot per line, its name and the subgroup 1-8 it is moved to before PREPARE (optional)")
