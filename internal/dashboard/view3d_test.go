@@ -60,6 +60,9 @@ func view3DPoller(t *testing.T) (*Poller, *fakeScene) {
 	return p, src
 }
 
+// mapIs says whether an answer's map is the wanted one: a nil map is "unset", and map 0 is a real map.
+func mapIs(m *uint32, want uint32) bool { return m != nil && *m == want }
+
 func getJSON(t *testing.T, h http.Handler, url string) (int, []byte) {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodGet, url, nil)
@@ -255,12 +258,24 @@ func TestView3DSceneOnARealNavmesh(t *testing.T) {
 // writeRecord writes one record folder with a small trace: a party of one, one hostile, a chat line and an end.
 func writeRecord(t *testing.T, root, name string) string {
 	t.Helper()
+	return writeRecordAt(t, root, name, 1700000000, 389)
+}
+
+// writeRecordOnMap is writeRecord with another map id: map 0 is a real map.
+func writeRecordOnMap(t *testing.T, root, name string, mapID uint32) string {
+	t.Helper()
+	return writeRecordAt(t, root, name, 1700000000, mapID)
+}
+
+// writeRecordAt writes the same trace with a chosen start time and map id.
+func writeRecordAt(t *testing.T, root, name string, startUnix int64, mapID uint32) string {
+	t.Helper()
 	dir := filepath.Join(root, name)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	lines := []string{
-		`{"v":1,"k":"header","run":"` + name + `","src":"agent","t":0,"schema":"bt-trace","scope":"party","start_unix":1700000000,"map":389,"caps":["facing"]}`,
+		fmt.Sprintf(`{"v":1,"k":"header","run":%q,"src":"agent","t":0,"schema":"bt-trace","scope":"party","start_unix":%d,"map":%d,"caps":["facing"]}`, name, startUnix, mapID),
 		`{"v":1,"k":"party","run":"` + name + `","src":"agent","t":0,"g":"0x01","name":"Tank","lead":true,"class":"warrior","role":"tank"}`,
 		`{"v":1,"k":"party","run":"` + name + `","src":"agent","t":0,"g":"0x02","name":"Healer","class":"priest"}`,
 		`{"v":1,"k":"mobs","run":"` + name + `","src":"agent","t":0,"g":"0xAA","name":"Scorpid","entry":1,"level":3}`,
@@ -316,7 +331,7 @@ func TestView3DRecordsAndReplay(t *testing.T) {
 	if err := json.Unmarshal(body, &rep); err != nil {
 		t.Fatal(err)
 	}
-	if rep.Mode != "replay" || rep.Map != 389 || rep.Duration != 12.5 || len(rep.Frames) != 2 {
+	if rep.Mode != "replay" || !mapIs(rep.Map, 389) || rep.Duration != 12.5 || len(rep.Frames) != 2 {
 		t.Fatalf("%+v", rep)
 	}
 	u := rep.Frames[0].Units
@@ -403,7 +418,7 @@ func TestView3DLiveFrame(t *testing.T) {
 	if err := json.Unmarshal(body, &ans); err != nil {
 		t.Fatal(err)
 	}
-	if ans.State != "live" || ans.Map != 389 || len(ans.Units) != 3 {
+	if ans.State != "live" || !mapIs(ans.Map, 389) || len(ans.Units) != 3 {
 		t.Fatalf("%+v", ans)
 	}
 	if ans.Units[0].Kind != "agent" || ans.Units[0].Class != "warrior" || ans.Units[0].MaxHP != 5000 {
@@ -438,6 +453,142 @@ func TestView3DNothingLive(t *testing.T) {
 	code, body := getJSON(t, h, "/api/view3d/live")
 	if code != http.StatusServiceUnavailable || !strings.Contains(string(body), "no-serve") {
 		t.Fatalf("%d: %s", code, body)
+	}
+}
+
+func TestView3DMapZero(t *testing.T) {
+	p, _ := view3DPoller(t)
+	h := Handler(p, "", nil)
+
+	// A scene on map 0: the answer names map 0, which is not "unset".
+	code, body := getJSON(t, h, "/api/view3d/scene?map=0&tiles=30:30")
+	if code != http.StatusOK || !strings.Contains(string(body), `"map":0`) {
+		t.Fatalf("scene on map 0: %d %s", code, body)
+	}
+
+	// A live frame on map 0 carries it too.
+	const id = "127.0.0.1:8774"
+	p.setLiveFrame(id, newLiveFrameCache(time.Now(), 0, nil, serveclient.Party{}, false, serveclient.CommanderResult{}, false))
+	code, body = getJSON(t, h, "/api/view3d/live?id="+id)
+	if code != http.StatusOK || !strings.Contains(string(body), `"map":0`) {
+		t.Fatalf("live on map 0: %d %s", code, body)
+	}
+
+	// No serve is no map, never map 0: the page keeps the scene it already has.
+	p.dropLiveFrame(id)
+	if _, body := getJSON(t, h, "/api/view3d/live?id="+id); strings.Contains(string(body), `"map"`) {
+		t.Fatalf("a no-serve answer carries a map: %s", body)
+	}
+
+	// A replay whose header names map 0.
+	root := t.TempDir()
+	writeRecordOnMap(t, root, "run-zero", 0)
+	p2 := NewPoller(Options{TestsDir: t.TempDir(), ConfigDir: t.TempDir(), RecordsDir: root})
+	h2 := Handler(p2, "", nil)
+	code, body = getJSON(t, h2, "/api/view3d/replay/run-zero")
+	if code != http.StatusOK || !strings.Contains(string(body), `"map":0`) {
+		t.Fatalf("replay on map 0: %d %s", code, body)
+	}
+	var rep view3DAnswer
+	if err := json.Unmarshal(body, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if !mapIs(rep.Map, 0) {
+		t.Fatalf("replay map: %v", rep.Map)
+	}
+}
+
+func TestView3DReplayReadsAreLimitedAndCached(t *testing.T) {
+	s := newView3DReplayService()
+	var (
+		mu    sync.Mutex
+		at    int
+		peak  int
+		loads int
+	)
+	load := func(key string) func() ([]byte, string) {
+		return func() ([]byte, string) {
+			mu.Lock()
+			at++
+			if at > peak {
+				peak = at
+			}
+			loads++
+			mu.Unlock()
+			time.Sleep(20 * time.Millisecond)
+			mu.Lock()
+			at--
+			mu.Unlock()
+			return []byte(`{"key":"` + key + `"}`), ""
+		}
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		key := fmt.Sprintf("k%d", i)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if b, errText := s.read(key, load(key)); b == nil || errText != "" {
+				t.Errorf("%s: %q %q", key, b, errText)
+			}
+		}()
+	}
+	wg.Wait()
+	mu.Lock()
+	gotPeak, gotLoads := peak, loads
+	mu.Unlock()
+	if gotPeak != view3DReplayReads {
+		t.Fatalf("%d replay reads ran at once, want %d", gotPeak, view3DReplayReads)
+	}
+	if gotLoads != 6 {
+		t.Fatalf("%d loads for 6 keys", gotLoads)
+	}
+
+	// One key runs through load once however many ask at once; the rest read the cached answer.
+	wg.Add(8)
+	for i := 0; i < 8; i++ {
+		go func() {
+			defer wg.Done()
+			if _, errText := s.read("shared", load("shared")); errText != "" {
+				t.Errorf("shared: %q", errText)
+			}
+		}()
+	}
+	wg.Wait()
+	mu.Lock()
+	after := loads
+	mu.Unlock()
+	if after != gotLoads+1 {
+		t.Fatalf("the shared key was loaded %d times, want once", after-gotLoads)
+	}
+}
+
+func TestView3DRecordsKeepTheNewestBeforeTheCut(t *testing.T) {
+	root := t.TempDir()
+	// The newest records sort last by folder name: a cut before the sort would drop them.
+	for i := 0; i <= view3DRecordsMax; i++ {
+		writeRecordAt(t, root, fmt.Sprintf("rec-%03d", i), 1700000000+int64(i), 389)
+	}
+	p := NewPoller(Options{TestsDir: t.TempDir(), ConfigDir: t.TempDir(), RecordsDir: root})
+	h := Handler(p, "", nil)
+	code, body := getJSON(t, h, "/api/view3d/records")
+	if code != http.StatusOK {
+		t.Fatalf("%d: %s", code, body)
+	}
+	var list struct {
+		Records []view3DRecord `json:"records"`
+	}
+	if err := json.Unmarshal(body, &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Records) != view3DRecordsMax {
+		t.Fatalf("%d records, want %d", len(list.Records), view3DRecordsMax)
+	}
+	if got, want := list.Records[0].Name, fmt.Sprintf("rec-%03d", view3DRecordsMax); got != want {
+		t.Fatalf("newest record is %q, want %q", got, want)
+	}
+	if got, want := list.Records[len(list.Records)-1].Name, "rec-001"; got != want {
+		t.Fatalf("oldest listed record is %q, want %q", got, want)
 	}
 }
 

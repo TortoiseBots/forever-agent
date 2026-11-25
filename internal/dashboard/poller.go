@@ -62,6 +62,7 @@ type Poller struct {
 	liveAsked sync.WaitGroup           // the map asks in flight (see live_map.go's waitLiveMaps)
 
 	liveFrames map[string]*liveFrameCache // agent id -> a Forever slot's last units answer (view3d.go)
+	replays    *view3DReplayService       // the 3D view's replay read limit and cache (view3d.go)
 }
 
 // NewPoller applies the defaults.

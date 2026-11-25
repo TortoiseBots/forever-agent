@@ -140,8 +140,10 @@ async function loadScene(focus) {
   state.sceneKey = url;
   try {
     const json = await getJSON(url);
+    if (state.sceneKey !== url) return; // a newer scene was asked for while this one was in flight
     buildTiles(json, url);
   } catch (err) {
+    if (state.sceneKey !== url) return; // a newer scene was asked for while this one was in flight
     state.sceneKey = "";
     setStatus(String(err.message || err), true);
   }
@@ -224,7 +226,7 @@ function updateMarkers(units) {
       rec = makeMarker(m);
     }
     rec.group.position.set(m.x, m.y, m.z);
-    rec.group.rotation.y = Math.atan2(-m.dirZ, m.dirX);
+    rec.group.rotation.y = Core.facingYaw(m.dirX, m.dirZ);
     rec.body.material.opacity = m.dead ? 0.3 : 1;
     rec.body.material.transparent = m.dead;
     const frac = Core.fraction(m.hp, m.max_hp);
@@ -313,8 +315,9 @@ async function getJSON(url, signal) {
 function applyAnswer(raw) {
   const ans = Core.normalizeAnswer(raw);
   state.answer = ans;
-  if (ans.map && ans.map !== state.map) {
-    state.map = ans.map;
+  const map = Core.answerMap(state.map, ans);
+  if (map != null && map !== state.map) {
+    state.map = map;
     state.sceneKey = "";
     removeMarkers();
     loadScene(state.focus);
@@ -382,7 +385,7 @@ async function loadReplay(name) {
     $("timeline").max = String(norm.duration);
     $("timeline").value = "0";
     $("play").textContent = "Pause";
-    state.map = norm.map || state.map;
+    state.map = Core.answerMap(state.map, norm);
     state.focusSet = false;
     state.sceneKey = "";
     // The first frame places the focus; its agents and the scene then load around them.

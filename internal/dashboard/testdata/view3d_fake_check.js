@@ -75,6 +75,10 @@ server.listen(0, "127.0.0.1", async () => {
     assert.strictEqual(mk[0].kind, "agent");
     assert.strictEqual(ans.chat[0].text, "hello");
 
+    // Map 0 is a real map: a frame on it moves the page, and a frame without one leaves the page's map alone.
+    assert.strictEqual(C.answerMap(389, C.normalizeAnswer({ mode: "live", map: 0 })), 0);
+    assert.strictEqual(C.answerMap(389, C.normalizeAnswer({ mode: "live", state: "no-serve", reason: "no serve" })), 389);
+
     // A replay: the timeline reads two frames, and the middle of the walk is a point on the line.
     const rep = C.normalizeAnswer(await get(C.replayURL("run-a")));
     assert.strictEqual(rep.duration, 2);

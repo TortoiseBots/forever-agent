@@ -13,8 +13,8 @@
   };
   const RAD = Math.PI / 180;
 
-  // Game coordinates (x north, y west, z up) to the scene's (x north, y up, z south): north is +x, west is -z,
-  // so the first-person habit of looking down +z is south. One unit is one yard.
+  // Game coordinates (x north, y west, z up) to the scene's (x north, y up, z east): north is +x and west is -z,
+  // so +z is east. One unit is one yard.
   function worldPos(x, y, z) { return { x: x, y: z, z: -y }; }
 
   // The grid tile holding a game position, as the core names tiles (32 - x/533, 32 - y/533).
@@ -60,9 +60,27 @@
         id: String(u.id), name: u.name || "?", kind: KINDS[u.kind] ? u.kind : "neutral", color: KINDS[u.kind] || KINDS.neutral,
         x: p.x, y: p.y, z: p.z, hp: u.hp || 0, max_hp: u.max_hp || 0, power: u.power || 0, max_power: u.max_power || 0,
         target: u.target || "", cast: u.cast || "", dead: !!u.dead,
-        dirX: Math.cos(a), dirZ: Math.sin(a),
+        dirX: Math.cos(a), dirZ: -Math.sin(a),
       };
     });
+  }
+
+  // The yaw of a three.js rotation.y that turns the scene's +x onto a direction: a yaw t maps +x to
+  // (cos t, 0, -sin t), so t = atan2(-dirZ, dirX).
+  function facingYaw(dirX, dirZ) { return Math.atan2(-dirZ, dirX); }
+
+  // A number from a JSON field, or null when it is missing or not a number: map 0 is a real map, so only an
+  // absent map is "unset".
+  function numberOrNull(v) {
+    const n = v == null || v === "" ? NaN : +v;
+    return Number.isFinite(n) ? n : null;
+  }
+
+  // The map a frame belongs to: the answer's map, or the page's current one when the answer carries none.
+  function answerMap(prev, ans) {
+    const m = ans ? numberOrNull(ans.map) : null;
+    if (m != null) return m;
+    return prev == null ? null : prev;
   }
 
   // Health as a 0..1 fraction (0 when the maximum is unknown).
@@ -165,7 +183,7 @@
     frames.sort((x, y) => x.t - y.t);
     return {
       mode: a.mode === "replay" ? "replay" : "live", state: a.state || (a.mode === "replay" ? "live" : ""),
-      reason: a.reason || "", agent: a.agent || "", map: +a.map || 0, at: a.at || "",
+      reason: a.reason || "", agent: a.agent || "", map: numberOrNull(a.map), at: a.at || "",
       duration: +a.duration || 0, t: +a.t || 0, units: Array.isArray(a.units) ? a.units : [], frames,
       chat: Array.isArray(a.chat) ? a.chat : [], events: Array.isArray(a.events) ? a.events : [], notes: Array.isArray(a.notes) ? a.notes : [],
     };
@@ -187,15 +205,15 @@
     });
     let lo = Infinity, hi = -Infinity;
     for (const t of tiles) if (!t.missing && t.vertices.length) { lo = Math.min(lo, t.min_z); hi = Math.max(hi, t.max_z); }
-    return { map: +s.map || 0, format: s.format || "", tiles, triangles: +s.triangles || 0, truncated: !!s.truncated,
+    return { map: numberOrNull(s.map), format: s.format || "", tiles, triangles: +s.triangles || 0, truncated: !!s.truncated,
       note: s.note || "", low: isFinite(lo) ? lo : 0, high: isFinite(hi) ? hi : 0 };
   }
 
   // The nine commands of the page's status line, so the page and its check agree on the words.
   function statusText(mode, state, reason, map) {
-    if (mode === "replay") return "Replay of a recorded run" + (map ? " (map " + map + ")" : "");
+    if (mode === "replay") return "Replay of a recorded run" + (map != null ? " (map " + map + ")" : "");
     switch (state) {
-      case "live": return "Live" + (map ? " (map " + map + ")" : "");
+      case "live": return "Live" + (map != null ? " (map " + map + ")" : "");
       case "no-serve": return "No serve: " + (reason || "the serve is not answering");
       case "waiting": return "Waiting: " + (reason || "the serve has not answered yet");
       default: return reason || "Live";
@@ -203,7 +221,7 @@
   }
 
   const api = { TILE_YARDS, TILE_GRID, MAX_TILES, SPEEDS, KINDS, worldPos, tileOf, tileExtent, selectTiles, sceneURL, liveURL,
-    recordsURL, replayURL, markerModel, fraction, interpolate, shortAngle, newTimeline, setRate, seek, playPause, advance,
+    recordsURL, replayURL, markerModel, facingYaw, answerMap, fraction, interpolate, shortAngle, newTimeline, setRate, seek, playPause, advance,
     cleanText, setText, normalizeAnswer, normalizeScene, statusText, pollDue };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.View3DCore = api;
 })(typeof self !== "undefined" ? self : this);

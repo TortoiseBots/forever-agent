@@ -32,12 +32,22 @@ assert.strictEqual(C.liveURL(""), "/api/view3d/live");
 assert.strictEqual(C.recordsURL(), "/api/view3d/records");
 assert.strictEqual(C.replayURL("run-a"), "/api/view3d/replay/run-a");
 
-// markers: scene coordinates, the kind's colour and the facing as a unit vector (0 is north, pi/2 is west)
+// markers: scene coordinates, the kind's colour and the facing as a unit vector. A facing of 0 is north and grows
+// to the west; the scene maps a game position (x, y, z) to (x, z, -y), so north is +x and west is -z.
 let m = C.markerModel([{ id: "0x01", name: "Tank", kind: "agent", x: 100, y: -200, z: 30, facing: Math.PI / 2, hp: 5, max_hp: 10 }]);
 close(m[0].x, 100); close(m[0].y, 30); close(m[0].z, 200);
-close(m[0].dirX, 0); close(m[0].dirZ, 1);
+close(m[0].dirX, Math.cos(Math.PI / 2)); close(m[0].dirZ, -Math.sin(Math.PI / 2)); // pi/2 is west: scene -z
+const north = C.markerModel([{ id: "0x02", kind: "agent", facing: 0 }])[0];
+close(north.dirX, 1); close(north.dirZ, 0); // 0 is north: scene +x
 assert.strictEqual(m[0].color, C.KINDS.agent);
 assert.strictEqual(C.markerModel([{ id: "x", kind: "nonsense" }])[0].kind, "neutral");
+// the yaw of a three.js rotation.y: it turns +x to (cos yaw, 0, -sin yaw), so it must land on the facing
+for (const facing of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) {
+  const u = C.markerModel([{ id: "u", kind: "agent", facing }])[0];
+  const yaw = C.facingYaw(u.dirX, u.dirZ);
+  close(Math.cos(yaw), Math.cos(facing));
+  close(-Math.sin(yaw), -Math.sin(facing));
+}
 
 // interpolation: a unit's place and health between two frames, a unit that appears late, and the clamped ends
 const frames = [
@@ -96,6 +106,15 @@ assert.strictEqual(el.innerHTML, null, "setText must never touch innerHTML");
 const ans = C.normalizeAnswer({ mode: "replay", frames: [{ t: 5, units: [{ id: "a" }] }, { t: "1", units: [] }] });
 assert.strictEqual(ans.mode, "replay"); assert.strictEqual(ans.frames.length, 2); assert.strictEqual(ans.frames[0].t, 1);
 assert.deepStrictEqual(C.normalizeAnswer(null).units, []);
+// map 0 is a real map: only an answer without a map is unset (null), and it leaves the page's map alone
+assert.strictEqual(C.normalizeAnswer({ mode: "live", map: 0 }).map, 0);
+assert.strictEqual(C.normalizeAnswer({ mode: "live" }).map, null);
+assert.strictEqual(C.normalizeAnswer({ mode: "live", map: "389" }).map, 389);
+assert.strictEqual(C.answerMap(null, { map: 0 }), 0, "map 0 is a map, not unset");
+assert.strictEqual(C.answerMap(389, { map: 0 }), 0);
+assert.strictEqual(C.answerMap(389, {}), 389, "an answer without a map keeps the current one");
+assert.strictEqual(C.answerMap(389, C.normalizeAnswer({ mode: "no-serve" })), 389);
+assert.ok(C.statusText("live", "live", "", 0).includes("(map 0)"));
 const sc = C.normalizeScene({ map: 389, tiles: [{ x: 1, y: 2, vertices: [0, 0, -5, 0, 1, 3], indices: [0, 1, 2] }, { x: 2, y: 2, missing: true }] });
 assert.strictEqual(sc.low, -5); assert.strictEqual(sc.high, 3); assert.strictEqual(sc.tiles[1].missing, true);
 assert.strictEqual(C.statusText("live", "no-serve", "no answer", 389), "No serve: no answer");

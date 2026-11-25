@@ -52,6 +52,14 @@ const (
 	// view3DBuilds bounds the scene builds running at once: a build is a navmesh read and a JSON encode of up to
 	// the triangle budget.
 	view3DBuilds = 2
+	// view3DReplayReads bounds the replay reads running at once: each holds up to view3DReplayMax of trace plus
+	// its parse, so unbounded parallel reads of one page would be a memory spike.
+	view3DReplayReads = 2
+	// view3DReplayCacheEntries and view3DReplayCacheBytes bound the built replay answers kept; one answer larger
+	// than view3DReplayCacheEntryMax is served but not kept.
+	view3DReplayCacheEntries  = 4
+	view3DReplayCacheBytes    = 24 << 20
+	view3DReplayCacheEntryMax = 8 << 20
 	// view3DLiveStale is how old the last serve answer may be before the live view says no serve.
 	view3DLiveStale = 15 * time.Second
 	// view3DReplayFrames is the most frames a replay answer carries; longer records are thinned evenly (the
@@ -140,11 +148,13 @@ type view3DLine struct {
 // view3DAnswer is what /api/view3d/live and /api/view3d/replay answer. Mode is "live" or "replay". A live
 // answer without a serve carries State "no-serve" or "waiting" and a Reason, never an empty scene with no word.
 type view3DAnswer struct {
-	Mode     string        `json:"mode"`
-	State    string        `json:"state,omitempty"`
-	Reason   string        `json:"reason,omitempty"`
-	Agent    string        `json:"agent,omitempty"`
-	Map      uint32        `json:"map"`
+	Mode   string `json:"mode"`
+	State  string `json:"state,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Agent  string `json:"agent,omitempty"`
+	// Map is null (left out) when the answer names no map, as a live answer without a serve does. Map 0 is a
+	// real map, so only a missing field is "unset".
+	Map      *uint32       `json:"map,omitempty"`
 	At       string        `json:"at,omitempty"`
 	Duration float64       `json:"duration,omitempty"`
 	Units    []view3DUnit  `json:"units,omitempty"`
@@ -402,6 +412,82 @@ func (s *view3DSceneService) scene(mapID uint32, tiles [][2]int) (body []byte, e
 	return b, errText
 }
 
+// view3DReplayService limits and caches replay reads: at most view3DReplayReads run at once, and the last
+// view3DReplayCacheEntries answers are kept, so a page that reopens one record does not read and parse it again.
+type view3DReplayService struct {
+	sem   chan struct{}
+	mu    sync.Mutex
+	m     map[string][]byte
+	order []string
+	bytes int
+	loads map[string]*view3DReplayLoad // a load in flight by key, so two equal asks share one read
+}
+
+// view3DReplayLoad is one replay read in flight: the answer or its error, and a channel closed when it lands.
+type view3DReplayLoad struct {
+	done chan struct{}
+	body []byte
+	err  string
+}
+
+// newView3DReplayService makes an empty replay cache.
+func newView3DReplayService() *view3DReplayService {
+	return &view3DReplayService{sem: make(chan struct{}, view3DReplayReads), m: map[string][]byte{},
+		loads: map[string]*view3DReplayLoad{}}
+}
+
+// read answers one replay body, running load under the read limit unless the key is cached. key names the
+// trace file's identity (name, size, modification time), so a changed file is read again.
+func (s *view3DReplayService) read(key string, load func() ([]byte, string)) ([]byte, string) {
+	s.mu.Lock()
+	if b, ok := s.m[key]; ok {
+		s.mu.Unlock()
+		return b, ""
+	}
+	if in := s.loads[key]; in != nil {
+		s.mu.Unlock()
+		<-in.done
+		return in.body, in.err
+	}
+	in := &view3DReplayLoad{done: make(chan struct{})}
+	s.loads[key] = in
+	s.mu.Unlock()
+
+	s.sem <- struct{}{}
+	b, errText := load()
+	<-s.sem
+
+	s.mu.Lock()
+	in.body, in.err = b, errText
+	delete(s.loads, key)
+	if b != nil && len(b) <= view3DReplayCacheEntryMax {
+		if _, ok := s.m[key]; !ok {
+			s.m[key] = b
+			s.order = append(s.order, key)
+			s.bytes += len(b)
+			for len(s.order) > view3DReplayCacheEntries || s.bytes > view3DReplayCacheBytes {
+				old := s.order[0]
+				s.bytes -= len(s.m[old])
+				delete(s.m, old)
+				s.order = s.order[1:]
+			}
+		}
+	}
+	close(in.done)
+	s.mu.Unlock()
+	return b, errText
+}
+
+// replayService is the replay limit and cache in force.
+func (p *Poller) replayService() *view3DReplayService {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.replays == nil {
+		p.replays = newView3DReplayService()
+	}
+	return p.replays
+}
+
 // serveView3DScene answers GET /api/view3d/scene?map=<id>&tiles=<r>:<c>,...
 func serveView3DScene(w http.ResponseWriter, r *http.Request, p *Poller) {
 	svc := p.sceneService()
@@ -545,7 +631,8 @@ func serveView3DLive(w http.ResponseWriter, r *http.Request, p *Poller) {
 			Reason: "the serve has not answered for " + time.Since(f.at).Round(time.Second).String() + ": no live positions"})
 		return
 	}
-	ans := view3DAnswer{Mode: "live", State: "live", Agent: id, Map: f.mapID,
+	mapID := f.mapID
+	ans := view3DAnswer{Mode: "live", State: "live", Agent: id, Map: &mapID,
 		At: f.at.UTC().Format(time.RFC3339), Units: liveUnits(f)}
 	ans.Chat, ans.Events = p.liveLines(id)
 	writeAny(w, http.StatusOK, ans)
@@ -657,9 +744,6 @@ func serveView3DRecords(w http.ResponseWriter, r *http.Request, p *Poller) {
 	}
 	out := make([]view3DRecord, 0, 16)
 	for _, e := range entries {
-		if len(out) >= view3DRecordsMax {
-			break
-		}
 		name := e.Name()
 		if strings.HasPrefix(name, ".") || !view3DRecordName.MatchString(name) {
 			continue
@@ -670,7 +754,16 @@ func serveView3DRecords(w http.ResponseWriter, r *http.Request, p *Poller) {
 		}
 		out = append(out, rec)
 	}
-	slices.SortStableFunc(out, func(a, b view3DRecord) int { return strings.Compare(b.Start, a.Start) })
+	// The newest first, then cut: a cut while reading the folder in name order would drop the newest records.
+	slices.SortStableFunc(out, func(a, b view3DRecord) int {
+		if c := strings.Compare(b.Start, a.Start); c != 0 {
+			return c
+		}
+		return strings.Compare(a.Name, b.Name)
+	})
+	if len(out) > view3DRecordsMax {
+		out = out[:view3DRecordsMax]
+	}
 	writeAny(w, http.StatusOK, map[string]any{"records": out})
 }
 
@@ -796,27 +889,42 @@ func serveView3DReplay(w http.ResponseWriter, r *http.Request, p *Poller) {
 		jsonError(w, http.StatusRequestEntityTooLarge, "the run trace is larger than %d MiB", view3DReplayMax>>20)
 		return
 	}
-	data, err := io.ReadAll(io.LimitReader(f, view3DReplayMax+1))
+	st, err := f.Stat()
 	if err != nil {
 		jsonError(w, http.StatusUnprocessableEntity, "run trace: %v", err)
 		return
 	}
-	if int64(len(data)) > view3DReplayMax {
-		jsonError(w, http.StatusRequestEntityTooLarge, "the run trace is larger than %d MiB", view3DReplayMax>>20)
+	key := fmt.Sprintf("%s|%d|%d", name, st.Size(), st.ModTime().UnixNano())
+	body, errText := p.replayService().read(key, func() ([]byte, string) {
+		data, err := io.ReadAll(io.LimitReader(f, view3DReplayMax+1))
+		if err != nil {
+			return nil, err.Error()
+		}
+		if int64(len(data)) > view3DReplayMax {
+			return nil, fmt.Sprintf("the run trace is larger than %d MiB", view3DReplayMax>>20)
+		}
+		tr, err := trace.Parse(name, data)
+		if err != nil {
+			return nil, err.Error()
+		}
+		b, err := json.Marshal(buildReplayAnswer(name, tr))
+		if err != nil {
+			return nil, err.Error()
+		}
+		return b, ""
+	})
+	if body == nil {
+		jsonError(w, http.StatusUnprocessableEntity, "run trace: %s", errText)
 		return
 	}
-	tr, err := trace.Parse(name, data)
-	if err != nil {
-		jsonError(w, http.StatusUnprocessableEntity, "run trace: %v", err)
-		return
-	}
-	writeAny(w, http.StatusOK, buildReplayAnswer(name, tr))
+	writeJSON(w, body)
 }
 
 // buildReplayAnswer turns a parsed trace into the replay contract: evenly thinned frames, the party's names,
 // the chat and the run's events.
 func buildReplayAnswer(name string, tr *trace.File) view3DAnswer {
-	ans := view3DAnswer{Mode: "replay", Map: tr.Header.Map, Duration: tr.Seconds()}
+	mapID := tr.Header.Map
+	ans := view3DAnswer{Mode: "replay", Map: &mapID, Duration: tr.Seconds()}
 	if tr.Header.StartUnix > 0 {
 		ans.At = time.Unix(tr.Header.StartUnix, 0).UTC().Format(time.RFC3339)
 	}

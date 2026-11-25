@@ -28,12 +28,13 @@ the page's behalf.
 ## Coordinates
 
 Positions are the game's: x north, y west, z up, one unit a yard. A renderer with y up maps them
-`scene = (x, z, -y)`; north is `+x`, west is `-z`. A facing of 0 is north and grows to the west, so the direction in
-that frame is `(cos facing, 0, sin facing)`.
+`scene = (x, z, -y)`; north is `+x`, west is `-z` (so `+z` is east). A facing of 0 is north and grows to the west,
+so the direction in that frame is `(cos facing, 0, -sin facing)`.
 
 ## Scene: `GET /api/view3d/scene?map=<id>&tiles=<row>:<col>,...`
 
-The walkable surface around the focus, one navmesh grid tile at a time. `map` is a number 0-9999. `tiles` names up
+The walkable surface around the focus, one navmesh grid tile at a time. `map` is a number 0-9999; map 0 is a real
+map, and only a missing map is unset. `tiles` names up
 to 49 grid cells of the map's 64 x 64 grid; a cell is written `<row>:<col>`, the two numbers of
 `MMMM_XX_YY.mmtile`, each 0-63. The page picks the 49 cells nearest the agent, asks once, and asks again only when
 that set changes.
@@ -127,9 +128,12 @@ slot that has answered.
 The answer is served from a cache; a page request never makes the dashboard call the agent. The poll rate is the
 poller's own (1.5 s); the page reads at most every 2 s.
 
+`map` is the slot's map, and the field is left out when there is none: map 0 is a real map, so only an absent `map`
+is unset. A map change reloads the scene without a page reload; an answer without a map leaves the scene alone.
+
 `state` is `live` while the last answer is at most 15 s old. Otherwise the route answers HTTP 503 with
 `{"mode":"live","state":"no-serve","reason":"..."}` (`state` is `waiting` when the slot has not answered yet), and
-the page clears its markers. A map change in `map` reloads the scene without a page reload.
+the page clears its markers.
 
 ## Replay: `GET /api/view3d/records` and `GET /api/view3d/replay/<record>`
 
@@ -140,7 +144,8 @@ The picker lists the run record folders under `--records-dir` (default `~/foreve
 ```
 
 A record is a folder holding one trace file of the `bt-trace` JSONL schema (the file `forever dungeon-watch --out`
-writes): `<name>.jsonl` when present, else the folder's only `.jsonl` file. Up to 400 folders are listed.
+writes): `<name>.jsonl` when present, else the folder's only `.jsonl` file. The list is sorted newest first and the
+newest 400 folders are listed.
 
 `GET /api/view3d/replay/<record>` reads that trace and answers its frames:
 
@@ -159,6 +164,9 @@ writes): `<name>.jsonl` when present, else the folder's only `.jsonl` file. Up t
 * At most 3000 frames are answered; a longer record is thinned evenly and `notes` says so. The page interpolates
   positions, facing and health between neighbouring frames.
 * `chat` and `events` are the trace's event lines, split by kind; a line the record does not carry is absent.
+* A parsed replay is cached per trace file (name, size and modification time), at most two replays are read at
+  once and equal asks share one read, so reopening a record costs no read and parallel asks cannot hold the whole
+  trace a page asks for at once.
 * Errors: 404 for a name that is not a record name (letters, digits, dot, underscore and dash, no leading dot and no
   `..`), for a folder outside `--records-dir` and for a folder with no trace; 413 above 48 MiB; 422 when the trace
   cannot be parsed.
@@ -174,10 +182,12 @@ checked to be a folder under the root, so neither `..` nor a symlink that points
 | Triangles per scene answer | `View3DMaxTriangles`, 240000 |
 | Scene answers cached | 32 (map and tile set), 32 MiB in all; one answer over 8 MiB is served but not kept |
 | Scene builds at once | 2, equal requests share one build |
+| Replay answers cached | 4 (trace name, size and modification time), 24 MiB in all; one answer over 8 MiB is served but not kept |
+| Replay reads at once | 2 |
 | Live answer considered fresh | 15 s |
 | Replay frames per answer | 3000 |
 | Trace file read | 48 MiB |
-| Record folders listed | 400 |
+| Record folders listed | 400, the newest by start time |
 | Map id | 0-9999 |
 | Tile row and column | 0-63 |
 
