@@ -43,7 +43,10 @@ type PlayVote struct {
 //
 // The bot table is GoldenOwner's: a bot listed there is online and in the party once `.bot add` answered, and its
 // map changes when the run summons it. A bot stands at the agent's side once it was told to follow (or was summoned)
-// unless Stuck names it; before that it stands where BotPos puts it, or at the agent's side.
+// unless Stuck names it; before that it stands where BotPos puts it, or at the agent's side. With TrailYd set, the
+// party TRAILS: a bot not Stuck stands TrailYd behind the agent along the path the agent walked, and moves only after
+// the agent moved (a live tank's follow leaves a body behind, which is why the sight search steps the agent forward at
+// all).
 type PlayFake struct {
 	*GoldenOwner
 	// Module is the fake bot module over the same bot table: the Owner port of a play run.
@@ -63,6 +66,12 @@ type PlayFake struct {
 	BotHP  map[string][2]int
 	// Moved names the bots that were told to follow or were summoned: they stand at the agent's side from then on.
 	Moved map[string]bool
+	// TrailYd, when positive, is how far behind the agent a bot told to follow stands (along the agent's own walked
+	// path), instead of at its side: the fake's tank really trails, so a pull that leaves it behind is exercised.
+	TrailYd float64
+	// trail is the agent's walked path, from where the first trailing bot was told to follow: the line a trailing bot
+	// stands on. It grows only when the agent walks (a trailing bot moves only after it moved).
+	trail []Vec3
 	// Stuck names the bots whose follow order does not move them: the run has to summon those.
 	Stuck map[string]bool
 	// NoAnswer names the bots (by lower-cased name, like Moved) that do not answer the corpse-run whisper: they stay
@@ -629,7 +638,8 @@ func (m *PlayModule) Logout(ctx context.Context, name string) (botcmd.Reply, err
 	return m.GoldenOwner.Logout(ctx, name)
 }
 
-// Follow is `.bot follow`: a bot that is not Stuck moves to the agent's side.
+// Follow is `.bot follow`: a bot that is not Stuck moves to the agent's side (TrailYd puts it on the agent's trail,
+// TrailYd behind: it starts at the side and lags once the agent walks).
 func (m *PlayModule) Follow(ctx context.Context, name string) (botcmd.Reply, error) {
 	m.f.send(botcmd.VerbFollow, name)
 	rep, err := m.GoldenOwner.Follow(ctx, name)
@@ -854,15 +864,39 @@ func (f *PlayFake) botGUID(name string) wire.GUID {
 	return wire.GUID{}
 }
 
-// botPos is where a bot stands: the agent's side once it follows, else its scripted spot.
+// botPos is where a bot stands: on the agent's trail TrailYd behind it when TrailYd is set (the fake's scripted
+// follow lag), at the agent's side once it follows, else its scripted spot.
 func (f *PlayFake) botPos(b *OwnerBot) Vec3 {
-	if f.Moved[strings.ToLower(b.Name)] {
+	key := strings.ToLower(b.Name)
+	if f.TrailYd > 0 && !f.Stuck[key] && len(f.trail) > 0 {
+		return trailBehind(f.trail, f.TrailYd)
+	}
+	if f.Moved[key] {
 		return f.SelfPos
 	}
-	if p, ok := f.BotPos[strings.ToLower(b.Name)]; ok {
+	if p, ok := f.BotPos[key]; ok {
 		return p
 	}
 	return f.SelfPos
+}
+
+// trailBehind is the point yd back along a walked path from its end, the path's start when it is shorter.
+func trailBehind(path []Vec3, yd float64) Vec3 {
+	at := path[len(path)-1]
+	left := yd
+	for i := len(path) - 1; i > 0 && left > 0; i-- {
+		a, b := path[i-1], path[i]
+		seg := dist3(a, b)
+		if seg <= 0 {
+			continue
+		}
+		if seg >= left {
+			return lerpVec(b, a, left/seg)
+		}
+		left -= seg
+		at = a
+	}
+	return at
 }
 
 // FreezeRoster freezes the party roster as it stands: every later Roster answers those rows — what a member was last
@@ -1175,6 +1209,7 @@ func (f *PlayFake) Release() error {
 	f.Released, f.SelfPhase = true, PhaseGhost
 	if p, mapID := f.portal(); p != nil {
 		f.SelfPos, f.GoldenOwner.SelfMap = f.Graveyard, mapID
+		f.trail = nil // a teleport is no walk: a trailing bot starts over from where the agent stands
 	}
 	f.act("release")
 	return nil
@@ -1348,6 +1383,7 @@ func (f *PlayFake) EnterAreaTrigger(id int32) error {
 	}
 	f.SelfPos = f.Route.Entrance
 	f.GoldenOwner.SelfMap = f.Route.Map
+	f.trail = nil // a teleport is no walk: a trailing bot starts over from where the agent stands
 	// The core resurrects a ghost whose corpse is in the instance the moment it arrives (§3.10).
 	if f.SelfPhase == PhaseGhost {
 		f.SelfPhase = PhaseAlive
@@ -1415,6 +1451,18 @@ func (f *PlayFake) Walk(ctx context.Context, pts [][3]float32) error {
 		}
 	}
 	f.SelfPos = Vec3(pts[len(pts)-1])
+	if f.TrailYd > 0 {
+		// The agent's walk is the line a trailing bot follows: the path grows with the agent, never before it. The
+		// trail starts where the walk did, so the bot at the agent's side lags behind as the agent walks on.
+		if len(f.trail) == 0 {
+			f.trail = []Vec3{Vec3(pts[0])}
+		}
+		for _, at := range pts {
+			if v := Vec3(at); dist3(v, f.trail[len(f.trail)-1]) > 0 {
+				f.trail = append(f.trail, v)
+			}
+		}
+	}
 	return nil
 }
 

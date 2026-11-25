@@ -9,7 +9,6 @@ package driver
 
 import (
 	"context"
-	"strings"
 	"testing"
 	"time"
 
@@ -141,29 +140,40 @@ func TestPlayTankSightGoneMemberIsSkipped(t *testing.T) {
 	}
 }
 
-// TestPlayRefusalLeadsTheTankIntoServerSight is the refusalStand bug's case: a tank that trails the agent and stands
-// blind (run 4's tank stood at one point for the whole 60 s of retries). With the server's sight the refusal leads the
-// agent along the path until the TANK sees the skull, so the tank moves, the order is answered, and no fallback pull
-// is taken.
+// recordTankLooks records the from-point of every TANK sight query the run asks, in order.
+func recordTankLooks(f *PlayFake) *[]Vec3 {
+	looks := &[]Vec3{}
+	prev := f.SrvSight
+	f.SrvSight = func(from, to Vec3) bool {
+		if n := len(f.SrvQueries); n > 0 && f.SrvQueries[n-1] == "tank" {
+			*looks = append(*looks, from)
+		}
+		return prev(from, to)
+	}
+	return looks
+}
+
+// TestPlayRefusalLeadsTheTankIntoServerSight is the refusalStand bug's case: a tank that really trails the agent and
+// stands five yards behind it, blind (run 4's tank stood at one point for the whole 60 s of retries). With the
+// server's sight the refusal leads the agent along the path until the TANK sees the skull, so the tank moves with it,
+// the order is answered, and no fallback pull is taken.
 func TestPlayRefusalLeadsTheTankIntoServerSight(t *testing.T) {
 	skull := fightGUID(1)
-	tank := strings.ToLower(playBots[0])
 	var moduleSight [][2]Vec3
 	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) {
 		f.AddUnit(Unit{GUID: skull, Entry: 11320, Pos: Vec3{42, 22, 0}})
 		f.SpawnBosses()
 		f.SightFunc = func(Vec3, Vec3) bool { return true }
-		// The tank starts five yards behind the agent and stays five behind each walk: what the follow does live.
-		f.BotPos[tank] = Vec3{40, 0, 0}
-		f.OnWalk = func(f *PlayFake, to Vec3) {
-			f.BotPos[tank] = Vec3{40, to[1] - 5, 0}
-		}
-		// The module's own sight is the ledge; the server's first answer says the tank sees (its look lags a walk), and
-		// every later one is the ledge's rule, so the first order goes out and is refused.
+		// The tank trails five yards behind the agent, the way a live follow leaves it: south of the ledge the agent's
+		// stand cleared.
+		f.TrailYd = PlayTankBesideYd
+		// The module's own sight is the ledge.
 		f.ModuleSight = func(from, to Vec3) bool {
 			moduleSight = append(moduleSight, [2]Vec3{from, to})
 			return wallAtY(from, to)
 		}
+		// The server's first answer says the tank sees (its look lags a walk), and every later one is the ledge's
+		// rule: the first order goes out and is refused, and the search after it has to move the tank.
 		asked := false
 		f.SrvSight = func(from, to Vec3) bool {
 			if !asked {
@@ -175,16 +185,7 @@ func TestPlayRefusalLeadsTheTankIntoServerSight(t *testing.T) {
 	})
 	rig.ports.ServerSight, rig.ports.Refusals = rig.fake, rig.fake
 	rig.cfg.Out = t.TempDir()
-	tankAt := &rig.fake.SrvQueries
-	seenAt := &[]Vec3{}
-	prev := rig.fake.SrvSight
-	f := rig.fake
-	f.SrvSight = func(from, to Vec3) bool {
-		if len(*tankAt) > 0 && (*tankAt)[len(*tankAt)-1] == "tank" {
-			*seenAt = append(*seenAt, from)
-		}
-		return prev(from, to)
-	}
+	seenAt := recordTankLooks(rig.fake)
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
 	if res.Stop != "clear" {
 		dumpPlay(t, rig)
@@ -211,6 +212,53 @@ func TestPlayRefusalLeadsTheTankIntoServerSight(t *testing.T) {
 	}
 	if len(*seenAt) == 0 || (*seenAt)[len(*seenAt)-1][1] < 11 {
 		t.Fatalf("the tank's last look was from %v; want north of the ledge (y >= 11)", *seenAt)
+	}
+}
+
+// TestPlayTankSightLeadStepsForward is the live run-4 case in miniature: the agent has reached the stand the server
+// cleared, the tank trails five yards behind it and blind, and the search's lead steps must walk the agent FORWARD
+// along the path (never back toward the tank's own stand) until the TANK itself sees the unit. Every look of the tank
+// moves toward the target, and it reaches the ledge well inside PlayTankSightTries.
+func TestPlayTankSightLeadStepsForward(t *testing.T) {
+	skull := fightGUID(1)
+	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: skull, Entry: 11320, Pos: Vec3{42, 22, 0}})
+		f.SpawnBosses()
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		f.TrailYd = PlayTankBesideYd
+		f.SrvSight, f.ModuleSight = wallAtY, wallAtY
+	})
+	rig.ports.ServerSight, rig.ports.Refusals = rig.fake, rig.fake
+	rig.cfg.Out = t.TempDir()
+	looks := recordTankLooks(rig.fake)
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		dumpPlay(t, rig)
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	if len(*looks) < 2 {
+		t.Fatalf("the tank was looked from %d time(s); want the search to move it", len(*looks))
+	}
+	for i := 1; i < len(*looks); i++ {
+		a, b := (*looks)[i-1], (*looks)[i]
+		if b[1] < a[1]-0.01 || b[0] < a[0]-0.01 {
+			t.Fatalf("the tank's look %d was from %v after %v; want each lead step toward the target (north and east)", i, b, a)
+		}
+	}
+	last := (*looks)[len(*looks)-1]
+	if last[1] < 11 {
+		t.Fatalf("the tank's last look was from %v; want north of the ledge (y >= 11) within the tries", last)
+	}
+	if rig.fake.BlindOrders != 0 {
+		t.Fatalf("the module refused %d order(s); want none (the tank was in sight before the first order)", rig.fake.BlindOrders)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 0 {
+		t.Fatalf("%d fallback pulls; want none", n)
+	}
+	if ev := playEvents(t, rig)["pull_sight_stand"]; ev.Ev == "" {
+		t.Fatal("the pull recorded no pull_sight_stand event")
+	} else if tries, _ := ev.D["tries"].(float64); tries >= float64(PlayTankSightTries) {
+		t.Fatalf("the stand search took %v tries; want under the bound %d (a forward lead needs a few)", tries, PlayTankSightTries)
 	}
 }
 
