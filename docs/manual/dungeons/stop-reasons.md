@@ -4,7 +4,7 @@ title: Stop reasons and verdicts
 description: Every reason a Forever dungeon run, watch or walk can end with, and the verdict each kind of report carries.
 tags: [dungeons, reference, errors, verdicts]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:30:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T10:00:00Z }
 sources:
   - id: driver-run
     resource: internal/forever/driver/run.go
@@ -81,7 +81,7 @@ Walking, pulling and fighting:
 | `straggler-behind-pack:<role>` | The commander could not walk back to a straggler behind an uncleared pack within 30 s. | Check the pack and the route. |
 | `boss-missing` | The boss was not at the plan's point within the state's wait (`Boss`, 60 s, plus `wait_s` for a patrolling boss). | Check the boss position and `wait_s`; a boss with no spawn row is summoned by an event and must not be a plain boss. |
 | `boss-not-ready` | Before a boss, after both rest windows, the party was still short: the healer under 50% mana or the tank under 70% health. The gate fails closed, so a tank or healer missing from the roster, dead, a ghost, or without a readable bar counts as short, and so does a healer whose power is not mana. | Let the party rest and pull again; check the named member's power type. |
-| `bosses-alive` | At the end, a boss of the run was still alive (a player run's check of every boss up to `--last-leg`). | The route or the boss order is wrong. |
+| `bosses-alive` | At the end, a boss of the run was still alive (a player run's check of every boss up to `--last-leg`). A boss a fight's view saw dead counts as killed even when it died as an add in another pack's fight. | The route or the boss order is wrong. |
 
 Deaths, wipes and the end:
 
@@ -147,13 +147,18 @@ Deaths, wipes and the end:
 | `exact` | The character could not stand on an `exact` waypoint (1.5 yd). | Check the point's ground. |
 | `avoid` | The character stood in one of the plan's avoid boxes. | The point is wrong; fix the plan or the box. |
 | `straggler` | A bot fell behind a walk for 150 s. | Check the bot. |
-| `pull-no-sight` / `pull-failed` | The pull's last look said the tank could not see the skull / nobody answered the pull. | Check the pack's distance and the geometry. |
+| `pull-no-sight` / `pull-failed` | The tank never saw the marked skull / nobody answered the pull. A leading player's own fallback pull that fails always stops `pull-failed`, never `pull-no-sight`. | Check the pack's distance and the geometry. The trace's `agent_pull_failed` names the fallback's reason (`gone`, `already-pulled`, `reach-timeout`, `health-unknown`, `low-health`, `out-of-reach`, `bring-back`); `agent_pull_skipped` with reason `boss-near` means a plan boss stood within 10 yd of the mob, which is the boss's pull, not the agent's. |
 | `fight` | The character's own fight tick failed. | Check the character's state. |
 | `fight-timeout` | A fight ran over 600 s. | Check the pack. |
 | `rest` | Resting failed. | Check the character's state. |
 | `step:<kind>` | A plan step could not be done; the trace records its leg, index, kind and the reason. | Read the trace's `step_failed` event. |
 | `whisper`, `send` | A line could not be sent (a bad whisper word, or a send error). | Check the module's chat grammar and the link. |
 | `recover`, `recover:path` | The ghost run or the raise failed; `recover:path` means the ghost could not get closer to the portal on a walk. | Check the plan's portal and `entrance_trigger`. |
+
+A player run's pre-boss gate also writes its two readings on every one of its events: `boss_rest`, `boss_rest_again`,
+`boss_rest_end`, `boss_rest_timeout`, `boss_not_ready` and `boss_pull_min_bars` carry `tank_hp` and `healer_mana` —
+the tank's health and the healer's mana in per cent, `-1` when the member or its bar could not be read. Those are the
+numbers the gate decided on, so a `boss-not-ready` can be read from the trace alone.
 
 # Verdicts
 

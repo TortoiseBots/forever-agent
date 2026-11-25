@@ -591,3 +591,134 @@ func TestAgentPullSkipsABossNearTheSkull(t *testing.T) {
 		t.Fatalf("the agent attacked %v; want no swing beside a plan boss", rig.fake.agentAttacks)
 	}
 }
+
+// TestAgentPullPackKilledInTheRefusalsWalksOn: the bots finish the pack while the tank is still refusing its skull, so
+// there is nothing left for the agent's own pull. The dead pack counts as fought and the run walks the leg on: no agent
+// pull, no pull-failed, no second pull of a cleared pack.
+func TestAgentPullPackKilledInTheRefusalsWalksOn(t *testing.T) {
+	plan := sightWallPlan()
+	plan.Legs[0].Boss = nil // the boss's own pull is not this case's
+	armed, killed := false, false
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 18, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 22, 0}})
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		f.ModuleSight = func(Vec3, Vec3) bool { return false } // the tank never sees the skull
+		f.OnUnits = func(f *PlayFake) {
+			// The kill lands on the read AFTER the one that observed the refused order, not on that same read (engage's
+			// own pullCleared would answer the dead pull and open a fight): the pack dies between the refusal and the
+			// retry, the way the bots finish it while the tank says it cannot see it.
+			switch {
+			case killed:
+				return
+			case !armed:
+				armed = f.BlindOrders > 0
+			default:
+				killed = true
+				for i := range f.units {
+					f.units[i].Dead = true
+				}
+			}
+		}
+	})
+	rig.ports.Sight = rig.fake
+	rig.ports.Refusals = rig.fake
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if !killed {
+		t.Fatalf("the tank never refused the skull; want the refusals this case kills the pack during")
+	}
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (a pack killed during the refusals is a cleared pack)", res.Stop)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 0 {
+		t.Fatalf("agent_pull events = %d; want none (the pack was already dead)", n)
+	}
+	if n := playEventCount(t, rig, "agent_pull_failed"); n != 0 {
+		t.Fatalf("agent_pull_failed events = %d; want none (a cleared pack is no failure)", n)
+	}
+	if !slices.Contains(res.States, StateLegWalk) {
+		t.Fatalf("states %v; want the leg walking on after the cleared pack", res.States)
+	}
+}
+
+// TestAgentPullBossKilledAsAnAddIsNoNeighbour: a plan boss dies as an add in an earlier pack's fight, and its corpse
+// despawns before the run reaches the next pack, whose skull stands inside the boss's assistance radius of its plan
+// point. The kill is latched by the fight that saw it, so the later pull's fallback is not skipped as a boss pull: the
+// agent brings the pack back, the tank takes it, and the killed boss's own state walks on.
+func TestAgentPullBossKilledAsAnAddIsNoNeighbour(t *testing.T) {
+	plan := playFightPlan()
+	plan.Name = "test_boss_add"
+	// The pack the boss dies in is nowhere near the boss's plan point; the boss belongs to the second leg.
+	plan.Legs[0].PullGroups = []dungeon.PullGroup{{Entries: []uint32{11320}, Positions: []dungeon.Point{{X: 20, Y: 10}}}}
+	plan.Legs[0].To = dungeon.Point{X: 20}
+	plan.Legs[0].Boss = nil
+	plan.Legs = append(plan.Legs, dungeon.Leg{
+		Name: "two",
+		To:   dungeon.Point{X: 50},
+		PullGroups: []dungeon.PullGroup{{
+			// The skull (55,5) is 7.1 yd from the boss's plan point (60,0): inside the core's 10 yd assistance radius.
+			Entries:   []uint32{11321, 11319},
+			Positions: []dungeon.Point{{X: 58, Y: 8}, {X: 55, Y: 5}},
+			Approach:  []dungeon.Point{{X: 40, Y: 5}},
+		}},
+		Boss: &dungeon.Boss{Entry: 200, Position: dungeon.Point{X: 60}},
+	})
+	dead, gone := false, false
+	var bossGUID wire.GUID
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{20, 10, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11322, Pos: Vec3{58, 8, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(3), Entry: 11319, Pos: Vec3{55, 5, 0}})
+		f.SpawnBosses()
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		f.ModuleSight = func(from, to Vec3) bool { return to[0] < 55 } // the tank sees the first pack, never the second's skull
+		if u, ok := f.UnitOf(200); ok {
+			bossGUID = u.GUID
+		}
+		f.OnUnits = func(f *PlayFake) {
+			if !dead {
+				// The first fight has begun (the damage dealers were ordered onto its skull): the boss, drawn in as an
+				// add, dies with it.
+				if playActionAt(f.Actions, ".bot attack Botthree") >= 0 {
+					dead = true
+					for i := range f.units {
+						if f.units[i].Entry == 200 {
+							f.units[i].Dead = true
+						}
+					}
+				}
+				return
+			}
+			// Its corpse despawns while the next pull's tank is refusing its skull: only the latched kill keeps
+			// bossNear off the plan point.
+			if !gone && f.BlindOrders > 0 {
+				gone = true
+				f.RemoveUnit(bossGUID)
+			}
+		}
+	})
+	rig.ports.Sight = rig.fake
+	rig.ports.Refusals = rig.fake
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if !dead || !gone {
+		t.Fatalf("the boss did not die in the first fight and leave the view (dead %v, gone %v)", dead, gone)
+	}
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (the killed boss's own state walks on)", res.Stop)
+	}
+	if n := playEventCount(t, rig, "agent_pull_skipped"); n != 0 {
+		t.Fatalf("agent_pull_skipped events = %d; want none (the boss is dead, not a neighbour)", n)
+	}
+	if _, ok := playEvents(t, rig)["boss_seen_dead"]; !ok {
+		t.Fatalf("the trace has no boss_seen_dead event; want the pack fight's kill latched")
+	}
+	pulled := playEvents(t, rig)["agent_pull"]
+	if pulled.Ev == "" {
+		t.Fatalf("the trace has no agent_pull; want the second pack's fallback")
+	}
+	if g, ok := pulled.D["group"].(float64); !ok || int(g) != 1 {
+		t.Fatalf("agent_pull group = %v; want the second pack's group 1", pulled.D["group"])
+	}
+}

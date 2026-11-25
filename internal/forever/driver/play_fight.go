@@ -1426,7 +1426,7 @@ func (p *playRun) fight(ctx context.Context) string {
 		units := p.ports.World.Units()
 		p.sample(units)
 		p.noteDeaths()
-		p.latchBoss()
+		p.latchDeadBosses(units)
 		if p.wiped() {
 			return p.endFight(ctx, adds, units)
 		}
@@ -2352,6 +2352,22 @@ func (p *playRun) bossDone(entry uint32) bool {
 	p.bossKilled[entry] = true
 	p.rec.Event(p.now(), "boss_seen_dead", map[string]any{"entry": entry})
 	return true
+}
+
+// latchDeadBosses latches every plan boss the view shows dead, not only the fight's own: a boss drawn into a pack
+// fight as an add dies there, and its corpse can despawn before the run's boss state reads it. A dead boss is no
+// neighbour for a later pull's assistance check (bossNear), so the kill must be read from any fight, not only the
+// boss's.
+func (p *playRun) latchDeadBosses(units []Unit) {
+	for _, leg := range p.route.Legs {
+		if leg.Boss == nil || p.bossKilled[leg.Boss.Entry] {
+			continue
+		}
+		if bossDead(units, leg.Boss.Entry) {
+			p.bossKilled[leg.Boss.Entry] = true
+			p.rec.Event(p.now(), "boss_seen_dead", map[string]any{"entry": leg.Boss.Entry})
+		}
+	}
 }
 
 // latchBoss latches the running boss fight's kill the moment its unit is seen dead: the fight's own evidence is read

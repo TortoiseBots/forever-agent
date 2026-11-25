@@ -4,7 +4,7 @@ title: forever dungeon-play
 description: Play one dungeon plan as a real character leading four bots, and read the run's record and its pass or fail verdict.
 tags: [dungeons, play, player, command]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:15:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T10:00:00Z }
 sources:
   - id: play-cmd
     resource: cmd/forever-agent/forever_play.go
@@ -55,6 +55,73 @@ role should, and the milestone's rule turns the run and the judge's findings int
 
 The plan's crowd-control lists (`cc_priority`, `cc_always`, `no_cc`) and boss `tactics` are **not** run by player
 runs; the run says so once in its notes instead of dropping them silently.
+
+A plan boss killed as an add in another fight is recorded killed when a fight's view shows it dead, so the run neither
+pulls it again nor fails `bosses-alive` on it.
+
+# The leading player's own pull
+
+The pull is the tank's first: the agent puts the skull on the pack's kill-order entry and the cross on the next unit,
+selects the skull and orders the tank onto it. The tank's answer is the module's own: when it whispers that it cannot
+see the marked skull, the party steps 5 yd along the navmesh path toward it (never nearer than 5 yd), waits up to 15 s
+for the tank beside the new stand, and orders again with the mark re-sent. The refusal's own bounds are 4 steps
+(`PlayRefuseTries`) and 90 s from the first refusal (`PlayRefuseTime`).
+
+When those retries are spent — or the skull already stands inside the character's own 5 yd reach, where another step
+would add no sight — the leading player pulls the mob itself:
+
+1. `agent_pull` records the fallback: `group`, `why` (`sight` for the spent retries, `reach` for the in-reach
+   shortcut), `refusals` (the tank's whispers so far), the distance to the mob (`yd`) and to the party's stand
+   (`stand_yd`), and the stand itself (`x`, `y`, `z`).
+2. The agent selects the skull, walks into its own 5 yd reach — never further than 20 yd from the pull stand — and
+   attacks it. It never walks in under 40 per cent of its own health or with that health unknown (the row is re-read
+   every 3 s while it is missing); under the floor it keeps to the party and never trades blows.
+3. `agent_pull_engaged` records the mob that turned on the agent (`target`, `entry`, `yd`).
+4. The agent walks back to where the party waits, the mob following. The tank is ordered onto it once the mob stands
+   within 10 yd of the tank (a body beside the tank is inside the module's own line of sight), and an accepted order is
+   given 3 s to show the mob on the tank or dead: the module's sight refusal arrives as a whisper, not as the order's
+   code, so the reply alone is no proof of the take. A refusal, or the window's end, re-orders while the walk back
+   lasts.
+5. `agent_pull_back` records the end: `target` and `dead: true` when the mob died on the way, or `target`, `tank_yd`
+   and `yd` (the agent's distance to the stand) when the party took it. The normal fight follows.
+
+The fallback is bounded and it never becomes a second tank:
+
+| Limit | Default | Meaning |
+|---|---|---|
+| `PlayLimits.PullReach` | 20 s | The walk to the mob and the wait for it to turn on the agent. |
+| `PlayLimits.PullBack` | 20 s | The walk back to the party and the tank's take. |
+| `PlayLimits.TankTake` | 3 s | How long an accepted tank order may take to show the mob on the tank or dead. |
+| `PlayAgentReachYd` | 5 yd | The agent's own melee reach; a skull inside it skips the remaining step-closer retries. |
+| `PlayPullYd` | 20 yd | The pull stand's own limit: the agent never walks further from it. |
+| `PlayTankEngageYd` | 10 yd | How near the tank the brought-back mob must stand before the tank is ordered again. |
+| `PlayAgentPullHP` | 40 % | The character's health floor for pulling; unknown health fails closed. |
+| `PlayAssistYd` | 10 yd | The core's assistance radius: a plan boss inside it of the mob makes the pull the boss's. |
+
+The bounds on what may be pulled:
+
+- **One agent pull per group.** The same group's fallback is never taken twice; the second attempt records
+  `agent_pull_failed` with reason `already-pulled`.
+- **Never a boss pull.** The leg's boss keeps its own pull flow. A plan boss within 10 yd of the mob would join on the
+  agent's own hit, which is the boss's pull and not a leading player's: the agent records `agent_pull_skipped` with
+  `reason: boss-near` (`group`, `target`, `entry`, `boss`, `boss_yd`) and does not pull, and the pull ends as it would
+  have without a fallback.
+
+A failed fallback records `agent_pull_failed` with its reason:
+
+| Reason | Meaning |
+|---|---|
+| `gone` | The mob left the view or turned friendly before or during the approach. |
+| `already-pulled` | This group (or this unknown unit) already had its one agent pull. |
+| `reach-timeout` | The 20 s reach bound ended with the mob still not on the agent. |
+| `health-unknown` | The character's health row could not be read: it never walks in. |
+| `low-health` | The character stood under its 40 per cent floor. |
+| `out-of-reach` | The mob stands beyond the pull distance from the stand. |
+| `bring-back` | The mob never came to the tank inside the 20 s walk back. |
+
+A pack's failed agent pull stops the run `pull-failed`; a hostile the plan does not know (a patrol candidate) is given
+up with `patrol_unpullable` (reason `agent-pull`) and the leg walks on. A pack the bots finish during the refusals is
+no failed pull at all: nothing is left to pull, the pack counts as fought, and the leg walks on.
 
 # Flags
 
