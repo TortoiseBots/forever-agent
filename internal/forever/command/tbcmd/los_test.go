@@ -194,6 +194,8 @@ func TestLOSMalformed(t *testing.T) {
 		{"an unknown reason", "los a=Tanka b=Healera map=0 los= empty same_map= in_world= reason=nope #T"},
 		{"a retry hint without a rate refusal", "los a=Tanka b=Healera map=0 los=0 same_map=0 in_world=1 reason=different-maps retry_ms=5 #T"},
 		{"a retry hint without a reason", "los a=Tanka b=Healera map=0 los=1 dist=1.0 same_map=1 in_world=1 retry_ms=5 #T"},
+		{"both retry hints", "los a=Tanka b=Healera map=0 los= same_map= in_world= reason=rate retry_ms=5 retry=1 #T"},
+		{"a retry hint out of order", "los a=Tanka b=Healera map=0 los= same_map= in_world= retry_ms=5 reason=rate #T"},
 		{"another pair", "los a=Other b=Healera map=0 los=1 dist=1.0 same_map=1 in_world=1 #T"},
 		{"another b", "los a=Tanka b=Other map=0 los=1 dist=1.0 same_map=1 in_world=1 #T"},
 		{"no token", "los a=Tanka b=Healera map=0 los=1 dist=1.0 same_map=1 in_world=1"},

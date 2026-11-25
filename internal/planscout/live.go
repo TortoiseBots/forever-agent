@@ -792,8 +792,9 @@ func liveAggroCheck(st *StepResult, units []world.Unit, w *worldspawn.World, own
 }
 
 // liveLOSCheck asks whether the stand sees any unit of the target pack (spec 3.4): the navmesh ray's answer, and the
-// server's own sight answer beside it when the live pass read one (LiveData.ServerLOS). Where both answered and
-// disagree, the server's answer is the verdict and the reason names the disagreement count.
+// server's own sight answer beside it when the live pass read one (LiveData.ServerLOS). The server decides: one unit
+// in its sight settles the check, and its "none in sight" counts only when it answered for every target — a partial
+// answer that saw nothing proves nothing, so the ray's verdict stands and the reason says how far the server got.
 func liveLOSCheck(st *StepResult, targets []uint32, live LiveData) Check {
 	c := Check{Name: CheckLiveLOS, Source: SourceLive, Verdict: VerdictOK}
 	if len(targets) == 0 {
@@ -825,16 +826,20 @@ func liveLOSCheck(st *StepResult, targets []uint32, live LiveData) Check {
 	}
 	c.Data = map[string]float64{"targets": float64(len(targets)), "answered": float64(answered), "in_sight": float64(in),
 		"server_answered": float64(serverAnswered), "server_in_sight": float64(serverIn), "disagree": float64(disagree)}
-	if serverAnswered > 0 {
-		// The server's own sight test is the answer; the navmesh ray is reported beside it, and where the two
-		// disagree the check says so rather than letting the ray's verdict stand.
-		if serverIn > 0 {
-			c.Reason = fmt.Sprintf("%d of %d target pack unit(s) in sight from the stand (the server's sight)", serverIn, len(targets))
-			if disagree > 0 {
-				c.Reason += fmt.Sprintf("; the navmesh ray disagrees on %d unit(s)", disagree)
-			}
-			return c
+	if serverIn > 0 {
+		// One unit of the pack in the server's sight settles it, however many answers came: the pull shot has
+		// something to shoot.
+		c.Reason = fmt.Sprintf("%d of %d target pack unit(s) in sight from the stand (the server's sight)", serverIn, len(targets))
+		if serverAnswered < len(targets) {
+			c.Reason += fmt.Sprintf("; the server answered %d of %d", serverAnswered, len(targets))
 		}
+		if disagree > 0 {
+			c.Reason += fmt.Sprintf("; the navmesh ray disagrees on %d unit(s)", disagree)
+		}
+		return c
+	}
+	if serverAnswered == len(targets) {
+		// Every unit answered and none is visible: the server's no is as good as its yes.
 		c.Verdict = VerdictWarn
 		c.Reason = fmt.Sprintf("the pull shot waits for sight: none of the %d target pack units is in sight from the stand (the server's sight)", len(targets))
 		if disagree > 0 {
@@ -842,15 +847,21 @@ func liveLOSCheck(st *StepResult, targets []uint32, live LiveData) Check {
 		}
 		return c
 	}
+	// A partial server answer with nothing in sight proves nothing about the units it never named: the ray decides,
+	// and the reason says how far the server got.
+	partial := ""
+	if serverAnswered > 0 {
+		partial = fmt.Sprintf(" (the server answered %d of %d target unit(s), none in sight)", serverAnswered, len(targets))
+	}
 	switch {
 	case answered == 0:
 		c.Verdict = VerdictSkip
-		c.Reason = "no sight answer for the target pack" + abortedSuffix(live)
+		c.Reason = "no sight answer for the target pack" + abortedSuffix(live) + partial
 	case in > 0:
-		c.Reason = fmt.Sprintf("%d of %d target pack unit(s) in sight from the stand", in, len(targets))
+		c.Reason = fmt.Sprintf("%d of %d target pack unit(s) in sight from the stand", in, len(targets)) + partial
 	default:
 		c.Verdict = VerdictWarn
-		c.Reason = fmt.Sprintf("the pull shot waits for sight: none of the %d target pack units is in sight from the stand", len(targets))
+		c.Reason = fmt.Sprintf("the pull shot waits for sight: none of the %d target pack units is in sight from the stand", len(targets)) + partial
 	}
 	return c
 }

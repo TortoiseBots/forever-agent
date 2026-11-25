@@ -259,9 +259,10 @@ func (c *Client) callOneLine(ctx context.Context, line string) (*command.Reply, 
 	return rep, nil
 }
 
-// losKeyOrder is the module's answer line, key by key. dist, reason and retry_ms are optional (a refusal states no
-// distance), every other key is required, and the order is the interface.
-var losKeyOrder = []string{"a", "b", "map", "los", "dist", "same_map", "in_world", "reason", "retry_ms"}
+// losKeyOrder is the module's answer line, key by key. dist, reason and the retry hint (retry_ms in milliseconds, or
+// retry in seconds) are optional (a refusal states no distance), every other key is required, and the order is the
+// interface.
+var losKeyOrder = []string{"a", "b", "map", "los", "dist", "same_map", "in_world", "reason", "retry_ms", "retry"}
 
 // losRequired are the keys every los line carries, refusal or not.
 var losRequired = []string{"a", "b", "map", "los", "same_map", "in_world"}
