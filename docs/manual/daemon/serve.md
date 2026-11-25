@@ -4,7 +4,7 @@ title: forever serve
 description: Run the agent as a session daemon so other programs can drive one logged-in character over a local JSON-RPC socket.
 tags: [daemon, serve, session, rpc, login]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:07Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T02:45:00Z }
 sources:
   - id: serve-cmd
     resource: cmd/forever-agent/forever_serve.go
@@ -16,6 +16,12 @@ sources:
     resource: cmd/forever-agent/forever_serve_create.go
   - id: rpc-server
     resource: internal/rpc/server.go
+  - id: serve-lease
+    resource: cmd/forever-agent/serve_lease.go
+  - id: serve-lock
+    resource: cmd/forever-agent/serve_lock_unix.go
+  - id: slots-lock
+    resource: internal/slots/lock_unix.go
 ---
 
 # What this is
@@ -58,7 +64,7 @@ them. The password comes from `--password-file`, the settings file's `password_f
 | `--password-file FILE` | — | File holding the account password (one trailing newline is removed). Without it the settings file's `password_file` or `password` is used, then `FOREVER_PASSWORD`. |
 | `--settings FILE` | — | A Forever slot's settings file: fills every flag the command line left unset (account, character, rest/rpc/ca, listen, dir, navmesh, plans, password and the rest). A relative path inside it is relative to the file's folder. See [the settings file](#a-settings-file). |
 | `--listen HOST:PORT` | `127.0.0.1:8765` | Loopback address the RPC socket listens on. Another host is refused; port `0` picks a free port. |
-| `--dir DIR` | — | A serve slot directory: `slot.json` and `agent.pid` are written there, and the token file by default, so `forever rpc DIR ...` works. On a dir made by `slot setup --forever`, the serve holds the slot's lease. |
+| `--dir DIR` | — | A serve slot directory: `slot.json` and `agent.pid` are written there, and the token file by default, so `forever rpc DIR ...` works. On a dir made by `slot setup --forever`, the serve holds the slot's lease. One serve per dir: a second serve on the same dir is refused (exit `15`), see [One serve per slot dir](#one-serve-per-slot-dir). |
 | `--force` | off | Start even when the slot's lease has expired (the serve renews it). It overrides only the clock: never another holder's lease, and never a `slot.json` whose lease id changed. |
 | `--token-file FILE` | `rpc-<port>.token` in `--dir`, else the working directory | Where the bearer token file is written. |
 | `--no-auth` | off | Serve without a bearer token. Loopback, `Host` and `Origin` checks still apply. |
@@ -86,7 +92,9 @@ so the shared login rate is spent twice.
 3. When `--dir` is given, checks the directory before writing anything. An empty directory (or a missing one)
    gets a fresh `slot.json`. A directory made by `slot setup --forever`, or by an earlier `serve`, is kept when
    it names the same directory, port, character and account. A mismatched, unreadable or foreign non-empty
-   directory is refused; `serve` never overwrites it.
+   directory is refused; `serve` never overwrites it. The dir's `serve.lock` is then taken for the whole run, so
+   a second serve on the dir is refused (exit `15`) whatever it would listen on — see
+   [One serve per slot dir](#one-serve-per-slot-dir).
 4. When that `slot.json` names a lease, adopts it before the login: renews it once (a 15-minute TTL, with the
    serve's pid recorded), then renews it every 5 minutes. An expired lease is refused unless `--force`
    (exit `15`).
@@ -133,8 +141,12 @@ forever-agent forever serve --settings ./slot1/settings.json
 
 `slot setup --forever` records the lease it took in the slot dir's `slot.json`. A serve started with `--dir` on
 that dir adopts the lease before the login and renews it every 5 minutes (the lease lasts 15 minutes), so a live
-serve never loses its slot and a dead one frees it within minutes; the lease records the serve's pid, so
-`lease reap` frees a crashed serve at once. Per renewal it prints:
+serve never loses its slot. Every renewal stamps the lease with the serve's process (pid, host, pid namespace and
+start time), so a serve that died frees its slot **at once**: `lease reap` (and any `lease acquire`) can take the
+slot over the moment the process is gone, and the 15-minute expiry is only the fallback for a holder on another
+host. The dead serve's `slot.json` is not rewritten, so it still names the old lease id while the lease file is the
+truth; a serve started from it refuses and names the way out (`is not this slot's any more`, `was re-acquired`, or
+`is gone`), and `slot setup --forever` again records the current lease. Per renewal it prints:
 
 ```
 serve: lease example/1 renewed until 20:45:00Z
@@ -146,10 +158,48 @@ serve: lease example/1 renewed until 20:45:00Z
   holder's lease and never a `slot.json` whose lease id changed.
 - A renewal that finds the lease taken by another holder prints
   `serve: lease example/1 is not ours any more (...): stopping the serve` and stops the serve with exit `13`.
+  That holds even when the run was already ending: the command joins its lease keeper before it picks the exit
+  code, so a lease lost at the same moment as a logout, a lost link or a Ctrl-C is still exit `13` and not a
+  clean `0`.
+- The renewal takes the lease ledger's lock (the `leases/` folder beside the slots file). That wait ends with the
+  run's cancellation, so another lease command holding the ledger lock cannot keep a shutdown waiting.
+- The command waits for its lease keeper at shutdown for at most 5 s. A keeper stuck in a write is named
+  (`serve: the lease keeper did not stop within 5s; the dir stays locked until it does`) and the command returns;
+  while it is alive the dir's `serve.lock` stays with it, so a new serve cannot start on the dir and adopt the
+  lease it could still write. (The process exit releases the lock anyway.)
 - The serve does not release a lease it did not take; `teardown DIR` releases a setup slot's lease.
 - A bare `forever serve --dir` with no lease in its `slot.json` holds none.
 
 The lease commands and the slot layout are on [Settings, slots and leases](../getting-started/settings-and-slots.md).
+
+# One serve per slot dir
+
+Two serves on one `--dir` would share its `slot.json`, `agent.pid`, token file and lease. The dir's `serve.lock`
+is taken with a non-blocking exclusive `flock` for the whole run, so a second serve on the dir is refused
+whatever its `--listen` host and port:
+
+```
+another forever serve is already running in /path/to/slot (pid 4242): stop it or serve another --dir
+```
+
+It exits `15`, before the lease is touched and before anything is written to the server. The kernel drops the
+lock when the process ends, however it ends, so a leftover `serve.lock` never blocks a later serve (the file is
+not removed; the lock, not the file, is the claim). A crash between the lock and the first `slot.json` leaves only
+`serve.lock`, `agent.pid` or a token file in the dir, and a later serve takes such a dir as fresh.
+
+The lock is `flock(2)`, so every Unix build has it, and a build without it (Windows) refuses `--dir` instead of
+serving the dir unlocked:
+
+```
+one serve per --dir needs a file lock (flock), which this build does not provide: <dir> cannot be served here; serve without --dir, or run forever serve on Linux or macOS
+```
+
+That refusal is exit `15` too. A serve without `--dir` writes no manifest, pid file or lease and has no dir to
+exclude, so it still runs there.
+
+A kernel flock is only as good as the filesystem: on a network filesystem a stalled server can block the lock for
+minutes. The serve survives that (the keeper's lock wait ends with the run, and its shutdown is bounded), but keep
+a slot dir on a local disk when a run is timed.
 
 # Exit codes
 
@@ -160,8 +210,8 @@ The lease commands and the slot layout are on [Settings, slots and leases](../ge
 | `3` | The login server rejected the login. |
 | `4` | The realm is missing or offline. |
 | `5` | The world server rejected the session, or the reconnect budget was spent (the daemon is offline). |
-| `13` | A lease renewal found the slot's lease taken by another holder (or re-acquired under a new id); the serve stopped rather than run on another holder's slot. |
-| `15` | The slot's lease refused the start: expired without `--force`, held by another holder, re-acquired, or the `slot.json`'s slots file or slot is gone. |
+| `13` | A lease renewal found the slot's lease taken by another holder (or re-acquired under a new id); the serve stopped rather than run on another holder's slot. Read after the lease keeper is joined, so it outranks a clean `0` or a world error when both happen at once. |
+| `15` | The slot's lease or the dir refused the start: expired without `--force`, held by another holder, re-acquired, the `slot.json`'s slots file or slot is gone, another serve already holds the dir's `serve.lock`, or this build has no `flock` for a `--dir` serve. |
 
 # Stopping it
 

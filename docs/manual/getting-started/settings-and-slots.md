@@ -4,7 +4,7 @@ title: Settings, slots and leases
 description: The files that tell the agent which server and account to use, how slot directories are laid out, and how leases keep one worker per slot.
 tags: [getting-started, settings, slots, leases, configuration]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:31:22Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T02:45:00Z }
 sources:
   - id: config
     resource: internal/config/config.go
@@ -24,6 +24,12 @@ sources:
     resource: cmd/forever-agent/slot_setup_common.go
   - id: serve
     resource: cmd/forever-agent/forever_serve.go
+  - id: serve-lease
+    resource: cmd/forever-agent/serve_lease.go
+  - id: serve-lock
+    resource: cmd/forever-agent/serve_lock_unix.go
+  - id: slots-lock
+    resource: internal/slots/lock_unix.go
 ---
 
 There are three configuration paths in the repository. The **settings file** (`settings.json`) belongs to the
@@ -121,6 +127,7 @@ A slot directory is the working directory of one session. `slot setup --forever`
 |---|---|---|
 | `forever-agent` | `slot setup` | the copied binary the slot runs |
 | `slot.json` | `slot setup`, or `serve --dir` when the dir was empty | the manifest the RPC client and `teardown` read; mode 0600, no secrets |
+| `serve.lock` | `forever serve` | the one-serve-per-dir claim: a kernel `flock` on this file, held for the whole run and never removed (the lock, not the file, is the claim) |
 | `agent.pid` | `forever serve` | the daemon's pid; removed at exit; pairs with `pid_start` |
 | `rpc-<port>.token` | `forever serve` | the bearer token for the RPC socket; removed at exit; absent with `--no-auth` |
 | `dungeons/` | `slot setup` | the plans folder; empty unless `--dungeons-from` named a folder to copy `*.json` plans from |
@@ -201,8 +208,12 @@ bin/forever-agent lease reap --dry-run
 agent's heartbeat rule:
 
 * it renews the lease **at start** and then **every 5 minutes**; the lease is **15 minutes** long, so a live
-  serve never loses it and a dead one frees its slot within minutes (the lease also records the serve's pid, so
-  `lease reap` frees it at once);
+  serve never loses it. Every renewal stamps the lease with the serve's process, so a dead serve frees its slot
+  **at once**: `lease reap` (and any `lease acquire`) can take it the moment the process is gone, and the expiry
+  is only the fallback for a holder on another host. The dead serve's `slot.json` is not rewritten and still
+  names its lease id, which is intended: the manifest is a setup record, the lease file is the truth, and the
+  next serve refuses with the way out (`is not this slot's any more`, `was re-acquired` or `is gone`) until
+  `slot setup --forever` records the current lease;
 * a renewal that fails for a reason that may pass (a lock timeout, an I/O error) is logged
   `serve: lease <server>/<slot> renew failed: ...; retrying in <duration>` and retried every minute — never
   silently dropped;
@@ -212,9 +223,17 @@ agent's heartbeat rule:
   released) is refused with or without it;
 * a renewal that finds the lease **taken by another holder** prints
   `serve: lease <server>/<slot> is not ours any more (...): stopping the serve` and the serve stops cleanly with
-  exit `13` — it never keeps running on another holder's slot;
+  exit `13` — it never keeps running on another holder's slot. The code is read after the serve has joined its
+  lease keeper, so a lease lost as the run also ends (a logout, a Ctrl-C) is still `13`;
+* the lease ledger's own lock can never hold a shutdown: the renewal's wait for it ends with the run, and the
+  wait for the keeper is bounded at 5 s (`serve: the lease keeper did not stop within 5s; the dir stays locked
+  until it does`), with the dir's `serve.lock` staying with a keeper that is still alive;
 * a bare `forever serve --dir` (no `slot setup`, no lease in its `slot.json`) holds no lease, as before;
   `teardown` remains the command that ends the game presence and releases the lease.
+
+One serve per slot dir: the dir's `slot.json`, token file, pid file and lease are one serve's, so a second
+`forever serve` on the same `--dir` is refused with exit `15` whatever its listen address, by the `serve.lock`
+flock in the dir (see [forever serve](../daemon/serve.md#one-serve-per-slot-dir)).
 
 `trials run` takes its own lease on the slot (holder `trials` by default) before it opens the serve dir, so a
 `trials run` against a slot a leased serve holds is refused `held by <holder>` (exit `15`). Run the trials
