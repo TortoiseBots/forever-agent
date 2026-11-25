@@ -5,9 +5,11 @@
 // <message>` with a nonzero exit).
 //
 // `forever rpc DIR list` contacts the selected daemon's status method and
-// then prints the methods serve answers, with the ones the server does not
-// port marked; anything else calls one method with JSON params. The list is
-// the server's own table (world.ServeRPCMethods), never a second copy.
+// then prints the methods serve answers: the implemented names bare, and a
+// refused name with its documented reason (`name (refused: <why>)`), so the
+// one list says what the socket does with every old name. Anything else calls
+// one method with JSON params. The list is the server's own table
+// (world.ServeRPCMethods and world.ServeRefusal), never a second copy.
 package main
 
 import (
@@ -17,7 +19,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 	"time"
 
@@ -182,11 +183,12 @@ func foreverRPCCallError(c *slotClient, err error, stderr io.Writer) int {
 }
 
 // foreverRPCList contacts the selected daemon's status method, then prints
-// every method serve answers, one per line, with the not-ported ones marked.
-// The contact is the point: a stopped daemon (or a --dir not pointing at the
-// running one) fails here with the call's exit code instead of printing a
-// table that nothing answers. The table is the server's own: DONE names bare,
-// NOT-PORTED names with the mark, both sorted.
+// every method serve answers, one per line: an implemented name bare, a
+// refused name with its documented reason. The contact is the point: a stopped
+// daemon (or a --dir not pointing at the running one) fails here with the
+// call's exit code instead of printing a table that nothing answers. The table
+// is the server's own (world.ServeRPCMethods, world.ServeRefusal), sorted by
+// name.
 func foreverRPCList(ctx context.Context, c *slotClient, timeout time.Duration, stdout, stderr io.Writer) int {
 	var status struct {
 		State string `json:"state"`
@@ -194,16 +196,10 @@ func foreverRPCList(ctx context.Context, c *slotClient, timeout time.Duration, s
 	if err := c.Call(ctx, "status", nil, &status, timeout); err != nil {
 		return foreverRPCCallError(c, err, stderr)
 	}
-	ported, notPorted := world.ServeRPCMethods()
-	names := make([]string, 0, len(ported)+len(notPorted))
-	names = append(names, ported...)
-	for _, n := range notPorted {
-		names = append(names, n+" (not ported)")
-	}
-	sort.Strings(names)
+	lines := world.ServeRPCLines()
 	var b strings.Builder
-	for _, n := range names {
-		b.WriteString(n)
+	for _, l := range lines {
+		b.WriteString(l)
 		b.WriteString("\n")
 	}
 	fmt.Fprint(stdout, rpcScrub(b.String(), c.token))

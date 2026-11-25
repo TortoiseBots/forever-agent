@@ -39,7 +39,10 @@ func rpcCodeOf(err error) (int, bool) {
 }
 
 // notPortedErr reports a serve method the daemon does not implement: an
-// unknown method (-32601) or the typed -32003 whose message says so.
+// unknown method (-32601) or, from a daemon before #216, the typed -32003 whose
+// message said "not ported". A method #216 refuses answers its documented
+// reason instead, which is an ordinary -32003 refusal (stepRefusal), so a step's
+// ignore_error can swallow it: the method exists and changed nothing.
 func notPortedErr(err error) bool {
 	var re *RPCError
 	if !errors.As(err, &re) {

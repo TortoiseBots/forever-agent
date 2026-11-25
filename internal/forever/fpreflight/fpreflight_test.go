@@ -150,7 +150,7 @@ func TestAllGood(t *testing.T) {
 	if got := find(t, rep, CheckBots); got.Status != OK {
 		t.Fatalf("bots: %+v", got)
 	}
-	if find(t, rep, CheckServe).Status != OK || find(t, rep, CheckLease).Status != OK || find(t, rep, CheckModule).Status != OK || find(t, rep, CheckSoap).Status != OK {
+	if find(t, rep, CheckServe).Status != OK || find(t, rep, CheckLease).Status != OK || find(t, rep, CheckModule).Status != OK || find(t, rep, CheckConsole).Status != OK {
 		t.Fatalf("results: %+v", rep.Results)
 	}
 }
@@ -340,7 +340,7 @@ func TestSoapChecks(t *testing.T) {
 	c := okConsole()
 	c.err = errors.New("connection refused")
 	rep := Run(context.Background(), o, goodDeps(okModule(), c))
-	if r := find(t, rep, CheckSoap); r.Status != Fail || !strings.Contains(r.Detail, "connection refused") {
+	if r := find(t, rep, CheckConsole); r.Status != Fail || !strings.Contains(r.Detail, "connection refused") {
 		t.Fatalf("%+v", r)
 	}
 	if r := find(t, rep, CheckBots); r.Status != Warn {
@@ -349,7 +349,7 @@ func TestSoapChecks(t *testing.T) {
 	d := goodDeps(okModule(), nil)
 	d.Console = nil
 	rep = Run(context.Background(), o, d)
-	if r := find(t, rep, CheckSoap); r.Status != Warn {
+	if r := find(t, rep, CheckConsole); r.Status != Warn {
 		t.Fatalf("not configured: %+v", r)
 	}
 	if rep.Blocked() {
@@ -359,8 +359,18 @@ func TestSoapChecks(t *testing.T) {
 	c = okConsole()
 	delete(c.rows, "hero")
 	rep = Run(context.Background(), o, goodDeps(okModule(), c))
-	if r := find(t, rep, CheckSoap); r.Status != Fail || !strings.Contains(r.Detail, "Hero") {
+	if r := find(t, rep, CheckConsole); r.Status != Fail || !strings.Contains(r.Detail, "Hero") {
 		t.Fatalf("%+v", r)
+	}
+	// a reply that stops after its Player line is cut off, not a character that does not exist
+	c = okConsole()
+	c.rows["hero"] = "Player Hero (GUID: 7)"
+	rep = Run(context.Background(), o, goodDeps(okModule(), c))
+	if r := find(t, rep, CheckConsole); r.Status != Fail || !strings.Contains(r.Detail, "cut off") {
+		t.Fatalf("a cut-off reply must be named as one: %+v", r)
+	}
+	if r := find(t, rep, CheckBots); r.Status != Warn {
+		t.Fatalf("bots cannot be read after a cut-off reply: %+v", r)
 	}
 }
 

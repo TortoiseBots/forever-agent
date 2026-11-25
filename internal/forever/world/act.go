@@ -827,6 +827,8 @@ func (s *session) actClose(ctx context.Context, a *actState, step ActStep) error
 	if err := s.transport().Send(wire.CMSGCloseInteraction, npc.BuildCloseInteraction(a.npc.GUID)); err != nil {
 		return s.actFail(a, step, fmt.Errorf("CMSG_CLOSE_INTERACTION: %w", err))
 	}
+	// A closed banker ends the bank window: the core's CanUseBank needs the interaction (bank.go).
+	s.closeBank(a.npc.GUID)
 	a.hasMenu, a.quests = false, nil
 	s.actMenu, s.actQuest = nil, nil
 	s.actOK(a, step, "closed")

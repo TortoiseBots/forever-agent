@@ -109,7 +109,7 @@ func foreverDungeonRunCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	if stop, code := runPreflight(ctx, "forever dungeon-run", fpreflight.KindRun, &pf, planLoader(driver.LoadRoute, *plan), common.character, names, stdout, stderr); stop {
+	if stop, code := runPreflight(ctx, "forever dungeon-run", fpreflight.KindRun, &pf, fpreflight.PlanLoader(driver.LoadRoute, *plan), common.character, names, stdout, stderr); stop {
 		return code
 	}
 	// The whole session's deadline covers the run's budget and the stop path's own wait for a fight to end, with

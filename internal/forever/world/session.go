@@ -630,6 +630,10 @@ type session struct {
 	// Round A6: the command run's feed, set by cmdLink.Pump on the session goroutine while a command runs. The
 	// same goroutine calls it from handleChat/addNotice, so no lock is needed.
 	cmdFeed func(chat.Line)
+	// cmdTaps are chat-line taps beside cmdFeed (a TBM exchange in the daemon), with tapSeq their id source. The
+	// session goroutine owns both (feedCommand, addChatTap and its remover).
+	cmdTaps []chatTap
+	tapSeq  uint64
 	// Round A6: the GM guard. It starts unconfirmed in every session; confirmGM proves the permission with the
 	// non-mutating probe. gmStop is set by the first self say of a command text (a late echo included): the
 	// account's commands are being said aloud, so no further line may be sent.
@@ -718,6 +722,8 @@ type session struct {
 	mail mailWatch
 	// Issue #106 part 2: the auction house's answers (auction.go).
 	auction auctionWatch
+	// Issue #220: the banker interaction the session opened (bank.go); the bank methods need it open.
+	bank bankWatch
 
 	// Round R6: the character's own UNIT_FLAG_ON_TAXI, recorded packet by packet (taxi.go), and the accepted flight
 	// whose landing has not been seen yet: the movement guard reads them.

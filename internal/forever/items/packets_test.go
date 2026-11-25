@@ -68,6 +68,28 @@ func TestBuildAutoStoreBagItemClassicOrder(t *testing.T) {
 	}
 }
 
+// TestBuildAutoStoreBankItemWire pins CMSG_AUTOSTORE_BANK_ITEM (AutoStoreBankItem::Read, BankPackets.cpp:31-36): an
+// empty InvUpdate, then the source container and slot, nothing else. The same packet banks a carried item and takes a
+// bank item back, so both directions' sources are written.
+func TestBuildAutoStoreBankItemWire(t *testing.T) {
+	for _, src := range []Pos{OwnPos(36), OwnPos(64), {Container: 63, Slot: 0}} {
+		b := BuildAutoStoreBankItem(src)
+		if want := []byte{0x00, src.Container, src.Slot}; !bytes.Equal(b, want) {
+			t.Fatalf("CMSG_AUTOSTORE_BANK_ITEM for %d/%d is % X, want % X", src.Container, src.Slot, b, want)
+		}
+		r := wire.NewReader(b)
+		if entries := decodeInvUpdate(t, r); len(entries) != 0 {
+			t.Fatalf("the InvUpdate carries %+v, want none", entries)
+		}
+		if bag, slot := r.ReadU8(), r.ReadU8(); bag != src.Container || slot != src.Slot {
+			t.Fatalf("Bag/Slot are %d/%d, want %d/%d", bag, slot, src.Container, src.Slot)
+		}
+		if r.Remaining() != 0 || r.Err() != nil {
+			t.Fatalf("%d trailing byte(s): %v", r.Remaining(), r.Err())
+		}
+	}
+}
+
 // TestBuildSwapInvItemDestinationFirst proves the wire order Slot2 then Slot1 with the server's reading of it: it
 // moves Slot1 to Slot2 (ItemPackets.cpp:201-206, ItemHandler.cpp:89-116).
 func TestBuildSwapInvItemDestinationFirst(t *testing.T) {

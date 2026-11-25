@@ -224,7 +224,7 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 		fmt.Fprintln(stderr, err)
 		return exitUsage
 	}
-	if stop, code := runPreflight(ctx, cmdName, fpreflight.KindWatch, &pf, planLoader(load, *plan), common.character, []string{*leader}, stdout, stderr); stop {
+	if stop, code := runPreflight(ctx, cmdName, fpreflight.KindWatch, &pf, fpreflight.PlanLoader(load, *plan), common.character, []string{*leader}, stdout, stderr); stop {
 		return code
 	}
 	deadline := time.Duration(*maxMinutes+15) * time.Minute

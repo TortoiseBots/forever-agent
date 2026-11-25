@@ -77,6 +77,12 @@ ForeverCore implementation behind the old semantics, so the method answers the t
 | `leave_channel` | DONE | `name*`: leaves a channel this session is on. `{channel, left}`. A channel it never joined is refused by name and nothing is sent. |
 | `channel_list` | DONE | `name*` (a unique prefix is enough): the members of a channel this session is on: `{channel, flags, total, members[]}`, a row `{name?, self?, owner?, moderator?, muted?}` (at most 500 rows). Unknown member names are asked for first; a row stays unnamed if the server does not answer in 1.5 s. |
 
+> **This round's method tables are history.** They record what round R1 served on its own; the current table, every
+> old name's status and the reason for each refusal, is [METHOD-TABLE.md](METHOD-TABLE.md) (generated from the daemon
+> and pinned by `TestServeMethodTableDoc`), and `forever rpc DIR list` prints the same table off a running daemon. Rows
+> that say NOT-PORTED here (and the "not ported" error text quoted below) were the state at this round; #216 finished
+> the table: no name is "not ported" any more.
+
 ### Movement, combat and map change
 
 | Method | Status | What it does |

@@ -484,13 +484,13 @@ func petTenButtonBody(petGUID wire.GUID) []byte {
 // unit fields, SMSG_PET_MODE updates, off-bar Actions (slot -1), cached spell-name cast, attack target fallback,
 // dead/no-bar refusals, and a pet announced already dead.
 func TestServePetModeOffBarAndRPC(t *testing.T) {
-	ported, notPorted := ServeRPCMethods()
+	ported, refused := ServeRPCMethods()
 	for _, name := range []string{"pet", "pet_action"} {
 		if !slices.Contains(ported, name) {
 			t.Fatalf("%s is not in ServeRPCMethods ported", name)
 		}
-		if slices.Contains(notPorted, name) {
-			t.Fatalf("%s is still in notPortedMethods", name)
+		if slices.Contains(refused, name) {
+			t.Fatalf("%s is still refused", name)
 		}
 	}
 

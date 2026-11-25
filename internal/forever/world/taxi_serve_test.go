@@ -329,12 +329,12 @@ func TestMountAndDismountRefusedInTheAir(t *testing.T) {
 	}
 }
 
-// TestTaxiIsRegisteredAndAnswersOverRPC: the method is in the ported table, not the not-ported one, and its JSON
+// TestTaxiIsRegisteredAndAnswersOverRPC: the method is in the implemented table, not the refused one, and its JSON
 // answer carries the flight fields.
 func TestTaxiIsRegisteredAndAnswersOverRPC(t *testing.T) {
-	ported, notPortedNames := ServeRPCMethods()
-	if !slices.Contains(ported, "taxi") || slices.Contains(notPortedNames, "taxi") {
-		t.Fatalf("taxi is not a ported method: %v / %v", ported, notPortedNames)
+	ported, refusedNames := ServeRPCMethods()
+	if !slices.Contains(ported, "taxi") || slices.Contains(refusedNames, "taxi") {
+		t.Fatalf("taxi is not an implemented method: %v / %v", ported, refusedNames)
 	}
 	tw := newTaxiWorld(t, flyer)
 	res, err := tw.s.serveTaxi(context.Background(), serveTaxiParams{GUID: GUID(flightGUID), Node: taxiDestNode})

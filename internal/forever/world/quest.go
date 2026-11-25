@@ -66,6 +66,8 @@ func (s *session) handleQuest(p worldconn.Packet) error {
 			return nil
 		}
 		s.quest.details = &v
+		// The details start the interaction on the giver (GossipDef.cpp:484).
+		s.bankInteractionAt(v.Giver)
 		// The details name the quest's objectives in the order its progress slots use, which is what a later
 		// credit needs to land in the right slot.
 		s.questBook().RememberObjectives(v.QuestID, v.Objectives)
@@ -76,6 +78,8 @@ func (s *session) handleQuest(p worldconn.Packet) error {
 			return nil
 		}
 		s.quest.request = &v
+		// RequestItems starts the interaction on the giver (GossipDef.cpp:671); OfferReward does too (GossipDef.cpp:588).
+		s.bankInteractionAt(v.Giver)
 	case wire.SMSGQuestGiverOfferReward:
 		v, err := quest.ParseOfferReward(p.Payload)
 		if err != nil {
@@ -83,6 +87,7 @@ func (s *session) handleQuest(p worldconn.Packet) error {
 			return nil
 		}
 		s.quest.offer = &v
+		s.bankInteractionAt(v.Giver)
 	case wire.SMSGQuestGiverQuestComplete:
 		v, err := quest.ParseComplete(p.Payload)
 		if err != nil {

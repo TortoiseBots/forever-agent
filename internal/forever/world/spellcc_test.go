@@ -136,11 +136,11 @@ func r7DynamicObjectPayload(guid, caster wire.GUID, spellID int32, radius float3
 }
 
 // TestServeDynamicObjects: the method lists a ground spell with its JSON names and the distance from the mover, and
-// is on the ported list.
+// is on the implemented list.
 func TestServeDynamicObjects(t *testing.T) {
-	ported, notPorted := ServeRPCMethods()
-	if !slices.Contains(ported, "dynamic_objects") || slices.Contains(notPorted, "dynamic_objects") {
-		t.Fatalf("dynamic_objects ported %v not-ported %v", slices.Contains(ported, "dynamic_objects"), slices.Contains(notPorted, "dynamic_objects"))
+	ported, refused := ServeRPCMethods()
+	if !slices.Contains(ported, "dynamic_objects") || slices.Contains(refused, "dynamic_objects") {
+		t.Fatalf("dynamic_objects implemented %v refused %v", slices.Contains(ported, "dynamic_objects"), slices.Contains(refused, "dynamic_objects"))
 	}
 	s, self := r7Session(t)
 	guid := wire.GUID{Low: 0x55, High: 0x0F00000000000000}
