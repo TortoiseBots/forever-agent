@@ -122,30 +122,28 @@ func (st *serveState) preflightCommand(ctx context.Context, line string, opts co
 		return nil, err
 	}
 	defer c.close()
-	var rep *command.Reply
-	err := st.exclusiveCommand(lockCtx, func() error {
-		var rerr error
-		rep, rerr = command.Run(runCtx, c, line, c.opts)
-		return rerr
+	return st.exclusiveCommand(lockCtx, c.opts, func() (*command.Reply, error) {
+		return command.Run(runCtx, c, line, c.opts)
 	})
-	return rep, err
 }
 
-// exclusiveCommand runs fn as the command channel's only run. A daemon that never installed a channel (no session
-// yet) has nothing to exclude, so fn runs alone. The wait for the lock is ctx's: when it ends first, fn did not run
-// and the refusal names the wait, never a hang.
-func (st *serveState) exclusiveCommand(ctx context.Context, fn func() error) error {
+// exclusiveCommand runs fn as the command channel's only run, keeping the channel's tail rule for it
+// (command.Session.ExclusiveRun: an earlier run's quiet window is waited out before fn sends, and fn's reply opens the
+// window a later run waits out). A daemon that never installed a channel (no session yet) has nothing to exclude, so
+// fn runs alone. The wait for the lock is ctx's: when it ends first, fn did not run and the refusal names the wait,
+// never a hang.
+func (st *serveState) exclusiveCommand(ctx context.Context, opts command.Options, fn func() (*command.Reply, error)) (*command.Reply, error) {
 	if st.q == nil {
 		return fn()
 	}
-	if err := st.q.Exclusive(ctx, fn); err != nil {
+	rep, err := st.q.ExclusiveRun(ctx, opts, fn)
+	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return fmt.Errorf("busy: the command channel stayed busy for %s (another command is running), retry",
+			return rep, fmt.Errorf("busy: the command channel stayed busy for %s (another command is running), retry",
 				servePreflightLockWait)
 		}
-		return err
 	}
-	return nil
+	return rep, err
 }
 
 // preflightCommand is a command.Transport over the serving session that never waits on the session queue: prepare
@@ -190,11 +188,11 @@ func (c *preflightCommand) prepare(ctx context.Context, base command.Options) er
 
 // SendCommand sends the line and installs the tap in one queued call, so the tap's window starts with its own command:
 // no line the session handled before the send reaches it. The command channel's one-run lock keeps other commands out
-// of the window (preflightCommand); what it cannot exclude is a line already on the wire from a command that ran
-// before the preflight (a tokenless run's tail is waited out only for a tokened one, command.Session) or an
-// unsolicited system line (an announcement, another player's GM output). A tokenless core reply carries no marker to
-// tell those from its own answer, so the quiet window can still take one: a stray "Player not found!" would be read
-// as the bot not existing.
+// of the window (preflightCommand), and the run waits out an earlier run's open quiet window first
+// (command.Session.ExclusiveRun); what none of that can exclude is a line from a command sent outside the channel (the
+// GM guard's own probe) or an unsolicited system line (an announcement, another player's GM output). A tokenless core
+// reply carries no marker to tell those from its own answer, so the quiet window can still take one: a stray "Player
+// not found!" would be read as the bot not existing.
 func (c *preflightCommand) SendCommand(ctx context.Context, text string) error {
 	_, err := c.st.call(ctx, func(s *session) (any, error) {
 		if s.gmStop != nil {

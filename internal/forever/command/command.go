@@ -279,7 +279,8 @@ func (s *Session) release() { <-s.hold }
 // reason this Session runs one command at a time), so the exclusion is what keeps another command's answer out of
 // its quiet window. fn must not call Run: the lock is not reentrant. The wait for the lock ends with ctx, whose error
 // is returned when it expires first (fn did not run); a caller whose own code runs on a goroutine the holder's calls
-// need must use TryRun instead of waiting.
+// need must use TryRun instead of waiting. A caller that owns the channel to run one command of its own should use
+// ExclusiveRun, which also keeps the tail rule that keeps the neighbouring runs' replies apart.
 func (s *Session) Exclusive(ctx context.Context, fn func() error) error {
 	if err := s.take(ctx); err != nil {
 		return err
@@ -317,26 +318,41 @@ func (s *Session) runLocked(ctx context.Context, line string, opts Options) (*Re
 		return nil, err
 	}
 	if opts.Token != "" {
-		if wait := s.tailUntil.Sub(opts.Now()); wait > 0 {
-			if s.sleep != nil {
-				s.sleep(wait)
-			} else {
-				timer := time.NewTimer(wait)
-				select {
-				case <-timer.C:
-				case <-ctx.Done():
-					timer.Stop()
-					return nil, ctx.Err()
-				}
-			}
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
+		if err := s.awaitTail(ctx, opts); err != nil {
+			return nil, err
 		}
 		// The wait above is the whole rule: no earlier run's tail can still be pending now.
 		opts.allowRefusal = true
 	}
 	rep, err := Run(ctx, s.conn, line, opts)
+	s.noteTail(rep, opts)
+	return rep, err
+}
+
+// awaitTail waits out an earlier run's quiet window, when one is still open, so a line of it that is already on the
+// wire cannot be taken for the next run's. The caller holds the channel.
+func (s *Session) awaitTail(ctx context.Context, opts Options) error {
+	wait := s.tailUntil.Sub(opts.Now())
+	if wait <= 0 {
+		return ctx.Err()
+	}
+	if s.sleep != nil {
+		s.sleep(wait)
+		return ctx.Err()
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return ctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// noteTail records where this run's untagged lines can still arrive: the same rule Run applies to its own reply, so a
+// run that follows it on this channel (queued or ExclusiveRun) can wait the tail out.
+func (s *Session) noteTail(rep *Reply, opts Options) {
 	terminated := false
 	if rep != nil {
 		switch rep.End {
@@ -352,16 +368,37 @@ func (s *Session) runLocked(ctx context.Context, line string, opts Options) (*Re
 	}
 	if terminated {
 		s.tailUntil = time.Time{}
-	} else {
-		last := time.Time{}
-		if rep != nil {
-			last = rep.LastAt
-		}
-		if last.IsZero() {
-			last = opts.Now()
-		}
-		s.tailUntil = last.Add(opts.Quiet)
+		return
 	}
+	last := time.Time{}
+	if rep != nil {
+		last = rep.LastAt
+	}
+	if last.IsZero() {
+		last = opts.Now()
+	}
+	s.tailUntil = last.Add(opts.Quiet)
+}
+
+// ExclusiveRun runs fn as the channel's only run and keeps this Session's tail rule for it: an earlier run's open
+// quiet window is waited out before fn sends, and fn's reply opens the window a later run waits out. It is for a caller
+// that reads one reply off this channel with its own transport (the daemon's preflight, whose send and pump slices are
+// queued calls and whose reply arrives through a tap): Run's tail bookkeeping cannot be left to the caller, because
+// the reply it collects has no marker either, so an earlier run's late line would be read as its own and its own late
+// line as the next run's. fn must not call Run: the token is still not reentrant.
+func (s *Session) ExclusiveRun(ctx context.Context, opts Options, fn func() (*Reply, error)) (*Reply, error) {
+	if err := opts.normalise(); err != nil {
+		return nil, err
+	}
+	if err := s.take(ctx); err != nil {
+		return nil, err
+	}
+	defer s.release()
+	if err := s.awaitTail(ctx, opts); err != nil {
+		return nil, err
+	}
+	rep, err := fn()
+	s.noteTail(rep, opts)
 	return rep, err
 }
 

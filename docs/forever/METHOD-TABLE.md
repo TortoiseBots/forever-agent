@@ -66,11 +66,12 @@ stray "Player not found!" would refuse the run. A `bot`, `gm` or `commander` cal
 refused at once with `-32003` "busy: a run preflight holds the command channel, retry", sending nothing: those
 methods run on the session goroutine the preflight's own queued calls need, so waiting there would stop every
 method (and the packet loop) until the read ended. Both waits are bounded — the lock wait at 35 s, each read at its
-own deadline plus 2 s — so a channel that never comes back refuses instead of holding the call. A reply already on
-the wire from a command that ran before the read can still fall inside that window (a tokenless run's tail is
-waited out only for a tokened one), which the code notes. A `.pinfo` reply that stops before its Account line is
-reported as cut off, not as a character that does not exist; a console answer of nothing refuses with the read's
-bound.
+own deadline plus 2 s — so a channel that never comes back refuses instead of holding the call. The channel's
+quiet-window rule covers each read too: it waits out the tail of an earlier run on the channel before it sends, and
+its own reply leaves the window a later run waits out. A line from a command sent outside that channel (the GM
+guard's own probe) or an unsolicited system line can still fall inside the window, which the code notes. A
+`.pinfo` reply that stops before its Account line is reported as cut off, not as a character that does not exist; a
+console answer of nothing refuses with the read's bound.
 
 `plan_check {name, from_leg?, from_pull_group?}` walks the plan from the serve's plans folder (`--plans-dir`, default
 `dungeons`) on a scratch Forever planner over the serve's `--navmesh` (its own tile cache, so a walk on the session
