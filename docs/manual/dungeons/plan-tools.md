@@ -189,8 +189,10 @@ answer. The text form is one line per finding:
 proposal: before_leg leg 2 <name> at 10.0 -295.0 -44.0 (12 yd back)
 ```
 
-`first point from rows` means the exporter's first row was used; `from plan` means the leg's first plan point was
-(an optional or `skip_export` leg is not exported, and a note says so).
+`first point from rows` means the migration's first move row for that leg was used; `first point from plan` means
+the leg is in the migration without any move row, so the leg's first plan point was used. An optional or
+`skip_export` leg omitted from `--sql` is refused instead: `the migration's first row cannot stage it; stage from
+the plan file instead`, exit 2.
 
 # plan-export
 

@@ -4,7 +4,7 @@ title: Two raids at once
 description: The --slot A,B pair and multi form, pair.json, and how the exit code is picked.
 tags: [turtle, raids, pair, reference]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:55:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:55:00Z }
 sources:
   - id: pair
     resource: cmd/forever-agent/raid_walk_pair.go

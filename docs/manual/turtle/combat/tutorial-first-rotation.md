@@ -4,7 +4,7 @@ title: Check your first rotation
 description: List, show and check a rotation file, then A/B it against another with the pull test.
 tags: [turtle, combat, rotation, tutorial]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:35:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:35:00Z }
 sources:
   - id: rotations-doc
     resource: docs/ROTATIONS.md

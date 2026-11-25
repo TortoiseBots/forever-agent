@@ -4,7 +4,7 @@ title: Dungeon runs overview
 description: What a dungeon run is, the three modes, and how the parts of a run fit together.
 tags: [turtle, dungeon, commander, overview]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:30:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:30:00Z }
 sources:
   - id: dungeon-methods
     resource: cmd/forever-agent/dungeon_methods.go

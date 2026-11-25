@@ -59,8 +59,10 @@ line saying what changed and when.
   updated with the manual when it carries the same text, but it does not satisfy the gate alone; the manual's
   `log.md` and the index files are bookkeeping and never do. The checker cannot tell whether the page you changed
   is the right one. Its message names the rule; the pull request checklist carries it too.
-- A change with truly no user-visible effect says so in the pull request body, on its own line and outside a
-  fenced block: `Docs: not needed, because <the reason>`.
+- A change with truly no user-visible effect says so in the pull request body, on a line that starts at column 0,
+  outside HTML comments, fenced blocks and indented text: `Docs: not needed, because <the reason>`, where the
+  reason is at least 15 characters and not the template's placeholder. The pull request template keeps the line
+  inside an HTML comment, so a copied template never waives anything.
 
 What the machine cannot see: a change to a plan field, a stop reason, an output field, an error or refusal text,
 or a file format that no changed path or added call marks as user-visible. The diff has no trigger for those, so

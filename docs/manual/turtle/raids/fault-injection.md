@@ -4,7 +4,7 @@ title: Fault injection
 description: The --inject grammar, arbitration, pass rules, allow-list, cleanup, exits and inject.json.
 tags: [turtle, raids, inject, reference]
 status: stable
-generated: { by: omp, at: 2026-11-05T20:45:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
 sources:
   - id: inject
     resource: internal/raidwalk/inject.go

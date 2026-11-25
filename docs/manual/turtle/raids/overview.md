@@ -4,7 +4,7 @@ title: Raid walks, autopilot and suite
 description: What raid-walk, raid-autopilot and raid-suite do and how they fit together.
 tags: [turtle, raids, raid-walk, autopilot, suite]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:30:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:30:00Z }
 sources:
   - id: walk-cmd
     resource: cmd/forever-agent/raid_walk_cmd.go

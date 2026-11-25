@@ -4,7 +4,7 @@ title: Eluna test hooks
 description: The one tt call that sends test-toolkit commands and returns the server's replies.
 tags: [turtle, combat, eluna, concept]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:50:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:50:00Z }
 sources:
   - id: eluna-methods
     resource: cmd/forever-agent/eluna_methods.go

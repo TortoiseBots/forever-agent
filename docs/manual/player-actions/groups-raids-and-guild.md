@@ -119,7 +119,7 @@ what came back and logs out.
 forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
     --character NAME [--stay 5s] [--invite NAME | --accept-from NAME | --decline-from NAME] \
     [--uninvite NAME] [--promote NAME [--promote-back DURATION]] [--loot METHOD[:THRESHOLD]] \
-    [--mark ICON] [--wait-join DURATION] [--settle 4s]
+    [--mark ICON] [--wait-join DURATION] [--settle 4s] [--capture-dir DIR]
 ```
 
 | Flag | Default | Meaning |
@@ -134,6 +134,7 @@ forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FIL
 | `--loot METHOD[:THRESHOLD]` | none | Set the loot method and read the roster back: `free-for-all`, `round-robin`, `master-loot`, `group-loot`, `need-before-greed`, `personal-loot`, or `0..5`; threshold 2-6, default 2. |
 | `--mark ICON` | none | Set this raid target icon on the nearest attackable creature and read the icon list back: `star`, `circle`, `diamond`, `triangle`, `moon`, `square`, `cross`, `skull`. |
 | `--wait-join DURATION` | `0` | With `--invite`: wait up to this long for the group to form (stats, party line, stay); at most 2m. |
+| `--capture-dir DIR` | none | Write every packet the combat, chat and party handlers see into a new run directory under this path; keep it outside the repository. |
 
 The summary is the roster the session saw, in the same fields as the `party` method:
 

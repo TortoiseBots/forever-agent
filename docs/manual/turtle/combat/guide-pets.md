@@ -4,7 +4,7 @@ title: Pets and their orders
 description: What the shared pet strategy sends, when it recalls, and what it never drives.
 tags: [turtle, combat, pets]
 status: stable
-generated: { by: omp, at: 2026-11-05T20:45:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
 sources:
   - id: pet-go
     resource: internal/brain/pet.go

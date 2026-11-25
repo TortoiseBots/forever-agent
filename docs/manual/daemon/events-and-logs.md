@@ -125,27 +125,24 @@ An event row: `seq`, `time`, `mono_ms`, `kind`, `source`, `source_guid`, `target
 | `session` | The link and the character: `data.state` is `in_world`, `map_change`, `falling`, `fall_land`, `fall_cancelled`, `disconnected` or `reconnected`. |
 | `chat`, `whisper` | Chat lines and whispers, in and out. |
 | `system` | System messages, GM command output and notifications. |
-| `party`, `party_stats`, `guild` | Party packets, member stats, guild invites and results. |
+| `party`, `guild`, `raid_mark` | Party packets and guild invites and results; `raid_mark` is a raid icon set or cleared (`data.state` is `single` or `list`). |
 | `addon` | An add-on message: prefix, text and sender. |
-| `melee`, `spell_damage`, `periodic`, `heal`, `energize`, `spell_start`, `spell_go`, `spell_fail`, `spell_miss`, `aura_applied`, `aura_removed`, `death`, `kill`, `attack_start`, `attack_stop`, `attack_error`, `parse_error`, `raid_mark` | The combat ring's kinds, copied. |
-| `resurrect_request`, `summon_request`, `corpse_reclaim_delay` | Offers to resurrect or summon, and the corpse reclaim timer. |
-| `loot_roll_start`, `loot_roll`, `loot_roll_won`, `loot_all_passed`, `loot_open`, `loot_error`, `loot_taken`, `loot_money`, `loot_money_share`, `loot_closed` | Group rolls and the loot window. |
-| `inventory_error` | An equip or move the server refused. |
+| `spell_start`, `spell_go`, `spell_fail`, `melee`, `spell_damage`, `periodic`, `heal`, `aura_applied`, `aura_removed`, `death`, `miss`, `resist`, `immune`, `absorb`, `interrupt`, `dispel`, `instakill`, `environmental`, `knockback`, `knockback_land`, `hostile`, `alert` | The combat ring's kinds, copied with the same sides, spell and amount. `data.reason` carries the failure or victim state; the two knockback rows carry the position, speeds and air time. (`hostile` and `alert` come from SMSG_AI_REACTION, which writes no combat row.) |
+| `summon_request` | A portal offers to summon the player: `data.summoner`, `area` and `reason`. |
+| `loot_roll_start`, `loot_roll`, `loot_roll_won`, `loot_all_passed`, `loot_open`, `loot_error`, `loot_taken`, `loot_closed` | Group rolls and the loot window. |
 | `channel_notify` | Channel join, leave, kick and password answers. |
 | `gossip`, `gossip_complete` | An NPC's menu, and its close. |
 | `gameobject` | A game object changed: `data.change` is `state`, `flags`, `dyn_flags`, `animation`, `reset`, `spawn` or `destroyed`. |
-| `mount`, `mount_result`, `stand_state` | Mount display and stand state changes. |
 | `vendor_list`, `vendor_buy`, `vendor_buy_failed`, `vendor_sell`, `vendor_sell_failed` | Vendor lists and purchases. |
 | `trainer_list`, `trainer_trained`, `trainer_failed`, `spell_learned`, `spell_removed`, `spell_superseded` | Trainer and spellbook changes. |
-| `cooldown_start`, `cooldown_end`, `cooldown_clear`, `channel_start`, `channel_end`, `combo_points` | The agent's own spell state. |
-| `quest_list`, `quest_details`, `quest_request_items`, `quest_offer_reward`, `quest_accepted`, `quest_rewarded`, `quest_abandoned`, `quest_error`, `quest_update` | Quest panels, results and progress. |
+| `cooldown_start`, `cooldown_end`, `cooldown_clear`, `combo_points` | The agent's own spell cooldowns and combo points. |
+| `quest_list`, `quest_details`, `quest_request_items`, `quest_offer_reward`, `quest_accepted`, `quest_rewarded`, `quest_abandoned`, `quest_error` | Quest panels and results. |
 | `taxi_reply`, `taxi_node`, `taxi_flight` | Flight-master answers, new nodes, takeoff and landing (`data.state`). |
 | `trade_status` | A step of a trade window (`data.status`). |
 | `pet_summoned`, `pet_died`, `pet_revived`, `pet_dismissed`, `pet_error` | The player's pet. |
 | `mail_list`, `mail_result`, `mail_new` | Mailbox list, command results, and the new-mail notice. |
 | `auction_hello`, `auction_buckets`, `auction_items`, `auction_owned`, `auction_quote`, `auction_result`, `auction_won`, `auction_outbid`, `auction_owner_bid`, `auction_closed` | Auction house answers and notifications. |
-| `dungeon_leg`, `dungeon_step`, `dungeon_failed`, `dungeon_done`, `dungeon_refused`, `dungeon_leader` | The dungeon driver's progress. |
-| `player_follow` | The follow loop: started, walk, ahead, lost, zoning, zoned, dead, back, stopped. |
+| `bank` | A bank method's outcome: `data.command` is `list`, `deposit` or `withdraw`; `ok` and `reason` say whether it stood. `bank_buy_slot` writes none (it refuses before sending). |
 
 The ring outlives a reconnect, and a read is answered under the ring's own lock, so `event_log` still works
 while reconnecting, while an `act`, a walk or a follow step holds the session goroutine.

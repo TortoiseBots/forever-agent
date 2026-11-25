@@ -4,7 +4,7 @@ title: Remote-control calls
 description: commander, bot_view, tbm, tune, and lfg calls with every field and default.
 tags: [turtle, dungeon, commander, reference, rpc]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T21:00:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T21:00:00Z }
 sources:
   - id: commander-methods
     resource: cmd/forever-agent/commander_methods.go

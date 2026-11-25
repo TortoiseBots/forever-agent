@@ -4,7 +4,7 @@ title: Troubleshooting raids
 description: Real raid-walk, autopilot and suite error messages, what they mean, and the fix.
 tags: [turtle, raids, troubleshooting]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:55:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:55:00Z }
 sources:
   - id: walk-cmd
     resource: cmd/forever-agent/raid_walk_cmd.go

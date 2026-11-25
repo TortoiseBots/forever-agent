@@ -4,7 +4,7 @@ title: Log a character in
 description: Log one character in with the login command, stay online, and log out cleanly.
 tags: [turtle, getting-started, login, rpc, logout, exit-codes]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:25:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:25:00Z }
 sources:
   - id: login
     resource: cmd/forever-agent/login.go

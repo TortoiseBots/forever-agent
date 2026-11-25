@@ -4,7 +4,7 @@ title: Add boss tactics
 description: Put a kill-first, interrupt, dispel and move-out block on a plan boss.
 tags: [turtle, combat, tactics, plan]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:40:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:40:00Z }
 sources:
   - id: tactics-go
     resource: internal/tactics/tactics.go

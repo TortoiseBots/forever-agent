@@ -4,7 +4,7 @@ title: Holy paladin and resurrection
 description: Blessings by role, emergency buttons, the off-preset judge, and how the shared resurrection works.
 tags: [turtle, combat, paladin, healer, resurrection]
 status: stable
-generated: { by: omp, at: 2026-11-05T20:45:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
 sources:
   - id: paladin-holy-go
     resource: internal/brain/paladin_holy.go

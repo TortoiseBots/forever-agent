@@ -157,27 +157,27 @@ See [The session daemon](../daemon/serve.md) and [RPC basics](../daemon/rpc-basi
 # The character screen: forever char-create and forever char-delete
 
 Both commands log in like `forever world-check` (the same connection flags and `FOREVER_PASSWORD`), authenticate the
-world socket, and work on the character screen without entering the world. Both list the account's characters before
-and after, so a rerun shows what is actually there.
+world socket, and work on the character screen without entering the world. `char-create` lists the account's characters before and after,
+and `char-delete` lists them after, so a rerun shows what is actually there.
 
 ```bash
 bin/forever-agent forever char-create --name NAME [--surname NAME] --race R --class C [--sex 0|1] \
     (--choice OPTION:CHOICE ... | --no-appearance) --rest example.invalid:1119 --rpc example.invalid:1119 \
     --ca ./ca.pem --account ACCOUNT
 
-bin/forever-agent forever char-delete (--name NAME [--surname NAME] | --guid 0xHIGH_LOW) \
+bin/forever-agent forever char-delete (--name NAME [--surname NAME] | --guid 0xHEX32) \
     --yes NAME --rest example.invalid:1119 --rpc example.invalid:1119 --ca ./ca.pem --account ACCOUNT
 ```
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--name` | required | The character name (for `char-delete`, its full name may carry the surname after the first blank). |
+| `--name` | see the row | The character name (for `char-delete`, its full name may carry the surname after the first blank). Required for `char-create`; for `char-delete`, required unless `--guid` is given. |
 | `--surname` | none | The character's surname, when it is not part of `--name`. |
 | `--race`, `--class` | required, 1-255 | Race and class ids (`ChrRaces.dbc`, `ChrClasses.dbc`). |
 | `--sex` | `0` | `0` male, `1` female. |
 | `--choice OPTION:CHOICE` | none | One appearance choice, repeatable and sent as given. |
 | `--no-appearance` | off | For test characters: create with no appearance choices. `--choice` and this are exclusive. |
-| `--guid 0xHIGH_LOW` | none | `char-delete`: delete exactly this GUID instead of resolving `--name`. |
+| `--guid 0xHEX32` | none | `char-delete`: delete exactly this GUID instead of resolving `--name`; 32 hex digits after `0x`. |
 | `--yes NAME` | required | `char-delete`: the resolved character's full name; without the match nothing is sent. |
 
 The result code is the core's own name (`char-create: Mychar -> CHAR_CREATE_SUCCESS` and the like).

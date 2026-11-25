@@ -51,12 +51,15 @@ Links (every file in the bundle):
   * "#anchor" links and absolute URLs are not checked.
 
 Privacy (every file in the bundle, and nothing outside it):
-  * no IPv4 address except loopback (127.0.0.0/8); the agent's own defaults
-    are loopback addresses, and every other address is a real host somewhere;
+  * no IPv4 address except loopback (127.0.0.0/8), and no IPv6 address except
+    loopback (::1); the agent's own defaults are loopback addresses, and every
+    other address is a real host somewhere;
   * no absolute home directory path (/home/, /root/, /Users/) and no Windows
     drive path; no e-mail address except example.invalid or example.com; no
-    host name outside a short allow-list (github.com, battle.net domains,
-    example.invalid, localhost);
+    host-shaped dotted name outside a short allow-list (github.com, battle.net
+    domains, example.invalid, localhost). Host-shaped means a known top-level
+    domain, three or more labels, or a machine-looking first label; a file name
+    or code symbol with a known suffix is not;
   * no assigned secret value: password/passwd/secret/token keys with a quoted or
     unquoted value, in a flag, shell assignment, JSON or YAML. A placeholder
     (<password>, PASSWORD, $ENV, ...) is fine, and a *_file/*_env/*_path key
@@ -75,8 +78,11 @@ Commands (fenced code blocks and indented code blocks in every .md page):
 Command coverage (the whole bundle):
   * every command the binary registers is documented in at least one manual
     page as a command: a line in a code block ("forever-agent <word>", or
-    "forever-agent forever <word>" for a subcommand), a heading naming it, or a
-    table row naming it. A bare backticked word in prose does not count;
+    "forever-agent forever <word>" for a subcommand), a heading naming it, a
+    table cell naming the command form ("forever-agent <word>" or
+    "forever <word>"), or a bare backticked word in a table cell under a header
+    that names the command column ("Command", "Subcommand"). A bare backticked
+    word in prose, or in any other table cell, does not count;
   * docs/manual/.undocumented-commands holds the names deliberately left out
     (hidden or debug commands), one "name # reason" per line; an entry that is
     not a registered command is a problem, so the list cannot rot.
@@ -107,6 +113,7 @@ Names that start with a dot (the two allow-lists) are not pages.
 """
 
 import datetime
+import ipaddress
 import os
 import posixpath
 import re
@@ -147,18 +154,37 @@ WINDOWS_PATH = re.compile(r"(?<![A-Za-z])[A-Za-z]:\\")
 EMAIL = re.compile(r"(?<![\w.+-])([A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,}))(?![\w-])")
 EMAIL_DOMAINS = ("example.invalid", "example.com")
 
-# A host name: a dotted name with a TLD the manual could name. The allow-list holds the domains the
-# docs legitimately link to; everything else is a real host somewhere and is reported.
-HOSTNAME = re.compile(
+# A host name: a dotted name whose last label is alphabetic. The allow-list holds the domains the docs
+# legitimately link to. Everything else that is host-shaped is reported: a last label that is a known
+# top-level domain, three or more labels (a fully qualified name), or a first label carrying a digit or
+# a hyphen (a machine name such as build01.corp). A file name or a code symbol has a known non-host
+# suffix, or a plain identifier as its first label, so it is not reported.
+HOST_SHAPED = re.compile(
     r"(?<![A-Za-z0-9_.-])"
-    r"((?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+"
-    r"(?:com|net|org|io|invalid|local|dev|gg|tv|xyz|me|co|uk|biz|info|app|cloud|host|site|online|tech|store|page|link|ai))"
-    r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9])",
-    re.IGNORECASE,
+    r"((?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+([A-Za-z]{2,}))"
+    r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9])"
 )
+HOST_TLDS = {
+    "com", "net", "org", "io", "invalid", "local", "dev", "gg", "tv", "xyz", "me", "co", "uk",
+    "biz", "info", "app", "cloud", "host", "site", "online", "tech", "store", "page", "link", "ai",
+    "internal", "lan", "home", "corp", "arpa", "test", "example", "intranet", "private", "localdomain",
+}
+# A dotted name's last label that names a file or a code artifact, not a host: a manual names its own
+# files and Go packages far more often than a host.
+NON_HOST_SUFFIXES = {
+    "md", "go", "json", "jsonl", "txt", "tsv", "sh", "pem", "log", "yml", "yaml", "mmap", "mmtile",
+    "svg", "sql", "db2", "dbc", "conf", "inc", "cpp", "hpp", "h", "lua", "png", "jpg", "jpeg", "gif",
+    "gz", "tar", "zip", "diff", "lock", "js", "css", "xml", "csv", "ini", "toml", "rst", "html",
+    "htm", "py", "rb", "php", "cs", "java", "proto", "bin", "dat", "db", "o", "so", "a", "exe",
+    "bat", "ps1", "twcap", "pid", "token", "party", "mod",
+}
 ALLOWED_HOSTS = ("github.com", "battle.net", "example.invalid", "example.com")
 ALLOWED_HOST_SUFFIXES = (".github.com", ".battle.net", ".example.invalid", ".example.com")
 LOCAL_HOSTS = ("localhost",)
+
+# An IPv6 literal: the token is handed to the standard library, so a time (12:30:00) or a scope
+# operator (Player::SendAddonMessage) is not one. Loopback (::1) is the one address the manual may show.
+IPV6_CANDIDATE = re.compile(r"(?<![0-9A-Za-z:])[0-9A-Fa-f:]*[0-9A-Fa-f][0-9A-Fa-f:]*(?![0-9A-Za-z:])")
 
 # A secret-like key and its assigned value, in the forms the manual can carry: a flag (--password=x),
 # a shell assignment (PASSWORD=x, export DB_PASSWORD=x), JSON/YAML (password: x, "password": "x").
@@ -201,16 +227,14 @@ BACKTICK = re.compile(r"`([^`\n]+)`")
 # A method-index table row: the first column is the method in backticks.
 METHOD_ROW = re.compile(r"^\|\s*`([A-Za-z0-9_]+)`\s*\|")
 
-# The serve registers a method by name in three shapes, all inside internal/forever/world:
+# The serve registers a method by name in these shapes, all inside internal/forever/world:
 #   srv.Register("status", ...)                       a literal name;
 #   for name, fn := range map[string]...{ "mail_list": ... } { srv.Register(name, ...) }
-#                                                     a map literal a range walks;
+#                                                     a map or []string literal a range walks;
 #   var refusedMethods = []serveRefusal{ {name: "tt", why: ...}, ... }
-#                                                     the old daemon's names this server refuses.
-# The map and slice patterns are the ones the package uses today, and a test fixture pins them.
-REGISTER_CALL = re.compile(r'srv\.Register\("([^"]+)"')
-REGISTER_MAP_START = re.compile(r"range\s+map\[string\]")
-REGISTER_MAP_KEYS = re.compile(r'"([^"\n]+)"\s*:')
+#                                                     the old daemon's names this server refuses,
+#                                                     registered through the loop's local alias.
+# A call whose first argument the checker cannot read is an error, never a silent skip.
 REFUSED_LIST = re.compile(r"var\s+refusedMethods\s*=\s*\[\]serveRefusal\s*\{(.*?)\n\}", re.S)
 REFUSED_NAME = re.compile(r'\bname:\s*"([^"\n]+)"')
 NOT_PORTED_LIST = re.compile(r"var\s+notPortedMethods\s*=\s*\[\]string\s*\{(.*?)\}", re.S)
@@ -605,6 +629,28 @@ def _allowed_host(host):
     return any(host.endswith(suffix) for suffix in ALLOWED_HOST_SUFFIXES)
 
 
+def _host_problem(host):
+    """True when a dotted name is host-shaped and not on the allow-list."""
+    labels = host.lower().split(".")
+    if labels[-1] in NON_HOST_SUFFIXES:
+        return False
+    if labels[-1] in HOST_TLDS:
+        return True
+    if len(labels) >= 3:
+        return True
+    return any(char.isdigit() or char == "-" for char in labels[0])
+
+
+def _ipv6_address(token):
+    """The IPv6 address a token spells, or None."""
+    if token.count(":") < 2:
+        return None
+    try:
+        return ipaddress.IPv6Address(token)
+    except ValueError:
+        return None
+
+
 def _check_privacy(rel, text, report):
     for number, line in enumerate(text.splitlines(), start=1):
         for match in IPV4.finditer(line):
@@ -625,13 +671,18 @@ def _check_privacy(rel, text, report):
             if any(domain == allowed or domain.endswith("." + allowed) for allowed in EMAIL_DOMAINS):
                 continue
             report(rel, number, "e-mail address in the manual: %s" % match.group(1))
-        for match in HOSTNAME.finditer(line):
+        for match in HOST_SHAPED.finditer(line):
             host = match.group(1)
             if match.start() > 0 and line[match.start() - 1] == "@":
                 continue
-            if _allowed_host(host):
+            if _allowed_host(host) or not _host_problem(host):
                 continue
             report(rel, number, "host name in the manual: %s" % host)
+        for match in IPV6_CANDIDATE.finditer(line):
+            address = _ipv6_address(match.group(0))
+            if address is None or address.is_loopback:
+                continue
+            report(rel, number, "IPv6 address in the manual: %s" % match.group(0))
         for match in SECRET_ASSIGNMENT.finditer(line):
             if SECRET_KEY_SUFFIX.search(match.group("key")):
                 continue
@@ -799,50 +850,255 @@ def load_command_registry(root):
     return parse_command_registry(*texts)
 
 
-def _registration_map_keys(text):
-    """The string keys of every map literal a `range` walks that then registers by name.
+def _matching_brace(tokens, opening):
+    """The index of the "}" that closes the "{" at opening, or -1."""
+    depth = 0
+    for index in range(opening, len(tokens)):
+        kind, value, _ = tokens[index]
+        if kind != "punct":
+            continue
+        if value == "{":
+            depth += 1
+        elif value == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
 
-    The package writes "for name, fn := range map[string]T{...} { srv.Register(name, ...) }". For each such range
-    the literal's braces are matched, and its quoted keys count only when "srv.Register(name" follows the literal
-    (a map ranged for anything else is not a method registration).
+
+def _collection_names(tokens, index):
+    """The names a `range` at index walks, its last token index and the source variable if any.
+
+    A map[string]T{...} literal yields its string keys, a []string{...} literal its strings. A single
+    identifier yields no names but names itself, so a caller can resolve a package-level slice. Any other
+    expression yields None: the checker does not guess.
     """
-    keys = set()
-    pos = 0
-    while True:
-        start = REGISTER_MAP_START.search(text, pos)
-        if not start:
-            return keys
-        opening = text.find("{", start.end())
-        if opening < 0:
-            return keys
+    index += 1
+    if index >= len(tokens):
+        return None, index, None
+    kind, value, _ = tokens[index]
+    first_kind, first_value = kind, value
+    if kind == "ident" and value == "map":
+        opening = index + 1
+        while opening < len(tokens) and not (tokens[opening][0] == "punct" and tokens[opening][1] == "{"):
+            opening += 1
+        if opening >= len(tokens):
+            return None, opening, None
+        closing = _matching_brace(tokens, opening)
+        names = set()
         depth = 0
-        closing = opening
-        while closing < len(text):
-            char = text[closing]
-            if char == "{":
+        for position in range(opening, closing + 1):
+            kind, value, _ = tokens[position]
+            if kind == "punct" and value == "{":
                 depth += 1
-            elif char == "}":
+                continue
+            if kind == "punct" and value == "}":
                 depth -= 1
+                continue
+            if (
+                depth == 1
+                and kind == "string"
+                and position + 1 <= closing
+                and tokens[position + 1][0] == "punct"
+                and tokens[position + 1][1] == ":"
+            ):
+                names.add(value)
+        return names, closing, None
+    if (
+        kind == "punct"
+        and value == "["
+        and index + 3 < len(tokens)
+        and tokens[index + 1][1] == "]"
+        and tokens[index + 2][0] == "ident"
+        and tokens[index + 2][1] == "string"
+        and tokens[index + 3][0] == "punct"
+        and tokens[index + 3][1] == "{"
+    ):
+        opening = index + 3
+        closing = _matching_brace(tokens, opening)
+        names = set()
+        depth = 0
+        for position in range(opening, closing + 1):
+            kind, value, _ = tokens[position]
+            if kind == "punct" and value == "{":
+                depth += 1
+                continue
+            if kind == "punct" and value == "}":
+                depth -= 1
+                continue
+            if depth == 1 and kind == "string":
+                names.add(value)
+        return names, closing, None
+    if first_kind == "ident" and index + 1 < len(tokens) and tokens[index + 1][1] == "{":
+        # A plain variable: its value is the collection, and the next token opens the loop body.
+        return None, index, first_value
+    closing = index
+    depth = 0
+    while closing < len(tokens):
+        kind, value, _ = tokens[closing]
+        if kind == "punct":
+            if value in "([{":
+                depth += 1
+            elif value in ")]}":
                 if depth == 0:
                     break
-            closing += 1
-        body = text[opening + 1:closing]
-        if "srv.Register(name" in text[closing + 1:closing + 400]:
-            keys.update(REGISTER_MAP_KEYS.findall(body))
-        pos = closing + 1
+                depth -= 1
+            elif value == ";" and depth == 0:
+                break
+        closing += 1
+    source = first_value if first_kind == "ident" else None
+    return None, closing - 1, source
 
 
-def parse_method_registry(texts):
+def _range_loops(tokens):
+    """Every `for ... := range` loop whose collection this checker can read.
+
+    Returns tuples of (loop variables, names or None, source variable or None, body start, body end).
+    """
+    loops = []
+    for index, (kind, value, _) in enumerate(tokens):
+        if kind != "ident" or value != "range":
+            continue
+        variables = set()
+        position = index - 1
+        while position >= 0:
+            kind, value, _ = tokens[position]
+            if kind == "ident" and value == "for":
+                break
+            if kind == "ident":
+                variables.add(value)
+            position -= 1
+        names, closing, source = _collection_names(tokens, index)
+        opening = closing + 1
+        while opening < len(tokens) and not (tokens[opening][0] == "punct" and tokens[opening][1] == "{"):
+            opening += 1
+        body_end = _matching_brace(tokens, opening) if opening < len(tokens) else -1
+        loops.append((variables, names, source, opening, body_end))
+    return loops
+
+
+# A package-level slice of structs: "var refusedMethods = []serveRefusal{ ... }". Its "name:" fields
+# are the names a range over the variable hands to Register through a local alias.
+STRUCT_LIST = re.compile(r"var\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*\[\][A-Za-z_][A-Za-z0-9_.]*\s*\{(.*?)\n\}", re.S)
+
+
+def _struct_list_names(text):
+    """{variable: names} for every package-level []T{...} whose entries carry a name: field."""
+    return {match.group(1): set(REFUSED_NAME.findall(match.group(2))) for match in STRUCT_LIST.finditer(text)}
+
+
+def _parse_register_calls(text):
+    """The method names a file registers, and the calls whose name the checker cannot read.
+
+    Every `.Register(` call is read. Its first argument must be one string literal, or one identifier
+    that a `range` loop in the same file binds to a map[string]... or []string literal. Anything else
+    is an error: the author is told to use the literal form, never silently skipped.
+    """
+    tokens = _go_tokens(text)
+    struct_names = _struct_list_names(text)
+    loops = _range_loops(tokens)
+    aliases = {}
+    for variables, collection, source, body_start, body_end in loops:
+        refused_collection = collection is None and source in struct_names
+        if refused_collection:
+            collection = struct_names[source]
+        if collection is None:
+            continue
+        # name := r.name inside the loop: the local carries the list's names too.
+        position = body_start + 1
+        while position + 5 <= body_end:
+            if (
+                tokens[position][0] == "ident"
+                and tokens[position + 1][1] == ":"
+                and tokens[position + 2][1] == "="
+                and tokens[position + 3][0] == "ident"
+                and tokens[position + 3][1] in variables
+                and tokens[position + 4][1] == "."
+                and tokens[position + 5][0] == "ident"
+                and tokens[position + 5][1] == "name"
+            ):
+                aliases[tokens[position][1]] = (collection, refused_collection)
+            position += 1
+    names = set()
+    refused_names = set()
+    problems = []
+    for index, (kind, value, line) in enumerate(tokens):
+        if (
+            kind != "ident"
+            or value != "Register"
+            or index < 1
+            or tokens[index - 1][0] != "punct"
+            or tokens[index - 1][1] != "."
+            or index + 1 >= len(tokens)
+            or tokens[index + 1][0] != "punct"
+            or tokens[index + 1][1] != "("
+        ):
+            continue
+        position = index + 2
+        depth = 0
+        while position < len(tokens):
+            kind, value, _ = tokens[position]
+            if kind == "punct":
+                if value in "([{":
+                    depth += 1
+                elif value in ")]}":
+                    if depth == 0:
+                        break
+                    depth -= 1
+                elif value == "," and depth == 0:
+                    break
+            position += 1
+        argument = tokens[index + 2:position]
+        if len(argument) == 1 and argument[0][0] == "string":
+            names.add(argument[0][1])
+            continue
+        if len(argument) == 1 and argument[0][0] == "ident":
+            variable = argument[0][1]
+            resolved = False
+            for variables, collection, source, body_start, body_end in loops:
+                if variable in variables and body_start <= index <= body_end:
+                    refused_collection = collection is None and source in struct_names
+                    if refused_collection:
+                        collection = struct_names[source]
+                    if collection is not None:
+                        (refused_names if refused_collection else names).update(collection)
+                        resolved = True
+                        break
+            if not resolved and variable in aliases:
+                collection, refused_collection = aliases[variable]
+                (refused_names if refused_collection else names).update(collection)
+                resolved = True
+            if resolved:
+                continue
+        problems.append(
+            (
+                line,
+                "cannot read the method name at this Register call: its first argument is not a string "
+                'literal. Use Register("name", ...), or a map[string]... or []string literal that the same '
+                "range walks and registers by its loop variable",
+            )
+        )
+    return names, refused_names, problems
+
+
+def parse_method_registry(texts, problems=None):
     """Return (implemented methods, refused methods) parsed from internal/forever/world's Go sources.
 
-    See the three registration shapes at REGISTER_CALL. The older notPortedMethods slice is read
-    too, so a tree that still uses it is not silently empty.
+    texts is a list of file contents, or of (name, content) pairs. Every `.Register(` call is read; one
+    whose first argument is not a readable literal is a problem (appended to `problems` as
+    (name, line, message) when a list is given), not a silent omission. The older notPortedMethods
+    slice is read too, so a tree that still uses it is not silently empty.
     """
     implemented = set()
     refused = set()
-    for text in texts:
-        implemented.update(REGISTER_CALL.findall(text))
-        implemented.update(_registration_map_keys(text))
+    for item in texts:
+        name, text = item if isinstance(item, tuple) else ("", item)
+        found, registered_refused, unreadable = _parse_register_calls(text)
+        implemented.update(found)
+        refused.update(registered_refused)
+        if problems is not None:
+            for line, message in unreadable:
+                problems.append((name, line, message))
         for block in REFUSED_LIST.findall(text):
             refused.update(REFUSED_NAME.findall(block))
         for block in NOT_PORTED_LIST.findall(text):
@@ -855,24 +1111,26 @@ def _quoted_names(block):
 
 
 def load_method_registry(root):
-    """Read internal/forever/world's method registration, or None when that tree is not under root."""
+    """Read internal/forever/world's registration, or (None, []) when that tree is not under root."""
     directory = os.path.join(root, "internal", "forever", "world")
     try:
         names = sorted(os.listdir(directory))
     except OSError:
-        return None
+        return None, []
     texts = []
     for name in names:
         if not name.endswith(".go") or name.endswith("_test.go"):
             continue
         try:
             with open(os.path.join(directory, name), encoding="utf-8") as handle:
-                texts.append(handle.read())
+                texts.append((posixpath.join("internal", "forever", "world", name), handle.read()))
         except OSError:
-            return None
+            return None, []
     if not texts:
-        return None
-    return parse_method_registry(texts)
+        return None, []
+    problems = []
+    registry = parse_method_registry(texts, problems)
+    return registry, problems
 
 
 def _code_lines(text):
@@ -927,8 +1185,13 @@ def _note_command_line(line, top, forever):
         forever.add(words[1])
 
 
-def _note_command_form(phrase, top, forever):
-    """Record a heading or table cell that names a command form."""
+def _note_command_form(phrase, top, forever, bare=False):
+    """Record a heading or table cell that names a command form.
+
+    A bare command word counts only when bare is true: a heading, or a table cell under a header that
+    names a command column. In any other table cell only "forever-agent <word>" or "forever <word>"
+    names a command.
+    """
     phrase = phrase.strip()
     match = COMMAND_FORM.match(phrase)
     if match:
@@ -940,8 +1203,25 @@ def _note_command_form(phrase, top, forever):
         else:
             top.add(word)
         return
-    if re.fullmatch(r"[a-z][a-z0-9-]*", phrase):
+    if bare and re.fullmatch(r"[a-z][a-z0-9-]*", phrase):
         top.add(phrase)
+
+
+def _table_cells(line):
+    """The stripped cells of one markdown table row."""
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _table_separator(cells):
+    """True for the |---|---| row under a table's header."""
+    filled = [cell for cell in cells if cell]
+    return bool(filled) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in filled)
+
+
+def _command_column(cell):
+    """True when a table header cell names a command column ("Command", "Turtle-only command")."""
+    text = re.sub(r"[^a-z]", "", cell.strip().strip("`").strip().lower())
+    return "command" in text
 
 
 def command_mentions(text):
@@ -949,22 +1229,34 @@ def command_mentions(text):
 
     A command is documented only as a command: a line in a fenced or indented code block that starts
     with forever-agent (`forever-agent <word>`, `forever-agent forever <word>`), a heading that names
-    that form or is the command word itself, or a table row whose first cell names the form. A bare
-    backticked word in prose is not documentation.
+    that form or is the command word itself, or a table cell that names the form. A bare backticked
+    word counts only in a heading or under a table header that names a command column; in prose or any
+    other table cell it is not documentation.
     """
     top, forever = set(), set()
     for _, line in _code_lines(text):
         _note_command_line(line, top, forever)
+    in_table = False
+    command_columns = set()
     for line in text.splitlines():
         heading = MD_HEADING.match(line)
         if heading:
-            _note_command_form(heading.group(1).strip().strip("`").strip(), top, forever)
+            in_table = False
+            _note_command_form(heading.group(1).strip().strip("`").strip(), top, forever, bare=True)
             continue
-        if line.lstrip().startswith("|"):
-            cells = line.split("|")
-            if len(cells) > 1:
-                for span in BACKTICK.findall(cells[1]):
-                    _note_command_form(span.strip(), top, forever)
+        if not line.lstrip().startswith("|"):
+            in_table = False
+            continue
+        cells = _table_cells(line)
+        if not in_table:
+            in_table = True
+            command_columns = {index for index, cell in enumerate(cells) if _command_column(cell)}
+            continue
+        if _table_separator(cells):
+            continue
+        for index, cell in enumerate(cells):
+            for span in BACKTICK.findall(cell):
+                _note_command_form(span.strip(), top, forever, bare=index in command_columns)
     return top, forever
 
 
@@ -1192,7 +1484,9 @@ def check_bundle(root):
         return ["%s: bundle directory not found" % posixpath.join(BUNDLE)]
 
     registry = load_command_registry(root)
-    method_registry = load_method_registry(root)
+    method_registry, method_problems = load_method_registry(root)
+    for rel, line, message in method_problems:
+        report(rel, line, message)
     for directory, dirs, files in os.walk(bundle):
         dirs[:] = sorted(d for d in dirs if not d.startswith("."))
         dirs.sort()

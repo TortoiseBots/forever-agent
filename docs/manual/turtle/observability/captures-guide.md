@@ -4,7 +4,7 @@ title: Record and decode a capture
 description: Record a session's packets, prove they hold no secrets, and decode them into events.
 tags: [turtle, captures, guide]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:42:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:42:00Z }
 sources:
   - id: capturecmd
     resource: cmd/forever-agent/capturecmd.go

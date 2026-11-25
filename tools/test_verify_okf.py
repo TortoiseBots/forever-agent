@@ -479,6 +479,95 @@ class BundleTest(unittest.TestCase):
         self.assertEqual(implemented, {"status", "walk_to", "mail_list"})
         self.assertEqual(refused, {"dungeon_run", "tune_set"})
 
+    def test_a_register_name_through_a_variable_is_an_error(self):
+        text = (
+            "package world\n"
+            "\n"
+            "func register(srv *rpc.Server) {\n"
+            '\tconst nm = "status"\n'
+            "\tsrv.Register(nm, nil)\n"
+            "}\n"
+        )
+        problems = []
+        implemented, refused = verify_okf.parse_method_registry([text], problems)
+        self.assertEqual(implemented, set())
+        self.assertEqual(refused, set())
+        self.assertEqual(len(problems), 1)
+        self.assertIn("Use Register", problems[0][2])
+
+    def test_a_register_call_split_over_lines_is_read(self):
+        text = (
+            "package world\n"
+            "\n"
+            "func register(srv *rpc.Server) {\n"
+            "\tsrv.Register(\n"
+            '\t\t"split_name",\n'
+            "\t\tnil,\n"
+            "\t)\n"
+            "}\n"
+        )
+        implemented, refused = verify_okf.parse_method_registry([text])
+        self.assertEqual(implemented, {"split_name"})
+
+    def test_an_aliased_server_variable_is_read(self):
+        text = (
+            "package world\n"
+            "\n"
+            "func register(srv *rpc.Server) {\n"
+            "\ts2 := srv\n"
+            '\ts2.Register("aliased_name", nil)\n'
+            "}\n"
+        )
+        implemented, refused = verify_okf.parse_method_registry([text])
+        self.assertEqual(implemented, {"aliased_name"})
+
+    def test_a_range_over_a_string_slice_is_read(self):
+        text = (
+            "package world\n"
+            "\n"
+            "func register(srv *rpc.Server) {\n"
+            '\tfor _, name := range []string{"one", "two"} {\n'
+            "\t\tsrv.Register(name, nil)\n"
+            "\t}\n"
+            "}\n"
+        )
+        implemented, refused = verify_okf.parse_method_registry([text])
+        self.assertEqual(implemented, {"one", "two"})
+
+    def test_a_range_over_an_unknown_slice_fails_closed(self):
+        text = (
+            "package world\n"
+            "\n"
+            "func register(srv *rpc.Server, names []string) {\n"
+            "\tfor _, name := range names {\n"
+            "\t\tsrv.Register(name, nil)\n"
+            "\t}\n"
+            "}\n"
+        )
+        problems = []
+        verify_okf.parse_method_registry([text], problems)
+        self.assertEqual(len(problems), 1)
+        self.assertIn("Use Register", problems[0][2])
+
+    def test_the_refused_list_registration_is_refused_not_implemented(self):
+        text = (
+            "package world\n"
+            "\n"
+            "var refusedMethods = []serveRefusal{\n"
+            '\t{name: "old_one", why: "gone"},\n'
+            "}\n"
+            "\n"
+            "func registerRefused(srv *rpc.Server) {\n"
+            "\tfor _, r := range refusedMethods {\n"
+            "\t\tname := r.name\n"
+            '\t\tsrv.Register(name, func() {})\n'
+            "\t}\n"
+            "}\n"
+        )
+        implemented, refused = verify_okf.parse_method_registry([text])
+        self.assertEqual(implemented, set())
+        self.assertEqual(refused, {"old_one"})
+
     def test_registered_method_must_be_in_the_index(self):
         write(
             self.root,
@@ -568,6 +657,32 @@ class BundleTest(unittest.TestCase):
         self.assertIn("brace", top)
         self.assertIn("lease", top)
         self.assertNotIn("ghost", top)
+
+    def test_a_bare_word_in_a_plain_table_names_no_command(self):
+        top, forever = verify_okf.command_mentions("| Flag | Meaning |\n|---|---|\n| `version` | x |\n")
+        self.assertEqual(top, set())
+        self.assertEqual(forever, set())
+
+    def test_a_bare_word_under_a_command_header_names_a_command(self):
+        top, _ = verify_okf.command_mentions("| Command | What |\n|---|---|\n| `version` | x |\n")
+        self.assertEqual(top, {"version"})
+
+    def test_a_named_command_header_names_a_command(self):
+        top, _ = verify_okf.command_mentions(
+            "| Turtle-only command | Replacement |\n|---|---|\n| `version` | x |\n"
+        )
+        self.assertEqual(top, {"version"})
+
+    def test_a_command_form_in_a_plain_table_names_a_command(self):
+        top, forever = verify_okf.command_mentions(
+            "| Flag | Meaning |\n|---|---|\n| `--x` | `forever-agent version` |\n"
+        )
+        self.assertEqual(top, {"version"})
+        self.assertEqual(forever, set())
+
+    def test_a_bare_word_in_prose_names_no_command(self):
+        top, _ = verify_okf.command_mentions("# What\n\nCall `version` when you like.\n")
+        self.assertEqual(top, set())
 
     def test_a_tilde_fence_is_scanned_for_commands(self):
         write(
@@ -723,6 +838,49 @@ class BundleTest(unittest.TestCase):
             page(
                 body="# What\n\nSee https://github.com/x, %s and %s.\n"
                 % ("trinity.actual" + ".battle" + ".net", "login" + ".example.invalid")
+            ),
+        )
+        self.assertEqual(self.problems(), [])
+
+    def test_privacy_private_tld_host(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nConnect to %s.\n" % ("build01.corp." + "internal")),
+        )
+        self.assertProblem("host name in the manual: build01.corp.internal")
+
+    def test_privacy_machine_name_with_an_unknown_tld(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nConnect to %s.\n" % ("build01." + "corp")),
+        )
+        self.assertProblem("host name in the manual: build01.corp")
+
+    def test_privacy_ipv6_address(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nListen on %s.\n" % ("fe80" + "::1")),
+        )
+        self.assertProblem("IPv6 address in the manual")
+
+    def test_privacy_ipv6_loopback_is_allowed(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(body="# What\n\nListen on %s.\n" % ("::" + "1")),
+        )
+        self.assertEqual(self.problems(), [])
+
+    def test_privacy_file_names_and_symbols_are_not_hosts(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page(
+                body="# What\n\nRead serve_rpc_methods.go and context.Context; the file is named "
+                "rpc-8765.token.\n"
             ),
         )
         self.assertEqual(self.problems(), [])

@@ -4,7 +4,7 @@ title: Drive the addon host
 description: Start the headless TortoiseBotsManager addon, click its buttons, and stop it.
 tags: [turtle, combat, addon, rpc]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:45:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
 sources:
   - id: addon-host
     resource: cmd/forever-agent/addon_host.go

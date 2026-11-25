@@ -4,7 +4,7 @@ title: Dungeon shell commands
 description: fleet, pulltest, fight-score, and tune-diff with every flag and default.
 tags: [turtle, dungeon, reference, cli]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T21:00:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T21:00:00Z }
 sources:
   - id: fleet
     resource: cmd/forever-agent/fleet.go

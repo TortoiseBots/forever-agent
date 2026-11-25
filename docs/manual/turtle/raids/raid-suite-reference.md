@@ -4,7 +4,7 @@ title: raid-suite reference
 description: Every raid-suite flag, the suite file format, the verdicts and the exit codes.
 tags: [turtle, raids, raid-suite, reference]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:50:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:50:00Z }
 sources:
   - id: suite-cmd
     resource: cmd/forever-agent/raid_suite_cmd.go

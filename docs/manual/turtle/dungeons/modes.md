@@ -4,7 +4,7 @@ title: Run modes
 description: "Commander, leader, and observe modes: who acts, what each allows, and how results differ."
 tags: [turtle, dungeon, modes, concept]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:50:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:50:00Z }
 sources:
   - id: dungeon-modes
     resource: cmd/forever-agent/dungeon_modes.go

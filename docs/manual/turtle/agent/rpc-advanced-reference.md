@@ -4,7 +4,7 @@ title: Addons, LFG and tuning RPC
 description: tbm and addon calls, Eluna tt, LFG queue, and live tuning params and results.
 tags: [turtle, agent, rpc, reference, addon, lfg, tune]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T21:45:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T21:45:00Z }
 sources:
   - id: lfg-methods-go
     resource: cmd/forever-agent/lfg_methods.go

@@ -4,7 +4,7 @@ title: Stay under the instance cap
 description: How the per-account instance ledger works and how to wait, reset or walk around it.
 tags: [turtle, raids, instance-cap]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:40:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:40:00Z }
 sources:
   - id: instcap
     resource: internal/raidwalk/instcap.go

@@ -4,7 +4,7 @@ title: Logging in
 description: Start the agent in a slot, pick the flags you need, and read the login output.
 tags: [turtle, agent, login, cli, flags]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T21:45:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T21:45:00Z }
 sources:
   - id: login-go
     resource: cmd/forever-agent/login.go

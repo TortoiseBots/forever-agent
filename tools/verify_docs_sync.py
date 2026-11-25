@@ -23,7 +23,9 @@ The rule, in the checker's terms:
     variable (fs.String, flags.Bool, flag.Duration, fs.Var, ...) or any Register call;
   * a trigger passes when the pull request changes a concept page under docs/manual/ (an index.md, log.md or
     README.md alone is bookkeeping and does not count);
-  * it also passes when the body has, outside a fenced block, a line "Docs: not needed, because <reason>";
+  * it also passes when the body has, at column 0 and outside HTML comments, fenced blocks and indented
+    text, a line "Docs: not needed, because <reason>" whose reason is at least 15 characters and is not
+    the template's placeholder;
   * anything else fails, and the message names the trigger and points at DOCS-SYNC.md.
 
 The checker cannot see a change to a plan field, a stop reason, an output field, an error text or a
@@ -61,9 +63,16 @@ REGISTER_CALL = re.compile(r"\bRegister\s*\(")
 FLAG_PACKAGE_CALL = re.compile(r"\bflag\.[A-Za-z_][A-Za-z0-9_]*\s*\(")
 
 # The line that opts a pull request out, and the text every failure tells the author to read. The line
-# must give a reason ("Docs: not needed, because ...") and must not sit inside a fenced block.
+# starts at column 0, gives a reason of at least 15 characters after "Docs: not needed, because ", and is
+# neither the template's placeholder nor inside an HTML comment, a fenced block or indented text.
 WAIVER = "Docs: not needed"
-WAIVER_LINE = re.compile(r"^Docs:\s*not needed,\s*because\s+\S", re.IGNORECASE)
+WAIVER_PREFIX = "Docs: not needed, because "
+WAIVER_REASON_MIN = 15
+# The template's placeholder text, and shapes that say nothing: angle-bracketed fill-ins, braces, an
+# ellipsis, or the words the template uses.
+WAIVER_PLACEHOLDER = re.compile(
+    r"(?is)^(?:<[^<>]*>|\{[^{}]*\}|\.{3,}|\u2026|todo|tbd|n/?a|reason|the reason|your reason)$"
+)
 RULE_FILE = "DOCS-SYNC.md"
 
 MESSAGE = (
@@ -90,12 +99,43 @@ def _is_trigger_path(path):
     return name.startswith("serve") or name.endswith("_session.go")
 
 
-def _waived(body):
-    """True when a line outside a fenced block is "Docs: not needed, because <text>"."""
-    fence = None
+def _without_html_comments(body):
+    """Yield each line with its HTML comment spans removed (a comment may span lines)."""
+    in_comment = False
     for line in body.splitlines():
-        stripped = line.strip()
-        match = re.match(r"^(`{3,}|~{3,})", stripped)
+        visible = []
+        rest = line
+        while rest:
+            if in_comment:
+                end = rest.find("-->")
+                if end < 0:
+                    rest = ""
+                    break
+                rest = rest[end + 3:]
+                in_comment = False
+                continue
+            start = rest.find("<!--")
+            if start < 0:
+                visible.append(rest)
+                break
+            visible.append(rest[:start])
+            rest = rest[start + 4:]
+            in_comment = True
+        yield "".join(visible)
+
+
+def _waiver_reason_ok(reason):
+    reason = reason.strip()
+    if len(reason) < WAIVER_REASON_MIN:
+        return False
+    return not WAIVER_PLACEHOLDER.match(reason)
+
+
+def _waived(body):
+    """True for a column-0 "Docs: not needed, because <15+ characters>" line outside code and comments."""
+    fence = None
+    for line in _without_html_comments(body):
+        match = re.match(r"^(`{3,}|~{3,})", line)
         if fence is not None:
             if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= fence[1]:
                 fence = None
@@ -103,7 +143,10 @@ def _waived(body):
         if match:
             fence = (match.group(1)[0], len(match.group(1)))
             continue
-        if WAIVER_LINE.match(stripped):
+        if line.startswith((" ", "\t")):
+            # Indented text is a code block (or a nested list); the waiver is a top-level line.
+            continue
+        if line.startswith(WAIVER_PREFIX) and _waiver_reason_ok(line[len(WAIVER_PREFIX):]):
             return True
     return False
 

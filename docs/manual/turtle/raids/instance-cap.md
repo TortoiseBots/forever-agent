@@ -4,7 +4,7 @@ title: The instance cap ledger
 description: What the per-server ledger counts, how reservations work, and why the count is per account.
 tags: [turtle, raids, instance-cap]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:45:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
 sources:
   - id: instcap
     resource: internal/raidwalk/instcap.go

@@ -4,7 +4,7 @@ title: Run calls
 description: Every dungeon_run field with its default, plus status, stop, pause, stage, and plan check.
 tags: [turtle, dungeon, reference, rpc]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:55:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:55:00Z }
 sources:
   - id: dungeon-methods
     resource: cmd/forever-agent/dungeon_methods.go

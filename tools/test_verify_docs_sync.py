@@ -95,6 +95,34 @@ class DecideTest(unittest.TestCase):
             len(decide(["cmd/forever-agent/forever_map.go"], body="Docs: not needed, because\n")), 1
         )
 
+    def test_the_waiver_reason_needs_fifteen_characters(self):
+        short = "Docs: not needed, because a rename only\n"
+        self.assertEqual(len(decide(["cmd/forever-agent/forever_map.go"], body=short)), 1)
+        longer = "Docs: not needed, because it renames a local variable.\n"
+        self.assertEqual(decide(["cmd/forever-agent/forever_map.go"], body=longer), [])
+
+    def test_a_placeholder_reason_does_not_count(self):
+        for reason in ("<the reason>", "<reason>", "...", "the reason", "TODO"):
+            with self.subTest(reason=reason):
+                body = "Docs: not needed, because %s\n" % reason
+                self.assertEqual(len(decide(["cmd/forever-agent/forever_map.go"], body=body)), 1)
+
+    def test_an_indented_waiver_does_not_count(self):
+        body = "  Docs: not needed, because the flag only renames a local variable.\n"
+        self.assertEqual(len(decide(["cmd/forever-agent/forever_map.go"], body=body)), 1)
+        body = "\tDocs: not needed, because the flag only renames a local variable.\n"
+        self.assertEqual(len(decide(["cmd/forever-agent/forever_map.go"], body=body)), 1)
+
+    def test_a_waiver_inside_an_html_comment_does_not_count(self):
+        body = "<!-- Docs: not needed, because the flag only renames a local variable. -->\n"
+        self.assertEqual(len(decide(["cmd/forever-agent/forever_map.go"], body=body)), 1)
+        body = "<!--\nDocs: not needed, because the flag only renames a local variable.\n-->\n"
+        self.assertEqual(len(decide(["cmd/forever-agent/forever_map.go"], body=body)), 1)
+
+    def test_a_line_after_a_closed_comment_still_counts(self):
+        body = "<!-- note -->\nDocs: not needed, because the flag only renames a local variable.\n"
+        self.assertEqual(decide(["cmd/forever-agent/forever_map.go"], body=body), [])
+
     def test_a_waiver_inside_a_fenced_block_does_not_count(self):
         body = "What changed\n\n```\nDocs: not needed, because the example is only text.\n```\n"
         self.assertEqual(len(decide(["cmd/forever-agent/forever_map.go"], body=body)), 1)
@@ -182,7 +210,10 @@ class MainTest(unittest.TestCase):
 
     def test_the_waiver_from_the_environment_passes(self):
         self.assertEqual(
-            self.run_main("cmd/forever-agent/main.go\n", "", "Docs: not needed, because a rename only\n"), 0
+            self.run_main(
+                "cmd/forever-agent/main.go\n", "", "Docs: not needed, because it only renames a local variable.\n"
+            ),
+            0,
         )
 
     def test_the_added_lines_come_from_the_diff(self):

@@ -4,7 +4,7 @@ title: Tune a live run
 description: Change a running commander run's numbers with tunables files, tune_set, and tune-diff.
 tags: [turtle, dungeon, commander, tuning, guide]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:45:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
 sources:
   - id: tune
     resource: internal/dungeon/tune.go

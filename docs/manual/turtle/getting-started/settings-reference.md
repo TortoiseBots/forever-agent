@@ -4,7 +4,7 @@ title: Settings file
 description: Every settings file key with its default, validation, and an example.
 tags: [turtle, getting-started, reference, settings]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:25:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:25:00Z }
 sources:
   - id: config
     resource: internal/config/config.go

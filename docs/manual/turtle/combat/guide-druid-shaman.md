@@ -4,7 +4,7 @@ title: Pets, druids, shamans
 description: How the shared pet strategy attacks and recalls, and what druids and shamans cast around their forms and totems.
 tags: [turtle, combat, pets, druid, shaman]
 status: stable
-generated: { by: omp, at: 2026-11-05T20:45:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
 sources:
   - id: pet-go
     resource: internal/brain/pet.go

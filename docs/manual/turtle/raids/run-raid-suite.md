@@ -4,7 +4,7 @@ title: Regression-check plans with the suite
 description: Walk every raid plan and judge each walk against its last good walk.
 tags: [turtle, raids, raid-suite]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:40:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:40:00Z }
 sources:
   - id: suite-cmd
     resource: cmd/forever-agent/raid_suite_cmd.go

@@ -4,7 +4,7 @@ title: Combat troubleshooting
 description: Real combat error messages, what they mean, and the fix.
 tags: [turtle, combat, troubleshooting]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:58:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:58:00Z }
 sources:
   - id: brain-methods
     resource: cmd/forever-agent/brain_methods.go

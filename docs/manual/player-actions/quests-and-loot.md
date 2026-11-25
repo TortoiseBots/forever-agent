@@ -212,7 +212,7 @@ forever-agent forever object-use [--rest host:port] [--rpc host:port] [--ca FILE
 | `--at` | none | `x,y,z` of the chest or object when several of that entry are in range; `--at-range` (default 2 yd, 0.5-100) sets how close it must be. |
 | `--range` | `30` (`loot-check`) / `40` (`object-use`) | How far to look for a target, 1-200 yards. |
 | `--stay` | `8s` | How long to settle in the world before choosing the target, 0-10m. |
-| `--fight-for` | `60s` | `loot-check` only: how long a target that is still alive is fought before giving up, 0-5m. |
+| `--fight-for` | `60s` | `loot-check` only: how long a target that is still alive is fought before giving up, above 0 up to 5m. |
 
 Both print the object's state (`open`, `lootable`, ...; `object-use`) or the loot window with one line per item slot and
 per roll, then the packet counts. Neither prints an identifier; a roll's winner is a role (`you`, `another player`,

@@ -4,7 +4,7 @@ title: The brain
 description: How the trigger-action engine plays the character, and what brain_start, brain_stop and brain_status do.
 tags: [turtle, agent, brain, combat, rotation]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T21:45:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T21:45:00Z }
 sources:
   - id: engine-go
     resource: internal/brain/engine.go

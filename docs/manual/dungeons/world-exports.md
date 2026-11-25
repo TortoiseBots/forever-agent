@@ -62,7 +62,8 @@ pool entry, so it may not be spawned at all).
 
 In a ForeverCore export the group's option set is the OR of every member's `group_ai`, including the leader's own row;
 a formation whose leader has no row of its own is dropped, as the core drops it, and the note says how many. A spawn
-whose level the core does not carry is assumed level 60 and the export says how many.
+whose level the core does not carry is exported with empty levels; the loader then assumes level 60 and its note
+says how many.
 
 # Patrols
 

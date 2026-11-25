@@ -4,7 +4,7 @@ title: Start partway into an instance
 description: Place the raid at a leg or step with --place, re-place without burning the cap, and clear packs with --gm-clear.
 tags: [turtle, raids, placement, gm-clear]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:35:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:35:00Z }
 sources:
   - id: walk-cmd
     resource: cmd/forever-agent/raid_walk_cmd.go

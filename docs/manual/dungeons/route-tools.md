@@ -227,7 +227,7 @@ forever-agent forever gm-convert --in FILE --out FILE [--module-out FILE] [--for
 | `--marks-from` | `gm` | Whose lines may mark: `gm` (only `--follow`) or `any` (any sender's whisper or nearby say). |
 | `--sample` | `2s` | Position sample interval, at most `1m`. |
 | `--tolerance` | `1.0` | Road-thinning tolerance in yards, 0-100. |
-| `--follow-yd` | `6` | How close the agent stays to the GM, 0-100 yards. |
+| `--follow-yd` | `6` | How close the agent stays to the GM, above 0 up to 100 yards. |
 | `--out` | `gm-walk-<map>-<utc-timestamp>.json` | The world-data file; never overwritten unless `--force`. File names never carry a character name. |
 | `--module-out` | none | The module-shape file beside it: `handcrafted_road` rows plus zone and point proposals; never overwritten unless `--force`. |
 | `--dry` | none | Replay a hand-made recording instead of the network (test data, never a capture). |

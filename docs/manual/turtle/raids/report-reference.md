@@ -4,7 +4,7 @@ title: raid-walk report reference
 description: The report command's flags, inputs, the per-pull table and report.json.
 tags: [turtle, raids, report, reference]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:50:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:50:00Z }
 sources:
   - id: report-cmd
     resource: cmd/forever-agent/raid_walk_report_cmd.go

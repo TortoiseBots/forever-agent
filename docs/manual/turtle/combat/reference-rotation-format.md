@@ -4,7 +4,7 @@ title: Rotation file format
 description: Every field of a version-1 rotation file, what it does, and an example.
 tags: [turtle, combat, rotation, reference]
 status: stable
-generated: { by: muse-spark-1.3/omp, at: 2026-11-05T20:58:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:58:00Z }
 sources:
   - id: rotations-doc
     resource: docs/ROTATIONS.md
