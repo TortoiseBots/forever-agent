@@ -373,7 +373,7 @@ def workflow_step(step):
 
 
 class StrictParseTest(unittest.TestCase):
-    """Every construct the parser does not model fails the test instead of being skipped (the Codex bypasses)."""
+    """Every construct the parser does not model fails the test instead of being skipped (known bypass spellings)."""
 
     def assert_syntax_error(self, text):
         with self.assertRaises(WorkflowSyntaxError):
