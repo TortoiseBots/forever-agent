@@ -190,9 +190,10 @@ type view3DSceneService struct {
 
 // view3DBuild is one scene build in flight: the answer or its error, and a channel closed when it lands.
 type view3DBuild struct {
-	done chan struct{}
-	body []byte
-	err  string
+	done  chan struct{}
+	body  []byte
+	err   string
+	retry bool // its builder left before it had a slot: the waiters take the build
 }
 
 // newView3DSceneService makes an empty cache over src.
@@ -376,58 +377,77 @@ func scenePolygon(p navmesh.Polygon) bool {
 // build; at most view3DBuilds builds run at once, so a page cannot start an unbounded number of navmesh reads.
 func (s *view3DSceneService) scene(ctx context.Context, mapID uint32, tiles [][2]int) (body []byte, errText string) {
 	key := sceneKey(mapID, tiles)
-	s.mu.Lock()
-	if b, ok := s.m[key]; ok {
-		s.mu.Unlock()
-		return b, ""
-	}
-	if in := s.builds[key]; in != nil {
-		s.mu.Unlock()
-		if !waitClosed(ctx, in.done) {
-			return nil, view3DClientGone
-		}
-		return in.body, in.err
-	}
-	in := &view3DBuild{done: make(chan struct{})}
-	s.builds[key] = in
-	s.mu.Unlock()
-
-	// The in-flight slot and the answer are released however this returns, a panic included: a build that panics must
-	// not leave its key in flight (every later request for it would wait on a channel nothing closes). The panic goes
-	// on to the server's own recover, so only this request sees it.
-	publish := func() {
+	for {
 		s.mu.Lock()
-		in.body, in.err = body, errText
-		delete(s.builds, key)
-		if body != nil && len(body) <= view3DCacheEntryMax {
-			if _, ok := s.m[key]; !ok {
-				s.m[key] = body
-				s.order = append(s.order, key)
-				s.bytes += len(body)
-				for len(s.order) > view3DCacheEntries || s.bytes > view3DCacheBytes {
-					old := s.order[0]
-					s.bytes -= len(s.m[old])
-					delete(s.m, old)
-					s.order = s.order[1:]
+		if b, ok := s.m[key]; ok {
+			s.mu.Unlock()
+			return b, ""
+		}
+		if in := s.builds[key]; in != nil {
+			s.mu.Unlock()
+			if !waitClosed(ctx, in.done) {
+				return nil, view3DClientGone
+			}
+			if in.retry {
+				// The request that was to build it left while waiting for a slot: this one takes the build instead of
+				// answering that a client (another request's) went away.
+				continue
+			}
+			return in.body, in.err
+		}
+		in := &view3DBuild{done: make(chan struct{})}
+		s.builds[key] = in
+		s.mu.Unlock()
+
+		// The in-flight slot and the answer are released however this returns, a panic included: a build that panics
+		// must not leave its key in flight (every later request for it would wait on a channel nothing closes). The
+		// panic goes on to the server's own recover, so only this request sees it. A request whose own client leaves
+		// before it has a slot hands the build to the requests waiting on it: the entry is dropped and done is closed
+		// with retry, so each of them wakes, re-checks the cache and becomes the builder itself.
+		handed := false
+		publish := func() {
+			s.mu.Lock()
+			in.body, in.err = body, errText
+			delete(s.builds, key)
+			if body != nil && len(body) <= view3DCacheEntryMax {
+				if _, ok := s.m[key]; !ok {
+					s.m[key] = body
+					s.order = append(s.order, key)
+					s.bytes += len(body)
+					for len(s.order) > view3DCacheEntries || s.bytes > view3DCacheBytes {
+						old := s.order[0]
+						s.bytes -= len(s.m[old])
+						delete(s.m, old)
+						s.order = s.order[1:]
+					}
 				}
 			}
+			close(in.done)
+			s.mu.Unlock()
 		}
-		close(in.done)
-		s.mu.Unlock()
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			body, errText = nil, fmt.Sprintf("the scene build failed: %v", r)
+		defer func() {
+			if handed {
+				return
+			}
+			if r := recover(); r != nil {
+				body, errText = nil, fmt.Sprintf("the scene build failed: %v", r)
+				publish()
+				panic(r)
+			}
 			publish()
-			panic(r)
+		}()
+		if !takeWithCtx(ctx, s.sem) {
+			handed = true
+			s.mu.Lock()
+			delete(s.builds, key)
+			in.retry = true
+			close(in.done)
+			s.mu.Unlock()
+			return nil, view3DClientGone
 		}
-		publish()
-	}()
-	if !takeWithCtx(ctx, s.sem) {
-		return nil, view3DClientGone
+		defer func() { <-s.sem }()
+		return s.buildScene(mapID, tiles)
 	}
-	defer func() { <-s.sem }()
-	return s.buildScene(mapID, tiles)
 }
 
 // view3DClientGone is the answer a waiting request gets when its client went away before the shared build or read it
@@ -467,9 +487,10 @@ type view3DReplayService struct {
 
 // view3DReplayLoad is one replay read in flight: the answer or its error, and a channel closed when it lands.
 type view3DReplayLoad struct {
-	done chan struct{}
-	body []byte
-	err  string
+	done  chan struct{}
+	body  []byte
+	err   string
+	retry bool // its reader left before it had a slot: the waiters take the read
 }
 
 // newView3DReplayService makes an empty replay cache.
@@ -481,57 +502,75 @@ func newView3DReplayService() *view3DReplayService {
 // read answers one replay body, running load under the read limit unless the key is cached. key names the
 // trace file's identity (name, size, modification time), so a changed file is read again.
 func (s *view3DReplayService) read(ctx context.Context, key string, load func() ([]byte, string)) (body []byte, errText string) {
-	s.mu.Lock()
-	if b, ok := s.m[key]; ok {
-		s.mu.Unlock()
-		return b, ""
-	}
-	if in := s.loads[key]; in != nil {
-		s.mu.Unlock()
-		if !waitClosed(ctx, in.done) {
-			return nil, view3DClientGone
-		}
-		return in.body, in.err
-	}
-	in := &view3DReplayLoad{done: make(chan struct{})}
-	s.loads[key] = in
-	s.mu.Unlock()
-
-	// As the scene's: the in-flight slot and the answer are released however this returns, a panic in the loader
-	// included (the loader runs the trace's parser, the one place a malformed record could still surprise it).
-	publish := func() {
+	for {
 		s.mu.Lock()
-		in.body, in.err = body, errText
-		delete(s.loads, key)
-		if body != nil && len(body) <= view3DReplayCacheEntryMax {
-			if _, ok := s.m[key]; !ok {
-				s.m[key] = body
-				s.order = append(s.order, key)
-				s.bytes += len(body)
-				for len(s.order) > view3DReplayCacheEntries || s.bytes > view3DReplayCacheBytes {
-					old := s.order[0]
-					s.bytes -= len(s.m[old])
-					delete(s.m, old)
-					s.order = s.order[1:]
+		if b, ok := s.m[key]; ok {
+			s.mu.Unlock()
+			return b, ""
+		}
+		if in := s.loads[key]; in != nil {
+			s.mu.Unlock()
+			if !waitClosed(ctx, in.done) {
+				return nil, view3DClientGone
+			}
+			if in.retry {
+				// As the scene's: the reader that was to run it left while waiting for a slot, so this one takes it.
+				continue
+			}
+			return in.body, in.err
+		}
+		in := &view3DReplayLoad{done: make(chan struct{})}
+		s.loads[key] = in
+		s.mu.Unlock()
+
+		// As the scene's: the in-flight slot and the answer are released however this returns, a panic in the loader
+		// included (the loader runs the trace's parser, the one place a malformed record could still surprise it).
+		// A reader whose own client leaves before it has a slot hands the read to those waiting on it, as the scene
+		// hands its build.
+		handed := false
+		publish := func() {
+			s.mu.Lock()
+			in.body, in.err = body, errText
+			delete(s.loads, key)
+			if body != nil && len(body) <= view3DReplayCacheEntryMax {
+				if _, ok := s.m[key]; !ok {
+					s.m[key] = body
+					s.order = append(s.order, key)
+					s.bytes += len(body)
+					for len(s.order) > view3DReplayCacheEntries || s.bytes > view3DReplayCacheBytes {
+						old := s.order[0]
+						s.bytes -= len(s.m[old])
+						delete(s.m, old)
+						s.order = s.order[1:]
+					}
 				}
 			}
+			close(in.done)
+			s.mu.Unlock()
 		}
-		close(in.done)
-		s.mu.Unlock()
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			body, errText = nil, fmt.Sprintf("the replay read failed: %v", r)
+		defer func() {
+			if handed {
+				return
+			}
+			if r := recover(); r != nil {
+				body, errText = nil, fmt.Sprintf("the replay read failed: %v", r)
+				publish()
+				panic(r)
+			}
 			publish()
-			panic(r)
+		}()
+		if !takeWithCtx(ctx, s.sem) {
+			handed = true
+			s.mu.Lock()
+			delete(s.loads, key)
+			in.retry = true
+			close(in.done)
+			s.mu.Unlock()
+			return nil, view3DClientGone
 		}
-		publish()
-	}()
-	if !takeWithCtx(ctx, s.sem) {
-		return nil, view3DClientGone
+		defer func() { <-s.sem }()
+		return load()
 	}
-	defer func() { <-s.sem }()
-	return load()
 }
 
 // replayService is the replay limit and cache in force.

@@ -690,6 +690,110 @@ func TestView3DSceneWaiterNoticesACancelledClient(t *testing.T) {
 	close(src.gate)
 }
 
+// TestView3DSceneHandsTheBuildToAWaitingClient: a request that leaves while every build slot is busy takes the build
+// it was leading with it, and a request waiting on that same build (whose own client is connected) gets the scene: it
+// takes the build over instead of answering "the client went away".
+//
+// Mutation this test catches: the leader's own cancellation published to the shared entry (one closed tab answering
+// 503 for every other page waiting on the same tiles, and no build at all).
+func TestView3DSceneHandsTheBuildToAWaitingClient(t *testing.T) {
+	src := &fakeScene{tiles: map[[2]int][]navmesh.Polygon{{30, 30}: {squarePoly(600, 600, 1, 40)}}}
+	svc := newView3DSceneService(src, "x")
+	for range view3DBuilds {
+		svc.sem <- struct{}{} // every slot busy: neither request can build until the test frees one
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	type res struct {
+		body []byte
+		err  string
+	}
+	first := make(chan string, 1)
+	go func() { _, e := svc.scene(ctx, 1, [][2]int{{30, 30}}); first <- e }()
+	waitBuilds := func() {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			svc.mu.Lock()
+			n := len(svc.builds)
+			svc.mu.Unlock()
+			if n == 1 {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the first request never led the build")
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	waitBuilds()
+	second := make(chan res, 1)
+	go func() { b, e := svc.scene(context.Background(), 1, [][2]int{{30, 30}}); second <- res{b, e} }()
+	time.Sleep(20 * time.Millisecond) // let the second request join the build in flight
+	cancel()
+	if e := <-first; e != view3DClientGone {
+		t.Fatalf("the cancelled leader answered %q, want %q", e, view3DClientGone)
+	}
+	for range view3DBuilds {
+		<-svc.sem // free the slots: the remaining client's own build now runs
+	}
+	select {
+	case r := <-second:
+		if r.err != "" || len(r.body) == 0 {
+			t.Fatalf("the remaining client answered %q %q; want the scene", r.body, r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the remaining client was never answered")
+	}
+}
+
+// TestView3DReplayPanicReleasesTheRead: a replay loader that panics releases its read slot, wakes the requests that
+// shared the read with an error, and the panic goes on to the caller's own recover.
+//
+// Mutation this test catches: the read slot or the in-flight entry released only on the success path (a panicking
+// parser leaves the record's load in flight forever and the slot held).
+func TestView3DReplayPanicReleasesTheRead(t *testing.T) {
+	s := newView3DReplayService()
+	entered := make(chan struct{})
+	gate := make(chan struct{})
+	var once sync.Once
+	panicking := func() ([]byte, string) {
+		once.Do(func() { close(entered); <-gate })
+		panic("scripted replay panic")
+	}
+	panicked := make(chan any, 1)
+	go func() {
+		defer func() { panicked <- recover() }() // the handler's own recover, in miniature
+		_, _ = s.read(context.Background(), "k", panicking)
+	}()
+	<-entered
+	waiter := make(chan string, 1)
+	took := make(chan struct{})
+	go func() {
+		close(took)
+		_, e := s.read(context.Background(), "k", func() ([]byte, string) { return []byte("own"), "" })
+		waiter <- e
+	}()
+	<-took
+	time.Sleep(20 * time.Millisecond) // let the second request join the read in flight
+	close(gate)
+	if r := <-panicked; r == nil {
+		t.Fatal("the panic did not reach the caller")
+	}
+	select {
+	case e := <-waiter:
+		if !strings.Contains(e, "failed") {
+			t.Fatalf("the waiting read answered %q, want the read's failure", e)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiting read was never woken")
+	}
+	// The slot is free and the key is out of flight: a later read runs its own loader.
+	ran := false
+	if b, e := s.read(context.Background(), "k", func() ([]byte, string) { ran = true; return []byte("ok"), "" }); e != "" || string(b) != "ok" || !ran {
+		t.Fatalf("after the panic: %q %q ran=%v", b, e, ran)
+	}
+}
+
 // TestView3DLiveSides: the marker's side comes from what the answer says, never from a guess. A player outside the
 // party is neutral (not party); a creature is hostile only when its faction says so, so a friendly NPC is neutral; a
 // creature whose reaction the server could not tell stays hostile (the view's old reading, not an invented

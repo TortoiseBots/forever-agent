@@ -9,6 +9,7 @@ import (
 	"errors"
 	"math"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -353,8 +354,8 @@ func TestTeleportDuringAKnockbackFlightStartsNoFall(t *testing.T) {
 // the mover in the air (objects.ErrAirborne). walk_to and walk_path wait for the landing first, which is what this
 // pins: during the fall the mover refuses a walk, and once the wait returns the same walk goes on.
 //
-// Mutation these tests catch: the wait removed from the walk handlers (the walk answers "the character is in the
-// air" after an ordinary teleport above the ground).
+// Mutation this test catches: the wait or the collector's own flying of the fall broken (the wait returns with the
+// character in the air). That the walk handlers call the wait is TestWalkToWaitsOutTheFallItWasAskedIn's to pin.
 func TestWalkWaitsForTheLandingAfterATeleport(t *testing.T) {
 	fl := &fakeFloors{floors: []navmesh.Floor{{Z: 50, Flags: 1}}}
 	s, rec, t0 := newFallSession(fl)
@@ -377,5 +378,83 @@ func TestWalkWaitsForTheLandingAfterATeleport(t *testing.T) {
 	}
 	if rec.count(wire.CMSGMoveFallLand) != 1 {
 		t.Fatalf("%d fall-land packets, want one", rec.count(wire.CMSGMoveFallLand))
+	}
+}
+
+// fallWalkLink is the walk and the flight's transport for TestWalkToWaitsOutTheFallItWasAskedIn: its clock steps on
+// every read, so the session's own waits fly the fall down without the test sleeping for the fall's real time, and a
+// walk's WaitUntil moves it forward to the walk's own wakeup as the live transport does.
+type fallWalkLink struct {
+	mu   sync.Mutex
+	now  time.Time
+	sent []uint32
+}
+
+func (l *fallWalkLink) Send(core uint32, _ []byte) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.sent = append(l.sent, core)
+	return nil
+}
+
+func (l *fallWalkLink) Now() time.Time {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.now = l.now.Add(100 * time.Millisecond)
+	return l.now
+}
+
+func (l *fallWalkLink) WaitUntil(_ context.Context, until time.Time) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if until.After(l.now) {
+		l.now = until
+	}
+	return nil
+}
+
+func (l *fallWalkLink) count(core uint32) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	n := 0
+	for _, c := range l.sent {
+		if c == core {
+			n++
+		}
+	}
+	return n
+}
+
+// TestWalkToWaitsOutTheFallItWasAskedIn drives the daemon's own walk_to, not the wait: a teleport leaves the
+// character 5 yd in the air, and a walk_to asked while it falls waits for the landing and then walks. The character
+// ends on the ground at the asked point, with one fall-land packet.
+//
+// Mutation this test catches: the waitFallLanded call removed from serveWalkTo (walk_to answers ErrAirborne for a
+// teleport's ordinary fall). TestWalkWaitsForTheLandingAfterATeleport cannot see that: it calls the wait itself.
+func TestWalkToWaitsOutTheFallItWasAskedIn(t *testing.T) {
+	link := &fallWalkLink{now: time.Unix(8000, 0)}
+	fl := &fakeFloors{floors: []navmesh.Floor{{Z: 50, Flags: 1}}}
+	s, _ := newTransferSession()
+	s.floors = fl
+	s.nowFn = link.Now
+	s.fightSender = link
+	s.mover.Sender = link
+	s.self, s.mover.GUID = knockUnit, knockUnit
+	mustFeed(t, s, sideInstance, wire.SMSGMoveTeleport, teleportPacket(s.self, 3, 1020, 2010, 55))
+	if !s.fallActive() {
+		t.Fatal("the teleport above the floor did not start a fall")
+	}
+	if _, err := s.serveWalkTo(context.Background(), 1030, 2020, 50); err != nil {
+		t.Fatalf("walk_to asked during the fall answered %v; want it to wait for the landing and walk", err)
+	}
+	if s.fallActive() || s.mover.Airborne() {
+		t.Fatal("the walk went on with the character still in the air")
+	}
+	x, y, z, _ := s.mover.Position()
+	if d := objects.Distance(x, y, z, 1030, 2020, 50); d > 0.01 {
+		t.Fatalf("the character stands %.2f yd from the walked point", d)
+	}
+	if n := link.count(wire.CMSGMoveFallLand); n != 1 {
+		t.Fatalf("%d fall-land packets, want one", n)
 	}
 }

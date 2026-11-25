@@ -83,6 +83,8 @@ pace. The bots answer of this port is a bare list, so the heartbeat is read from
 route (bots, humans and the state counts) when the bots answer carries none; a dashboard without that route is a
 roster without a heartbeat, never a failed read. The fallback read is optional, so it has a half-second bound of its
 own instead of `--timeout`: a status route that hangs behind a healthy bots route costs each sample half a second.
+That read never renews the dashboard session: a status route answering a redirect or a `401` is one sample without
+a heartbeat, not a login on every sample of a watch.
 
 The dashboard's own macro states read as states like any other: a `busy` bot (a scripted block), a `stalled` mover or
 a `resting` bot is in the roster and in the far-from-group and death rules, and only a `moving` bot can be reported

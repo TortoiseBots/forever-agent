@@ -1518,6 +1518,42 @@ func TestPackOnPathMeasuresFromThePullsFirstPlan(t *testing.T) {
 	}
 }
 
+// TestPackOnPathForgetsTheStartInsideOnceOutside: a distance recorded by a plan that stood inside a hostile's
+// clearance applies only while the pass' start is still inside it. Once a walk has taken the agent outside, a later
+// plan's path keeps the plain clearance again: the recorded 8 yd is not a licence to pass the hostile at 7.5.
+//
+// Mutation this test catches: packOnPath consulting the recorded base without checking the pass' start (the second
+// plan blocks only at the recorded radius, so a path that enters the clearance at 22 yd is planned as if the hostile
+// were 7.5 yd wide, and the approach walks through the pack).
+func TestPackOnPathForgetsTheStartInsideOnceOutside(t *testing.T) {
+	hostile := Vec3{0, 0, 0}
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(43), Entry: 11977, Pos: hostile})
+	})
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults(),
+		approachBase: map[wire.GUID]float64{}}
+	target := Vec3{0, 0, 200}
+	// Pass 1 stands 8 yd from the hostile (inside the clearance) and its path walks away and out: the base is recorded.
+	if _, blocked := p.packOnPath(-1, target, []Vec3{{8, 0, 0}, target}, 0); blocked {
+		t.Fatal("the first plan blocked although its path walks away from the hostile")
+	}
+	if got := p.approachBase[fightGUID(43)]; got != 8 {
+		t.Fatalf("the recorded baseline is %.2f; want 8", got)
+	}
+	// Pass 2 starts 35 yd away (outside the clearance) and its path passes the hostile at 7.5 yd: the block is the
+	// plain radius' entry at 13 yd along, not the recorded 7.5 yd radius' entry at 27.5 yd along.
+	at, blocked := p.packOnPath(-1, target, []Vec3{{35, 0, 0}, {7.5, 0, 0}, {7.5, -40, 0}}, 0)
+	if !blocked {
+		t.Fatal("the second plan did not block on a path that passes the hostile at 7.5 yd")
+	}
+	if math.Abs(at-13) > 1e-3 {
+		t.Fatalf("the second plan blocked at %.2f yd along; want the plain radius' entry at 13 yd", at)
+	}
+	if _, ok := p.approachBase[fightGUID(43)]; ok {
+		t.Fatal("the recorded baseline survived a plan that started outside the clearance")
+	}
+}
+
 // TestAgentPullApproachCharmedPets: a charm is the controlling ownership. A party's pet charmed by an enemy fights
 // the party and is a pack (the approach keeps its clearance); an enemy's pet charmed by a party member is the party's
 // and is not. The serve unit's Owner still names the summoner in both cases, so only the charm field tells them.

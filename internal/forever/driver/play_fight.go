@@ -1700,20 +1700,24 @@ func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64
 		}
 		// Standing inside the clearance already: only nearer than the first plan that stood inside it counts (a hostile
 		// the agent stands on, within the slack, can be walked away from and blocks nothing). That distance is kept per
-		// unit for the pull: each pass' own distance let repeated re-plans creep a little nearer every time (about the
-		// slack per pass, until the pull's deadline).
+		// unit while the pass' start is still inside the clearance: each pass' own distance let repeated re-plans creep a
+		// little nearer every time (about the slack per pass, until the pull's deadline). A start outside the clearance
+		// (an earlier walk took the agent out) drops the kept distance and the plain radius applies again - the recorded
+		// distance is not a licence to re-enter nearer than the clearance allows.
 		radius := PlayAgentApproachPackYd
 		here := dist3(points[0], u.Pos)
-		if base, ok := p.approachBase[u.GUID]; ok {
-			here = base
-		} else if here < radius {
-			if p.approachBase == nil {
-				p.approachBase = map[wire.GUID]float64{}
-			}
-			p.approachBase[u.GUID] = here
-		}
 		if here < radius {
+			if base, ok := p.approachBase[u.GUID]; ok {
+				here = base
+			} else {
+				if p.approachBase == nil {
+					p.approachBase = map[wire.GUID]float64{}
+				}
+				p.approachBase[u.GUID] = here
+			}
 			radius = here - PlayAgentApproachStartEpsYd
+		} else {
+			delete(p.approachBase, u.GUID)
 		}
 		if radius <= 0 {
 			continue

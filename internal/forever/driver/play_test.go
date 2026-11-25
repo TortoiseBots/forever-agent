@@ -756,6 +756,86 @@ func TestPlayAgentPetIsNotAStranger(t *testing.T) {
 	}
 }
 
+// barePlayRun is a run over the rig's route and ports, without the plan's own start: the tests below read one
+// helper's answer directly.
+func barePlayRun(rig *playRig) *playRun {
+	return &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults()}
+}
+
+// TestPartyPetCharmedByAnEnemyIsAPackInTheWay: the charm is the controlling ownership in packInWay too. A party pet
+// charmed by an enemy is fighting the party, so the pack it stands with is the pack in the way; the same pet
+// uncharmed is the party's and is not.
+//
+// Mutation this test catches: packInWay reading Owner alone (the approach walks through a charmed pet's pack as if
+// the party owned it, or steps aside for a pet that is the party's).
+func TestPartyPetCharmedByAnEnemyIsAPackInTheWay(t *testing.T) {
+	charmed := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: petGUID(21), Entry: 11320, Pos: Vec3{30, 0, 0},
+			Owner: f.SelfGUID(), CharmedBy: fightGUID(81)})
+	})
+	p := barePlayRun(charmed)
+	p.self, p.selfMap = Vec3{30, 1, 0}, p.route.Map
+	if _, ok := p.packInWay(); !ok {
+		t.Fatal("a party pet charmed by an enemy beside the agent is the pack's: packInWay found none")
+	}
+	own := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: petGUID(22), Entry: 11320, Pos: Vec3{30, 0, 0}, Owner: f.SelfGUID()})
+	})
+	p = barePlayRun(own)
+	p.self, p.selfMap = Vec3{30, 1, 0}, p.route.Map
+	if g, ok := p.packInWay(); ok {
+		t.Fatalf("an uncharmed party pet beside the agent was taken as the pack in the way (group %d)", g)
+	}
+}
+
+// TestPartyPetCharmedByAnEnemyIsAStranger: a party pet charmed by an enemy is a stranger the walk holds for (its
+// owner is the party, but the charm fights it: the record's gone step and the pull must see it); uncharmed, it is
+// the party's and holds nothing.
+//
+// Mutation this test catches: strangerNear reading Owner alone (the charmed pet skipped as the party's and the walk
+// walking on through a mob that is fighting it).
+func TestPartyPetCharmedByAnEnemyIsAStranger(t *testing.T) {
+	charmed := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: petGUID(23), Entry: 700, Pos: Vec3{35, 0, 0},
+			Owner: f.SelfGUID(), CharmedBy: fightGUID(82)})
+	})
+	p := barePlayRun(charmed)
+	p.self = Vec3{30, 0, 0}
+	if u, ok := p.strangerNear(20); !ok || u.GUID != petGUID(23) {
+		t.Fatalf("a party pet charmed by an enemy 5 yd away: strangerNear = %v %v; want the pet", u.GUID, ok)
+	}
+	own := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: petGUID(24), Entry: 700, Pos: Vec3{35, 0, 0}, Owner: f.SelfGUID()})
+	})
+	p = barePlayRun(own)
+	p.self = Vec3{30, 0, 0}
+	if u, ok := p.strangerNear(20); ok {
+		t.Fatalf("an uncharmed party pet 5 yd away was a stranger (%v)", u.GUID)
+	}
+}
+
+// TestPartyPetCharmedByAnEnemyHoldsTheGoneStep: a hostiles_gone wait does not hold for a party pet charmed by an
+// enemy (it is a living hostile in the radius); the same pet uncharmed is the party's and holds nothing.
+//
+// Mutation this test catches: the Gone step reading Owner alone (the wait returns through a mob the party's own
+// charmed pet is fighting).
+func TestPartyPetCharmedByAnEnemyHoldsTheGoneStep(t *testing.T) {
+	charmed := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: petGUID(25), Entry: 700, Pos: Vec3{30, 0, 0},
+			Owner: f.SelfGUID(), CharmedBy: fightGUID(83)})
+	})
+	st := &WaitStep{Gone: &WaitGone{Centre: Vec3{30, 0, 0}, Radius: 10, HasCentre: true}}
+	if barePlayRun(charmed).waitHolds(st, new(bool)) {
+		t.Fatal("a party pet charmed by an enemy inside the radius held the gone step")
+	}
+	own := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: petGUID(26), Entry: 700, Pos: Vec3{30, 0, 0}, Owner: f.SelfGUID()})
+	})
+	if !barePlayRun(own).waitHolds(st, new(bool)) {
+		t.Fatal("an uncharmed party pet inside the radius did not hold the gone step")
+	}
+}
+
 // playStrangerPlan is one leg of no pack and one boss: the walk runs from the entrance (10) to the leg's end (40)
 // and on to the boss (60), so a unit a test puts beside it is met on the way and the boss is still ahead.
 func playStrangerPlan() *dungeon.Plan {
