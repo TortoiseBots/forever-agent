@@ -85,7 +85,7 @@ func TestSharedPlansKeepTurtleContent(t *testing.T) {
 	}{
 		// Deadmines' Defias Companions (3450) are summoned by the old server's scripts; ForeverCore's summon none.
 		{"deadmines", map[uint32]int{3450: 8}},
-		// Sever (14682) and Prelate Ironmane (61969) are Turtle bosses, the Mistblade Rippers (61970) their pack.
+		// Sever (14682) and Prelate Ironmane (61969) are Turtle bosses, the Spectral Clerics (61970) the court's casters.
 		{"shadowfang_keep", map[uint32]int{14682: 1, 61969: 1, 61970: 9}},
 		// The Velthelaxx the Defiler wing: the boss (62530) and its members (62528, 62529).
 		{"blackfathom_deeps", map[uint32]int{62528: 5, 62529: 9, 62530: 1}},

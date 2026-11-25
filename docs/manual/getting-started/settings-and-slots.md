@@ -178,7 +178,7 @@ Refusals exit 15 and change nothing:
 |---|---|
 | `example/1 is reserved (owner rule: never slot 1)` | the slot carries `reserved` |
 | `example/1 is already leased by work (already yours: renew, do not re-acquire)` | re-acquiring your own live lease |
-| `example/1 is held by other since 19:00:00Z until 22:00:00Z (agent pid 4242 running): pick another slot or wait` | another holder has it; the tail is `(no agent running; it can be taken over after the expiry)` when nothing runs in its dir |
+| `example/1 is held by other since 19:00:00Z until 22:00:00Z (holder pid 4242 running): pick another slot or wait` | another holder has it; the tail names the lease's own holder process when this host can check it (`holder pid`, the walk or command that took it), else the slot's agent (`agent pid`) when one runs in its dir, else `(no agent running; it can be taken over after the expiry)` |
 | `example/1: port 8765 has a listener on 127.0.0.1 (an agent outside the leases?): stop it or pick another slot` | something already listens on the slot's port |
 
 ## Renew, release, list, reap

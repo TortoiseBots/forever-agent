@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -307,5 +308,28 @@ func TestLeaseNeedsTheSamePIDNamespaceToReap(t *testing.T) {
 				t.Fatalf("the expired lease was not taken over: %v", err)
 			}
 		})
+	}
+}
+
+// The refusal names the lease's own holder process when it can be checked on this host: that is the process a reader
+// waits for or stops, and it is not the slot's agent pid (a walk's lease is held by the walk, while the slot's agent
+// may not even be running).
+//
+// Mutation this test catches: a refusal that names only the slot's agent pid (or nothing), leaving the operator with
+// no process to look at for a live holder.
+func TestLeaseRefusalNamesTheHolderPID(t *testing.T) {
+	st := testStore(t, twoSlotCfg)
+	st.HolderPID = os.Getpid()
+	setNow(st, time.Date(2026, 10, 27, 16, 0, 0, 0, time.UTC))
+	if _, err := st.Acquire("test1", "1", false, "w-a", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	_, err := st.Acquire("test1", "1", false, "w-b", time.Hour)
+	if err == nil {
+		t.Fatal("the second holder was not refused")
+	}
+	want := "holder pid " + strconv.Itoa(os.Getpid()) + " running"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("refusal %q does not name the holder (%q)", err, want)
 	}
 }

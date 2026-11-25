@@ -407,9 +407,14 @@ func (s *Store) acquireLocked(server, slot string, any bool, holder string, ttl 
 	if existing != nil && !s.isStale(existing) {
 		pid, alive := s.agentAlive(existing.Dir)
 		var tail string
-		if alive {
+		// The lease's own holder process is named when it can be checked here: that is the process a reader would
+		// wait for or stop, and the slot's agent pid is a different one (it may not even be running).
+		switch {
+		case holderState(existing) == holderAlive:
+			tail = fmt.Sprintf("(holder pid %d running): pick another slot or wait", existing.HolderPID)
+		case alive:
 			tail = fmt.Sprintf("(agent pid %d running): pick another slot or wait", pid)
-		} else {
+		default:
 			tail = "(no agent running; it can be taken over after the expiry)"
 		}
 		return Acquired{}, &Refusal{Msg: fmt.Sprintf("%s/%s is held by %s since %s until %s %s",
