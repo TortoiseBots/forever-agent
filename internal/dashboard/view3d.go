@@ -385,6 +385,9 @@ func (s *view3DSceneService) scene(ctx context.Context, mapID uint32, tiles [][2
 		}
 		if in := s.builds[key]; in != nil {
 			s.mu.Unlock()
+			if view3DWaiterJoined != nil {
+				view3DWaiterJoined()
+			}
 			if !waitClosed(ctx, in.done) {
 				return nil, view3DClientGone
 			}
@@ -454,6 +457,10 @@ func (s *view3DSceneService) scene(ctx context.Context, mapID uint32, tiles [][2
 // was waiting on landed: nothing is read or written for it, and the build goes on for the requests still waiting.
 const view3DClientGone = "the client went away before the answer was ready"
 
+// view3DWaiterJoined is a test seam: when set, it runs once a request has found a build or read in flight and is
+// about to wait on it, so a test can know the waiter joined without a sleep. It is nil outside tests.
+var view3DWaiterJoined func()
+
 // waitClosed waits for done, or for the request's own client to go away. It reports whether done closed.
 func waitClosed(ctx context.Context, done <-chan struct{}) bool {
 	select {
@@ -510,6 +517,9 @@ func (s *view3DReplayService) read(ctx context.Context, key string, load func() 
 		}
 		if in := s.loads[key]; in != nil {
 			s.mu.Unlock()
+			if view3DWaiterJoined != nil {
+				view3DWaiterJoined()
+			}
 			if !waitClosed(ctx, in.done) {
 				return nil, view3DClientGone
 			}

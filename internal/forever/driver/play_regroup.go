@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 )
@@ -239,6 +240,36 @@ func (p *playRun) readDown() (confirmed []string, pending bool) {
 	return confirmed, pending
 }
 
+// abortPullOrders takes a pull's orders back when a regroup ends the pull before a fight: every bot is told to follow,
+// so a tank still holding its attack order comes back instead of pulling the pack into the recovery, and the skull and
+// cross marks are cleared, so the party is not left marked for a fight nobody is fighting. It acts only while a pull's
+// record is open; a regroup that starts outside a pull has no orders to take back. Best effort: a refused order is the
+// module's answer, and a lost link ends the run through the same fatal path as any other order.
+func (p *playRun) abortPullOrders(ctx context.Context) {
+	if p.rec.CurrentPull() == nil {
+		return
+	}
+	for _, name := range p.members() {
+		if _, err := p.follow(ctx, name); errors.Is(err, ErrLinkLost) {
+			p.linkLost()
+			return
+		}
+	}
+	if p.ports.Group == nil {
+		return
+	}
+	for _, m := range []party.Mark{party.MarkSkull, party.MarkCross} {
+		if err := p.ports.Group.Mark(wire.EmptyGUID, m); err != nil {
+			if errors.Is(err, ErrLinkLost) {
+				p.linkLost()
+				return
+			}
+			continue
+		}
+		p.rec.Event(p.now(), "raid_mark_clear", map[string]any{"mark": party.MarkName(m)})
+	}
+}
+
 // stallFight hands the run to the fight its party is already in: the chief's FIGHT state, with the pull in hand or, when
 // the fight is not the run's own, armed from the view (joinFight), and the leg walk the regroup goes back to after it. It
 // reports whether the run goes to FIGHT: no fight is entered with an empty unit set (a combat flag with no hostile on
@@ -266,8 +297,10 @@ func (p *playRun) stallFight() bool {
 // owns writes none.
 func (p *playRun) joinFight() bool {
 	units := p.ports.World.Units()
-	// A pull in hand whose own units are on the party is the fight's already: its set and skull stay.
-	if len(p.pullSet) > 0 && !p.skull.IsZero() {
+	// A pull in hand whose own units are on the party is the fight's already: its set and skull stay. Only a pull
+	// whose record is open is the fight's record: a set left from a pull that a regroup aborted has no record to
+	// close, so it falls through and the joined fight writes its own (`joined`) below.
+	if p.rec.CurrentPull() != nil && len(p.pullSet) > 0 && !p.skull.IsZero() {
 		for _, u := range units {
 			if !u.Dead && !u.Friendly && slices.Contains(p.pullSet, u.GUID) && p.partyMember(u.Target) {
 				return true

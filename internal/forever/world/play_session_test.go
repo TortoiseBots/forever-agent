@@ -1169,6 +1169,73 @@ func TestPlayServerSightRemembersAnOlderModule(t *testing.T) {
 	}
 }
 
+// TestPlayServerSightLateEchoIsAnAnswer: a sight query whose answer arrives after the call's own window (the core
+// says the line aloud a moment later) is still read as the module's answer for this account: the next query is
+// unknown at once, nothing more is sent, and the reason is said-aloud. The matched line is consumed, so a second
+// identical self say is an ordinary command said aloud and stops the channel.
+func TestPlayServerSightLateEchoIsAnAnswer(t *testing.T) {
+	s, sc := newPlaySession(t)
+	prev := PlayLosQueryEvery
+	PlayLosQueryEvery = time.Millisecond
+	t.Cleanup(func() { PlayLosQueryEvery = prev })
+	target := unitGUID(3)
+	var asks []string
+	sc.onSay = func(text string) { asks = append(asks, text) } // no answer: the call ends at its quiet window
+	st := newPlayServerSight(s)
+	if in, _, known := st.TankSees("Bottwo", target); known || in {
+		t.Fatalf("the unanswered query = (%v, %v); want unknown", in, known)
+	}
+	if got := st.Unsupported(); got != "" {
+		t.Fatalf("Unsupported() = %q before the echo; want empty", got)
+	}
+	if len(asks) != 1 {
+		t.Fatalf("sent %d sight line(s), want 1", len(asks))
+	}
+	sc.say(asks[0])
+	if err := s.collect(context.Background(), 20*time.Millisecond); err != nil {
+		t.Fatalf("the late echo: %v", err)
+	}
+	if !s.sightWasSaidAloud() {
+		t.Fatal("the late echo of the sight line was not read as the said-aloud answer")
+	}
+	// The next query reads the memo at once: no new line goes out.
+	if in, _, known := st.PointSees(driver.Vec3{1, 2, 3}, target); known || in {
+		t.Fatalf("the query after the late echo = (%v, %v); want unknown", in, known)
+	}
+	if got := st.Unsupported(); got != "said-aloud" {
+		t.Fatalf("Unsupported() = %q; want said-aloud", got)
+	}
+	if len(asks) != 1 {
+		t.Fatalf("sent %d sight line(s); want no query after the late echo", len(asks))
+	}
+	// The echo was consumed: the same line said aloud again is no sight answer, and the guard stops the channel.
+	sc.say(asks[0])
+	if err := s.collect(context.Background(), 20*time.Millisecond); err != nil {
+		t.Fatalf("the repeated echo: %v", err)
+	}
+	if s.gmStop == nil {
+		t.Fatal("a repeated sight echo was consumed twice; want the second to trip the say-echo guard")
+	}
+}
+
+// TestPlaySightEchoMatchIsTimeBounded: a line older than the echo window is not matched, so a much later self say of
+// the same text is not read as an answer to that query.
+func TestPlaySightEchoMatchIsTimeBounded(t *testing.T) {
+	s, _ := newPlaySession(t)
+	line := ".tb los a=Bottwo b=0x1 #0123456789abcdef"
+	s.noteSightSent(line)
+	if !s.sightLineSaid(line) {
+		t.Fatal("a fresh sight line was not matched")
+	}
+	s.noteSightSent(line)
+	s.sightMu.Lock()
+	s.sightSent[0].at = s.Now().Add(-playSightEchoWindow - time.Second)
+	s.sightMu.Unlock()
+	if s.sightLineSaid(line) {
+		t.Fatal("a sight line older than the echo window was matched")
+	}
+}
+
 // TestPlayServerSightEchoSaidAloudKeepsTheGuardOff: a module that does not answer the sight query for this account
 // says the line aloud as the player's own chat. That is the sight port's answer (no sight for the run), not a command
 // falling through: the run remembers it, asks nothing more, records the reason, and the say-echo guard stays off so

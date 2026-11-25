@@ -350,6 +350,17 @@ func TestLOSUnsupported(t *testing.T) {
 			}
 		})
 	}
+	// A server without the module at all answers the line with the core's own absent-command text, not with a module
+	// refusal: it is the build that has no sight command, never a permission echo.
+	t.Run("a server without the module", func(t *testing.T) {
+		r := &fakeRunner{script: func(_ string, _ command.Options) (*command.Reply, error) {
+			return &command.Reply{Raw: []string{"There is no such command"}, End: "deadline"}, command.ErrNoReply
+		}}
+		_, err := NewClient(r).LOS(context.Background(), "Tanka", "Healera", nil)
+		if !errors.Is(err, ErrLOSUnsupported) {
+			t.Fatalf("the absent-command answer: %v, want ErrLOSUnsupported", err)
+		}
+	})
 	// Another module refusal is its own error, not "unsupported".
 	r := oneReply("error code=not-bound cmd=los #T")
 	_, err := NewClient(r).LOS(context.Background(), "Tanka", "Healera", nil)

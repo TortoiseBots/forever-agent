@@ -726,9 +726,21 @@ func TestView3DSceneHandsTheBuildToAWaitingClient(t *testing.T) {
 		}
 	}
 	waitBuilds()
+	joined := make(chan struct{}, 1)
+	view3DWaiterJoined = func() {
+		select {
+		case joined <- struct{}{}:
+		default:
+		}
+	}
+	defer func() { view3DWaiterJoined = nil }()
 	second := make(chan res, 1)
 	go func() { b, e := svc.scene(context.Background(), 1, [][2]int{{30, 30}}); second <- res{b, e} }()
-	time.Sleep(20 * time.Millisecond) // let the second request join the build in flight
+	select {
+	case <-joined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second request never joined the build in flight")
+	}
 	cancel()
 	if e := <-first; e != view3DClientGone {
 		t.Fatalf("the cancelled leader answered %q, want %q", e, view3DClientGone)
@@ -740,6 +752,75 @@ func TestView3DSceneHandsTheBuildToAWaitingClient(t *testing.T) {
 	case r := <-second:
 		if r.err != "" || len(r.body) == 0 {
 			t.Fatalf("the remaining client answered %q %q; want the scene", r.body, r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the remaining client was never answered")
+	}
+}
+
+// TestView3DReplayHandsTheReadToAWaitingClient: a replay reader that leaves while every read slot is busy hands the
+// read to the requests waiting on it, and one whose own client is connected takes it over instead of answering "the
+// client went away". It is the scene's hand-off on the replay path.
+//
+// Mutation this test catches: the reader's own cancellation published to the shared entry (one closed tab answering
+// 503 for every other page waiting on the same record, and no read at all).
+func TestView3DReplayHandsTheReadToAWaitingClient(t *testing.T) {
+	svc := newView3DReplayService()
+	for range view3DReplayReads {
+		svc.sem <- struct{}{} // every slot busy: neither reader can run until the test frees one
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	type res struct {
+		body []byte
+		err  string
+	}
+	first := make(chan string, 1)
+	go func() {
+		_, e := svc.read(ctx, "rec", func() ([]byte, string) { return []byte("x"), "" })
+		first <- e
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		svc.mu.Lock()
+		n := len(svc.loads)
+		svc.mu.Unlock()
+		if n == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the first reader never led the read")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	joined := make(chan struct{}, 1)
+	view3DWaiterJoined = func() {
+		select {
+		case joined <- struct{}{}:
+		default:
+		}
+	}
+	defer func() { view3DWaiterJoined = nil }()
+	second := make(chan res, 1)
+	go func() {
+		b, e := svc.read(context.Background(), "rec", func() ([]byte, string) { return []byte("body"), "" })
+		second <- res{b, e}
+	}()
+	select {
+	case <-joined:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second reader never joined the read in flight")
+	}
+	cancel()
+	if e := <-first; e != view3DClientGone {
+		t.Fatalf("the cancelled leader answered %q, want %q", e, view3DClientGone)
+	}
+	for range view3DReplayReads {
+		<-svc.sem // free the slots: the remaining client's own read now runs
+	}
+	select {
+	case r := <-second:
+		if r.err != "" || string(r.body) != "body" {
+			t.Fatalf("the remaining client answered %q %q; want the record", r.body, r.err)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the remaining client was never answered")

@@ -109,6 +109,7 @@ type watchRun struct {
 	decisionsSeq       int
 	decisionsHas       bool
 	decisionsAt        time.Time
+	decisionsFailures  int
 	decisionsRows      int
 	decisionsPages     int
 	decisionsReads     int
@@ -449,7 +450,9 @@ func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
 		// decisionsReadGap keeps a fast poll from hammering the module.
 		if !r.now().Before(w.decisionsAt) {
 			r.watchPullDecisions(ctx, w, decisionsPullTimeout)
-			w.decisionsAt = r.now().Add(decisionsReadGap)
+			// A failed read is spaced out: the read's own bound is spent on a module that hangs, so a run of failures
+			// must not cost every poll its bound. A good read clears the count and the floor is back.
+			w.decisionsAt = r.now().Add(decisionsRetryGap(w.decisionsFailures))
 		}
 		if !r.watchPollEvents(ctx, w) {
 			return

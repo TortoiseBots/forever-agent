@@ -126,7 +126,7 @@ func (s *session) feedCommand(line chat.Line) {
 	}
 	if line.Type == chat.TypeSay && s.isSelf(line) && command.IsCommandText(line.Text) {
 		if s.sightLineSaid(line.Text) {
-			s.sightSaid = true
+			s.noteSightSaid()
 		} else {
 			s.gmConfirmed = false
 			if s.report != nil {

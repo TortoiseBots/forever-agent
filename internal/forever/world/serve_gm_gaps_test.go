@@ -89,6 +89,35 @@ func TestServeTeleportMovesTheCharacter(t *testing.T) {
 	f.wait(t)
 }
 
+// TestServeWalkPathWaitsOutTheFallItWasAskedIn: teleport answers at the fall's start, so a walk_path asked right after
+// meets the mover in the air (objects.ErrAirborne). The handler waits for the landing and then walks; this drives the
+// daemon's own walk_path, not the wait, so removing the wait from serveWalkPath fails it.
+func TestServeWalkPathWaitsOutTheFallItWasAskedIn(t *testing.T) {
+	dir := navfixture.WriteForeverDirAt(t, 0, []navfixture.Poly{navfixture.Square(1000, 2000, 1008, 2008, 50)}, nil, 1000, 2000)
+	f := newFakeServer(t)
+	f.serveMode = true
+	tele := &[3]float32{1002, 2002, 70}
+	f.serveGMScript = goScript(tele)
+	defer f.close()
+	a := startServeDaemonWith(t, f, &stepLog{}, dir)
+	waitServeUnits(t, a)
+	var out ServeTeleport
+	json.Unmarshal(a.mustCall(t, "teleport", map[string]any{"x": 1002.0, "y": 2002.0, "z": 70.0}), &out)
+	if !out.Fell || !out.Falling {
+		t.Fatalf("teleport answered %+v, want a fall in flight", out)
+	}
+	var walked ServePath
+	json.Unmarshal(a.mustCall(t, "walk_path", map[string]any{"x": 1004.0, "y": 2004.0, "z": 50.0}), &walked)
+	if walked.Status != "complete" {
+		t.Fatalf("walk_path during the fall answered %+v; want it to wait for the landing and walk", walked)
+	}
+	if n := rawCount(f, wire.CMSGMoveFallLand); n != 1 {
+		t.Fatalf("%d fall-land packet(s), want one", n)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
 func TestServeTeleportRefusesBadArguments(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveGMScript = goScript(&[3]float32{1100, 2100, 55})

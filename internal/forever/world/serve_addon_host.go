@@ -281,6 +281,11 @@ func (st *serveState) addonGateWait(ctx context.Context) error {
 
 func (st *serveState) addonGateFree() { <-st.addonGate }
 
+// addonInstallHook is a test's window into addon_start between the sidecar's load and the first session state write:
+// nil outside tests. An error fails the start through the same cleanup path a later refused check takes, so a test can
+// drive that path with the bundled mock (which refuses every bad prefix before the session sees it).
+var addonInstallHook func(*session) error
+
 // addonStart loads the add-on and registers its prefixes with this session. The sidecar start and the load run on
 // this goroutine; only the session's own checks, the install and the prefixes are queued, so a load that hangs
 // costs the add-on its host (CallTimeout) and never the session loop.
@@ -386,6 +391,12 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 		// host already installed so their prefixes register through it.
 		st.performAddonOuts(a, outs)
 		a.name, a.version, a.files = res.Name, res.Version, res.Files
+		if addonInstallHook != nil {
+			if err := addonInstallHook(s); err != nil {
+				st.addon = nil
+				return nil, err
+			}
+		}
 		// The sidecar checks these before it answers a load (lua/mock.lua); a sidecar that broke the contract is
 		// refused here, and none of them enters the list.
 		for _, prefix := range res.Prefixes {
