@@ -245,6 +245,15 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `addon_send` | `channel`, `prefix`, `text`, `to` | Send an add-on message | [Add-on protocol](../bots-and-raids/addon-protocol.md) |
 | `chat_log` | `since`, `limit`, `wait_ms` | Chat lines | [Events and logs](events-and-logs.md#chat_log) |
 
+# The add-on host
+
+| Method | Params | What it does | Page |
+|---|---|---|---|
+| `addon_start` | `dir`, `clock`, `prefixes` | Load a real add-on headless in a `lua5.1` sidecar, register its prefixes and feed it the session | [Run an add-on headless](../bots-and-raids/addon-host.md) |
+| `addon_state` | `{}` | What the add-on sent, received, raised and printed, and its `throttled` flag | [Run an add-on headless](../bots-and-raids/addon-host.md) |
+| `addon_tick` | `ms` | Advance a `manual` clock by `ms` (100 when omitted) and run `OnUpdate` once | [Run an add-on headless](../bots-and-raids/addon-host.md) |
+| `addon_stop` | `{}` | Close the sidecar and unregister only the add-on's prefixes | [Run an add-on headless](../bots-and-raids/addon-host.md) |
+
 # Events
 
 | Method | Params | What it does | Page |

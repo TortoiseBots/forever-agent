@@ -2,6 +2,7 @@
 
 * [Ordering bots](bot-control.md) - How the agent talks to a bot module, which commands it sends, which of your bots it may order, and the live checks that drive the module end to end.
 * [The add-on protocol](addon-protocol.md) - How the agent exchanges add-on messages with a server's bot module and how to check that exchange.
+* [Run an add-on headless](addon-host.md) - Run a real add-on's Lua on a forever serve daemon with addon_start, read what it did with addon_state, tick a manual clock with addon_tick, and stop it with addon_stop.
 
 # Raids
 
