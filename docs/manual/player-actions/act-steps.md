@@ -4,7 +4,7 @@ title: Scripted actions with act
 description: Drive the character through a list of scripted steps - talk, buy, quest, loot, train, fly, mail and the rest - with forever act or the act method.
 tags: [player-actions, act, scripting, steps]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T02:05:00Z }
 sources:
   - id: act
     resource: internal/forever/world/act.go
@@ -158,11 +158,25 @@ A quest step needs the current NPC (an `npc` step first) and a giver with the qu
 
 | Step | Arguments | What it does |
 |---|---|---|
-| `trainer` | - | Opens the current trainer and prints its spells. |
-| `learn` | `spell=N` | Buys one spell from the open trainer list, checks the fare left the purse. |
+| `trainer` | `option=N` (optional) | Opens the current trainer and prints its spells. `option=` selects that gossip "Train me." row; a creature with several trainer rows needs it to name one (the first is taken otherwise). |
+| `learn` | `spell=N` | Buys one spell from the open trainer list, checks the fare left the purse. Passes on the server's learned-spell answer for the spell or for the rank it teaches (the answer whose superseded spell is the bought one). |
 | `taxi-nodes` | - | Opens the current flight master and prints its current, known and usable nodes. |
 | `taxi-status` | - | Prints the flight master's own node status. |
 | `fly` | `node=N` | Flies to a node the window offers and waits for the landing (across maps). |
+
+`option=` is one of the menu's gossip option ids, not a trainer id. When the menu holds several "Train me." rows and
+no `option=` is given, a log line names the ids and the first row is taken. A bad pick is refused before the list is
+asked for:
+
+- `option="two" is not a gossip option id` — the value is not a number;
+- `the menu's 2 trainer option(s) [7 8] carry no option 9` — the id is not one of the menu's trainer rows, and the
+  refusal lists the ids it has;
+- `entry 1234 has no gossip menu, so option= cannot pick a trainer row (CMSG_TRAINER_LIST asks it directly)` — a
+  trainer without a gossip menu is asked for its list directly, so there is no row to pick.
+
+`learn` needs the `trainer` step's list for the same NPC first. It passes on the server's learned-spell answer that
+names the bought spell, or on the answer for a castable spell's next rank: that answer names the taught rank, and its
+superseded spell is the bought one. The fare must leave the purse in the update that follows the answer.
 
 ## Battleground steps
 

@@ -15,6 +15,11 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
 
+// trainerLearnedPackets bounds the learned-spell packets the watch keeps: a purchase's 3 s window holds one answer
+// in practice (a castable learn's answer and another learn's may arrive in the same poll), and the cap keeps a
+// session that learns outside a trainer from growing its watch for its whole life.
+const trainerLearnedPackets = 8
+
 // trainerWatch holds the trainer answers since the last step cleared them. The session goroutine is the only reader
 // and writer, like the other watches.
 type trainerWatch struct {
@@ -22,8 +27,9 @@ type trainerWatch struct {
 	list *npc.TrainerList
 	// failed is the last SMSG_TRAINER_BUY_FAILED.
 	failed *npc.TrainerBuyFailed
-	// learned is the last SMSG_LEARNED_SPELLS' rows, filled by the spell book's dispatch.
-	learned []combat.LearnedSpell
+	// learned holds the learned-spell packets since the last trainer or learn step cleared them, newest last: two
+	// can land in one poll, and a purchase is confirmed by any of them, so a single slot would keep only the last.
+	learned []combat.LearnedSpells
 }
 
 // isTrainerPacket reports the opcodes handleTrainer owns. SMSG_LEARNED_SPELLS is not one of them: any learn, at a
