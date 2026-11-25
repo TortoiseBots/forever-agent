@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,6 +49,18 @@ func passingSnapshot() realism.Snapshot {
 			{Slot: "main_hand", ItemID: 13964, ItemLevel: 58, RequiredLevel: 55, StatsKnown: true, Quality: new(4), Source: "dungeon", EnchantID: new(int64(273629))},
 		},
 	}}}
+}
+
+// repeatBot is the snapshot's first bot n times under the ids bot1 ... botN.
+func repeatBot(s realism.Snapshot, n int) realism.Snapshot {
+	first := s.Bots[0]
+	s.Bots = nil
+	for i := 1; i <= n; i++ {
+		b := first
+		b.ID = fmt.Sprintf("bot%d", i)
+		s.Bots = append(s.Bots, b)
+	}
+	return s
 }
 
 func TestTrialsRealismPrintsAndExitsZero(t *testing.T) {
@@ -106,8 +119,9 @@ func TestTrialsRealismBaseline(t *testing.T) {
 	before := passingSnapshot()
 	before.Bots[0].Items[0].ItemLevel = 120
 	before.Bots[0].Items[0].Source = "raid"
-	beforePath := writeSnapshot(t, dir, "before.json", before)
-	afterPath := writeSnapshot(t, dir, "after.json", passingSnapshot())
+	// Five bots a side: a band with fewer is "not comparable: too few bots", never better or worse.
+	beforePath := writeSnapshot(t, dir, "before.json", repeatBot(before, realism.MinBotsForChange))
+	afterPath := writeSnapshot(t, dir, "after.json", repeatBot(passingSnapshot(), realism.MinBotsForChange))
 
 	code, stdout, stderr := runCLI("trials", "realism", "--snapshot", afterPath, "--baseline", beforePath)
 	if code != exitOK {

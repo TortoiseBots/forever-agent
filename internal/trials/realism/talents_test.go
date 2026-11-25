@@ -84,12 +84,12 @@ func allSpecs(t *testing.T, tables *aotc.Data) [][2]string {
 	return out
 }
 
-// playerLikeBuild builds a whole talent build from the player data itself: the level group's common
-// picks first, then the group's other picks, then (only if the tree still needs points) the common
-// picks' remaining ranks; at 60 distributed over the trees of the spec's most common split. With
-// usual false the common picks are taken at their maximum rank, with usual true at the rank the
-// group's players report as usual (usual_rank), the other points going to other talents: the build a
-// player who follows the data takes. Both must PASS the talent check at every level the ticket names.
+// playerLikeBuild builds a whole talent build from the player data itself: every common pick of the
+// level group at the rank its players report as usual (usual_rank) first; at 60 distributed over the
+// trees of the spec's most common split. With usual true the other points then go to other talents
+// and only what is left tops the common picks up; with usual false the common picks are topped up to
+// their maximum rank before any other talent. Both must PASS the talent check at every level the
+// ticket names.
 func playerLikeBuild(t *testing.T, tables *aotc.Data, class, spec string, level int, usual bool) []Talent {
 	t.Helper()
 	group := playdata.LevelGroup(level)
@@ -165,24 +165,31 @@ func playerLikeBuild(t *testing.T, tables *aotc.Data, class, spec string, level 
 			taken[row.SpellID] += n
 			need -= n
 		}
-		for _, row := range byTab[tab] {
-			if commonID[row.SpellID] {
-				limit := maxRank[row.SpellID]
-				if usual {
-					limit = min(limit, usualRank[row.SpellID])
+		commonPass := func() {
+			for _, row := range byTab[tab] {
+				if commonID[row.SpellID] {
+					fill(row, maxRank[row.SpellID])
 				}
-				fill(row, limit)
 			}
 		}
-		for _, row := range byTab[tab] {
-			if !commonID[row.SpellID] {
-				fill(row, maxRank[row.SpellID])
+		otherPass := func() {
+			for _, row := range byTab[tab] {
+				if !commonID[row.SpellID] {
+					fill(row, maxRank[row.SpellID])
+				}
 			}
 		}
 		for _, row := range byTab[tab] {
 			if commonID[row.SpellID] {
-				fill(row, maxRank[row.SpellID])
+				fill(row, min(maxRank[row.SpellID], usualRank[row.SpellID]))
 			}
+		}
+		if usual {
+			otherPass()
+			commonPass()
+		} else {
+			commonPass()
+			otherPass()
 		}
 		if need > 0 {
 			t.Fatalf("%s/%s level %d: tree %d cannot hold its %d points from the table", class, spec, level, tab, targets[tab])
@@ -205,7 +212,7 @@ func playerLikeBuild(t *testing.T, tables *aotc.Data, class, spec string, level 
 
 // TestTalentCheckPlayerLikeBuildsPass is the ticket's table test: a build made from the data itself
 // passes at every level the ticket names, for EVERY spec (135 cases), in two variants: the common
-// picks at their maximum rank, and at the rank the data reports as usual. The usual variant is not
+// picks topped up to their maximum rank, and left at the rank the data reports as usual. The usual variant is not
 // circular with the capacity: before the capacity used the usual rank it failed in four cases
 // (hunter/beast-mastery at 29 with a 0.70 share; shaman/elemental, warlock/destruction and
 // warrior/fury at 19 with 0.60). Before the denominator was capped at all, 16 of 27 specs failed at
@@ -369,6 +376,58 @@ func TestTalentUsualRankCapacity(t *testing.T) {
 			share := partOf(t, c, "point_share")
 			if share.Verdict != tc.verdict || share.Value != tc.share {
 				t.Fatalf("point share %+v, want %s at %v (%s)", share, tc.verdict, tc.share, c.Reason)
+			}
+		})
+	}
+}
+
+// TestTalentSurplusRanksDoNotStandInForASkippedPick pins the per-pick rule: a build with no points in
+// the most taken common pick and the maximum rank in another common pick whose usual rank is 1 used to
+// score 5 of 6 and PASS (surplus ranks of one pick filled the capacity of the skipped one). Each pick
+// counts up to its usual rank, so it scores 1 of 6 and FAILS. Same shape for three specs at level 19
+// (warrior/fury skipping its 98.6% pick, shaman/elemental and warlock/destruction too).
+func TestTalentSurplusRanksDoNotStandInForASkippedPick(t *testing.T) {
+	tables := Default().(*aotc.Data)
+	for _, spec := range [][2]string{{"warrior", "fury"}, {"shaman", "elemental"}, {"warlock", "destruction"}} {
+		class, name := spec[0], spec[1]
+		t.Run(class+"/"+name, func(t *testing.T) {
+			const level = 19
+			common := tables.CommonTalents(class, name, "10-19", TalentPickShare)
+			if len(common) != 2 {
+				t.Fatalf("the case expects two common picks at 10-19, the data has %d", len(common))
+			}
+			skipped, taken := common[0], common[1]
+			if taken.PickPct > skipped.PickPct {
+				skipped, taken = taken, skipped
+			}
+			if taken.UsualRank >= taken.MaxRank || skipped.Tab != taken.Tab {
+				t.Fatalf("the case needs a taken pick with a usual rank under its maximum, in the skipped pick's tree: %+v %+v", taken, skipped)
+			}
+			isCommon := map[int64]bool{skipped.SpellID: true, taken.SpellID: true}
+			b := Bot{ID: "bot1", Class: class, Spec: name, Level: level, TalentsKnown: true, TalentsComplete: true,
+				Talents: []Talent{{SpellID: taken.SpellID, Rank: int(taken.MaxRank), Tab: new(taken.Tab)}}}
+			left := TalentPoints(level) - int(taken.MaxRank)
+			rows := tables.CommonTalents(class, name, "all", 0)
+			sort.SliceStable(rows, func(i, j int) bool { return rows[i].PickPct > rows[j].PickPct })
+			for _, row := range rows {
+				if left <= 0 {
+					break
+				}
+				if row.Tab != taken.Tab || isCommon[row.SpellID] || row.MaxRank == 0 {
+					continue
+				}
+				n := min(left, int(row.MaxRank))
+				b.Talents = append(b.Talents, Talent{SpellID: row.SpellID, Rank: n, Tab: new(row.Tab)})
+				left -= n
+			}
+			if left != 0 {
+				t.Fatalf("the tree cannot hold the other points (%d left)", left)
+			}
+			c := checkOfID(t, Judge(b, Default()), RuleTalents)
+			share := partOf(t, c, "point_share")
+			if share.Verdict != VerdictFail || share.Value >= 0.5 {
+				t.Fatalf("skipping %s for %d ranks of %s must fail well under the floor: %+v (%s)",
+					skipped.Talent, taken.MaxRank, taken.Talent, share, c.Reason)
 			}
 		})
 	}

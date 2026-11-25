@@ -8,15 +8,16 @@ package realism
 // numbers the bots' judged parts gave, so a spec's row says both "how many passed" and "how far from
 // the players' own numbers"; a mean needs MinSpecBotsForMean judged bots, because one bot is not a
 // spec. The before/after compares the two readings per spec AND level band, on shares rather than
-// counts (the bot sets may differ), with only the intersection compared: a spec or band in one
+// counts (the bot sets may differ) and only for bands with MinBotsForChange bots on each side, with only the intersection compared: a spec or band in one
 // snapshot only is listed as such, and a verdict that became INCONCLUSIVE is "no longer judged",
-// never "better". The headline table counts the same keys as the rows, never the whole snapshots. Bot ids are not identities (assigned by name order per snapshot), so no bot is
+// never "better". The headline table is built from the rows, never from whole snapshots or pooled counts. Bot ids are not identities (assigned by name order per snapshot), so no bot is
 // paired across the two readings.
 
 import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/pjerra/forever-agent/data/aotc"
@@ -36,6 +37,14 @@ var checkIDs = []string{RuleTalents, RuleGear, RuleStats, RuleEnchants}
 // MinSpecBotsForMean is the fewest judged bots a per-spec mean is shown over: below it one bot's
 // number would read as the spec's. Starting value to tune.
 const MinSpecBotsForMean = 5
+
+// MinBotsForChange is the fewest bots each side must hold in a spec and level band before its row may
+// read better or worse: below it the row says "not comparable: too few bots", because one bot more or
+// less is a swing of whole tens of percent. Starting value to tune.
+const MinBotsForChange = 5
+
+// wordTooFew is the row word for a band with fewer than MinBotsForChange bots on a side.
+const wordTooFew = "not comparable: too few bots"
 
 // BotReading is one bot's checks.
 type BotReading struct {
@@ -340,12 +349,79 @@ func orDefault(s, word string) string {
 	return s
 }
 
-// CheckDiff is one check's before/after counts.
+// RowTally counts the rows (spec and level bands present in both snapshots) of one check by the word
+// changeWord gave them. The headline is built from it, never from pooled bot counts: pooling lets a
+// change in how many bots a band holds move the headline while every row is unchanged.
+type RowTally struct {
+	Better         int `json:"better"`
+	Worse          int `json:"worse"`
+	Unchanged      int `json:"unchanged"`
+	NoLongerJudged int `json:"no_longer_judged"`
+	NotComparable  int `json:"not_comparable"`
+}
+
+// add counts one row word.
+func (t *RowTally) add(word string) {
+	switch word {
+	case "better":
+		t.Better++
+	case "worse":
+		t.Worse++
+	case "no longer judged":
+		t.NoLongerJudged++
+	case "unchanged":
+		t.Unchanged++
+	default:
+		t.NotComparable++
+	}
+}
+
+// String is the tally as the report's text: the non-zero counts, "no rows" for none.
+func (t RowTally) String() string {
+	var out []string
+	for _, c := range []struct {
+		n    int
+		word string
+	}{{t.Better, "better"}, {t.Worse, "worse"}, {t.Unchanged, "unchanged"},
+		{t.NoLongerJudged, "no longer judged"}, {t.NotComparable, "not comparable"}} {
+		if c.n > 0 {
+			out = append(out, fmt.Sprintf("%d %s", c.n, c.word))
+		}
+	}
+	if len(out) == 0 {
+		return "no rows"
+	}
+	return strings.Join(out, ", ")
+}
+
+// headlineWord is the headline's word for a check, decided from its row tally: worse when a row got
+// worse and none better, better when a row got better and none worse, "mixed" when both, then "no
+// longer judged", else unchanged; "not comparable" when no row could be compared.
+func headlineWord(t RowTally) string {
+	switch {
+	case t.Better+t.Worse+t.Unchanged+t.NoLongerJudged == 0:
+		return "not comparable"
+	case t.Better > 0 && t.Worse > 0:
+		return "mixed"
+	case t.Worse > 0:
+		return "worse"
+	case t.Better > 0:
+		return "better"
+	case t.NoLongerJudged > 0:
+		return "no longer judged"
+	}
+	return "unchanged"
+}
+
+// CheckDiff is one check's before/after counts. On the headline Rows tallies the per-spec rows the
+// word comes from, and Before and After are the compared bands' summed counts, shown for information:
+// they decide nothing.
 type CheckDiff struct {
 	ID     string     `json:"id"`
 	Before CheckCount `json:"before"`
 	After  CheckCount `json:"after"`
 	Change string     `json:"change"`
+	Rows   *RowTally  `json:"rows,omitempty"`
 }
 
 // SpecDiff is one class, spec and level band's before/after counts per check. Presence is "" when
@@ -413,6 +489,7 @@ func Compare(before, after Reading) Diff {
 	})
 	headBefore := map[string]CheckCount{}
 	headAfter := map[string]CheckCount{}
+	tallies := map[string]*RowTally{}
 	for _, k := range ordered {
 		bs, bOK := beforeSpecs[k]
 		as, aOK := afterSpecs[k]
@@ -424,7 +501,12 @@ func Compare(before, after Reading) Diff {
 			d.ComparedAfter += as.Bots
 			for _, id := range checkIDs {
 				bc, ac := countOf(bs.Checks, id), countOf(as.Checks, id)
-				sd.Checks = append(sd.Checks, CheckDiff{ID: id, Before: bc, After: ac, Change: changeWord(bc, ac)})
+				word := changeWord(bc, ac)
+				sd.Checks = append(sd.Checks, CheckDiff{ID: id, Before: bc, After: ac, Change: word})
+				if tallies[id] == nil {
+					tallies[id] = &RowTally{}
+				}
+				tallies[id].add(word)
 				headBefore[id] = addCounts(headBefore[id], bc)
 				headAfter[id] = addCounts(headAfter[id], ac)
 			}
@@ -443,12 +525,17 @@ func Compare(before, after Reading) Diff {
 		}
 		d.Specs = append(d.Specs, sd)
 	}
-	// The headline is the same verdict function over the compared keys' summed counts: bots in a key
-	// of one snapshot only never reach it.
+	// The headline word comes from the rows' words (one changeWord for every row), so a band that
+	// holds more or fewer bots than before cannot move it while its row reads unchanged; bots in a
+	// key of one snapshot only never reach it. The summed counts are shown, not judged.
 	for _, id := range checkIDs {
 		b, a := headBefore[id], headAfter[id]
 		b.ID, a.ID = id, id
-		d.Checks = append(d.Checks, CheckDiff{ID: id, Before: b, After: a, Change: changeWord(b, a)})
+		tally := RowTally{}
+		if tallies[id] != nil {
+			tally = *tallies[id]
+		}
+		d.Checks = append(d.Checks, CheckDiff{ID: id, Before: b, After: a, Change: headlineWord(tally), Rows: &tally})
 	}
 	return d
 }
@@ -481,15 +568,17 @@ func countOf(counts []CheckCount, id string) CheckCount {
 	return CheckCount{ID: id}
 }
 
-// changeWord is the ONE verdict function of the before/after report, used by the headline and by every
-// per-spec row: better, worse, unchanged, no longer judged, or not comparable. It reads SHARES of each
+// changeWord is the ONE verdict function of the before/after report, used for every per-spec row (the
+// headline is built from the rows' words): better, worse, unchanged, no longer judged, or not
+// comparable. It reads SHARES of each
 // side's bots (the two readings' bot sets differ in size). More FAILs is worse, fewer better; with FAILs
 // equal, more PASSes is better. A verdict that turned INCONCLUSIVE while nothing started passing is "no
-// longer judged": a lost read-out is not an improvement. A side with no bots gives "not comparable".
+// longer judged": a lost read-out is not an improvement. A side with fewer than MinBotsForChange bots
+// gives "not comparable: too few bots".
 func changeWord(before, after CheckCount) string {
 	beforeN, afterN := before.total(), after.total()
-	if beforeN <= 0 || afterN <= 0 {
-		return "not comparable"
+	if beforeN < MinBotsForChange || afterN < MinBotsForChange {
+		return wordTooFew
 	}
 	switch {
 	case shareMore(after.Inconclusive, afterN, before.Inconclusive, beforeN) &&
@@ -525,14 +614,14 @@ func shareMore(count1, n1, count2, n2 int) bool {
 func (d Diff) WriteText(w io.Writer) error {
 	fmt.Fprintf(w, "before: %s\nafter: %s\n", orDefault(d.Before, "unnamed"), orDefault(d.After, "unnamed"))
 	fmt.Fprintln(w, "\n## Checks")
-	fmt.Fprintf(w, "compared: the spec and level bands in both snapshots (%d bot(s) before, %d after)\n", d.ComparedBefore, d.ComparedAfter)
+	fmt.Fprintf(w, "compared: the spec and level bands in both snapshots (%d bot(s) before, %d after); the word is decided by those bands' rows, the counts are for information\n", d.ComparedBefore, d.ComparedAfter)
 	if d.OnlyBeforeBots > 0 || d.OnlyAfterBots > 0 {
 		fmt.Fprintf(w, "not compared: %d bot(s) only before, %d bot(s) only after (bands in one snapshot only)\n", d.OnlyBeforeBots, d.OnlyAfterBots)
 	}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "check\tbefore\tafter\tchange")
 	for _, c := range d.Checks {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s (%s)\n", c.ID, diffCell(c.Before), diffCell(c.After), c.Change, impact(c.After, c.Before))
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s (rows: %s)\n", c.ID, diffCell(c.Before), diffCell(c.After), c.Change, c.Rows)
 	}
 	tw.Flush()
 
@@ -571,35 +660,6 @@ func (d Diff) WriteText(w io.Writer) error {
 // diffCell is one side of the before/after cell.
 func diffCell(c CheckCount) string {
 	return fmt.Sprintf("%d/%d/%d", c.Pass, c.Fail, c.Inconclusive)
-}
-
-// impact is the change of the shares a cell shows, in percentage points ("-10 pts fail"): the two
-// sides can hold a different number of bots, so a count difference would mislead.
-func impact(after, before CheckCount) string {
-	pass := sharePoints(after.Pass, after.total()) - sharePoints(before.Pass, before.total())
-	fail := sharePoints(after.Fail, after.total()) - sharePoints(before.Fail, before.total())
-	if after.total() <= 0 || before.total() <= 0 || (pass == 0 && fail == 0) {
-		return "="
-	}
-	out := ""
-	if pass != 0 {
-		out += fmt.Sprintf("%+d pts pass", pass)
-	}
-	if fail != 0 {
-		if out != "" {
-			out += ", "
-		}
-		out += fmt.Sprintf("%+d pts fail", fail)
-	}
-	return out
-}
-
-// sharePoints is count of n in whole percent, rounded; zero for an empty side.
-func sharePoints(count, n int) int {
-	if n <= 0 {
-		return 0
-	}
-	return int((int64(count)*200 + int64(n)) / (2 * int64(n)))
 }
 
 // SortedBotIDs lists a reading's bot ids, for a deterministic listing.

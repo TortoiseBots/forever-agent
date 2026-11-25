@@ -103,25 +103,35 @@ func TestReadingTextReportsEveryBotAndSpec(t *testing.T) {
 	}
 }
 
+// botsOf is n level 60 bots (ids prefix01...), of which `failing` use a raid-sourced item (a GEAR FAIL).
+func botsOf(prefix string, n, failing int) []Bot {
+	var bots []Bot
+	for i := range n {
+		b := goodSixty()
+		b.ID = fmt.Sprintf("%s%02d", prefix, i+1)
+		if i < failing {
+			b.Items[0].Source = "raid"
+		}
+		bots = append(bots, b)
+	}
+	return bots
+}
+
+// reading is a judged snapshot of the bots.
+func readingOf(source string, bots []Bot) Reading {
+	return JudgeReading(Snapshot{Format: Format, Source: source, Bots: bots}, Default())
+}
+
 // TestCompareComparesSpecsAndBands pins the unit of comparison: a spec that failed on the older
 // snapshot and passes on the newer one reads better, and no bot id is paired across the two.
 func TestCompareComparesSpecsAndBands(t *testing.T) {
-	before := goodSixty()
-	before.Items[0].ItemLevel = 120 // above the level 60 allowance
-	before.Items[0].Source = "raid"
-	beforeBots := []Bot{before}
-	second := goodSixty()
-	second.ID = "bot9"
-	afterBots := []Bot{goodSixty(), second}
-
-	beforeReading := JudgeReading(Snapshot{Format: Format, Source: "before", Bots: beforeBots}, Default())
-	afterReading := JudgeReading(Snapshot{Format: Format, Source: "after", Bots: afterBots}, Default())
-	d := Compare(beforeReading, afterReading)
+	d := Compare(readingOf("before", botsOf("a", MinBotsForChange, MinBotsForChange)),
+		readingOf("after", botsOf("b", MinBotsForChange+1, 0)))
 	if d.Format != DiffFormat || d.Before != "before" || d.After != "after" {
 		t.Fatalf("diff header: %+v", d)
 	}
 	gear := checkDiffOf(t, d, RuleGear)
-	if gear.Change != "better" || gear.Before.Fail != 1 || gear.After.Fail != 0 || gear.After.Pass != 2 {
+	if gear.Change != "better" || gear.Before.Fail != MinBotsForChange || gear.After.Fail != 0 || gear.After.Pass != MinBotsForChange+1 {
 		t.Fatalf("fewer failing bots is better: %+v", gear)
 	}
 	if len(d.Specs) != 1 || d.Specs[0].Band != "60" || d.Specs[0].Presence != "" {
@@ -145,46 +155,130 @@ func TestCompareComparesSpecsAndBands(t *testing.T) {
 	}
 }
 
-// TestCompareReportsARegression pins the other direction on shares: one failing bot among two is
-// worse than none among two.
+// TestCompareReportsARegression pins the other direction on shares: three failing bots among five
+// is worse than none among five.
 func TestCompareReportsARegression(t *testing.T) {
-	before := []Bot{goodSixty(), goodSixty()}
-	before[1].ID = "bot2"
-	after := []Bot{goodSixty(), goodSixty()}
-	after[1].ID = "bot9"
-	after[1].Items[0].Source = "raid"
-	d := Compare(
-		JudgeReading(Snapshot{Format: Format, Source: "before", Bots: before}, Default()),
-		JudgeReading(Snapshot{Format: Format, Source: "after", Bots: after}, Default()),
-	)
-	gear := checkDiffOf(t, d, RuleGear)
-	if gear.Change != "worse" {
-		t.Fatalf("half the bots failing is worse than none: %+v", gear)
+	d := Compare(readingOf("before", botsOf("a", 5, 0)), readingOf("after", botsOf("b", 5, 3)))
+	if gear := checkDiffOf(t, d, RuleGear); gear.Change != "worse" {
+		t.Fatalf("three of five bots failing is worse than none: %+v", gear)
 	}
 }
 
 // TestCompareLostReadoutIsNotBetter pins the review's case: FAIL on INCONCLUSIVE is "no longer
 // judged", never "better".
 func TestCompareLostReadoutIsNotBetter(t *testing.T) {
-	before := goodSixty()
-	before.Items[0].Source = "raid" // gear source FAIL
-	after := goodSixty()
-	after.ID = "bot7" // a different bot, so no id pairing could help
-	after.ItemsKnown, after.Items = false, nil
+	after := botsOf("z", 5, 0) // different ids, so no id pairing could help
+	for i := range after {
+		after[i].ItemsKnown, after[i].Items = false, nil
+	}
+	d := Compare(readingOf("before", botsOf("a", 5, 5)), readingOf("after", after))
+	if change := rowChange(t, d, RuleGear); change != "no longer judged" {
+		t.Fatalf("a FAIL that became INCONCLUSIVE is a lost read-out, not %q", change)
+	}
+	if head := checkDiffOf(t, d, RuleGear).Change; head != "no longer judged" {
+		t.Fatalf("the headline follows its row, not %q", head)
+	}
+}
 
-	d := Compare(
-		JudgeReading(Snapshot{Format: Format, Source: "before", Bots: []Bot{before}}, Default()),
-		JudgeReading(Snapshot{Format: Format, Source: "after", Bots: []Bot{after}}, Default()),
-	)
-	gear := specDiffOf(t, d, "druid", "balance", "60").Checks
-	var change string
-	for _, c := range gear {
-		if c.ID == RuleGear {
-			change = c.Change
+// TestComparePassToInconclusiveIsNoLongerJudged pins the other lost read-out: PASS turning
+// INCONCLUSIVE is "no longer judged" in the row and the headline, never "worse" or "unchanged".
+func TestComparePassToInconclusiveIsNoLongerJudged(t *testing.T) {
+	after := botsOf("z", 5, 0)
+	for i := range after {
+		after[i].ItemsKnown, after[i].Items = false, nil
+	}
+	d := Compare(readingOf("before", botsOf("a", 5, 0)), readingOf("after", after))
+	if change := rowChange(t, d, RuleGear); change != "no longer judged" {
+		t.Fatalf("PASS to INCONCLUSIVE is a lost read-out, not %q", change)
+	}
+	if head := checkDiffOf(t, d, RuleGear).Change; head != "no longer judged" {
+		t.Fatalf("the headline follows its row, not %q", head)
+	}
+}
+
+// rowChange is the gear row's word of the only shared spec and band.
+func rowChange(t *testing.T, d Diff, id string) string {
+	t.Helper()
+	for _, c := range specDiffOf(t, d, "druid", "balance", "60").Checks {
+		if c.ID == id {
+			return c.Change
 		}
 	}
-	if change != "no longer judged" {
-		t.Fatalf("a FAIL that became INCONCLUSIVE is a lost read-out, not %q", change)
+	t.Fatalf("no %s row", id)
+	return ""
+}
+
+// TestCompareMixShiftDoesNotMoveTheHeadline pins the headline against a change in how many bots a
+// band holds: band A has 5 bots all failing GEAR before and 50 all failing after, band B 5 passing
+// bots on both sides. Both rows read unchanged, so the headline does too (pooled counts went from
+// 5 of 10 failing to 50 of 55 and read "worse").
+func TestCompareMixShiftDoesNotMoveTheHeadline(t *testing.T) {
+	other := func(prefix string, n int) []Bot {
+		bots := botsOf(prefix, n, 0)
+		for i := range bots {
+			bots[i].Spec = "restoration"
+		}
+		return bots
+	}
+	before := append(botsOf("a", 5, 5), other("b", 5)...)
+	after := append(botsOf("c", 50, 50), other("d", 5)...)
+	d := Compare(readingOf("before", before), readingOf("after", after))
+	head := checkDiffOf(t, d, RuleGear)
+	if head.Change != "unchanged" || head.Rows == nil || head.Rows.Unchanged != 2 || head.Rows.Worse != 0 {
+		t.Fatalf("both rows are unchanged, so is the headline: %+v rows %+v", head, head.Rows)
+	}
+	for _, s := range d.Specs {
+		for _, c := range s.Checks {
+			if c.ID == RuleGear && c.Change != "unchanged" {
+				t.Fatalf("%s/%s: %q", s.Class, s.Spec, c.Change)
+			}
+		}
+	}
+	var w bytes.Buffer
+	if err := d.WriteText(&w); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(w.String(), "rows: 2 unchanged") {
+		t.Fatalf("the headline text must show its rows:\n%s", w.String())
+	}
+}
+
+// TestCompareMixedRowsReadMixed pins the headline when one band got better and another worse.
+func TestCompareMixedRowsReadMixed(t *testing.T) {
+	other := func(prefix string, n, failing int) []Bot {
+		bots := botsOf(prefix, n, failing)
+		for i := range bots {
+			bots[i].Spec = "restoration"
+		}
+		return bots
+	}
+	before := append(botsOf("a", 5, 5), other("b", 5, 0)...)
+	after := append(botsOf("c", 5, 0), other("d", 5, 5)...)
+	head := checkDiffOf(t, Compare(readingOf("before", before), readingOf("after", after)), RuleGear)
+	if head.Change != "mixed" || head.Rows.Better != 1 || head.Rows.Worse != 1 {
+		t.Fatalf("one better and one worse row: %+v rows %+v", head, head.Rows)
+	}
+}
+
+// TestCompareTooFewBotsIsNotComparable pins the minimum: a band with fewer than MinBotsForChange bots
+// on a side never reads better or worse, and the headline over only such rows is not comparable.
+func TestCompareTooFewBotsIsNotComparable(t *testing.T) {
+	few := MinBotsForChange - 1
+	d := Compare(readingOf("before", botsOf("a", few, few)), readingOf("after", botsOf("b", few, 0)))
+	if change := rowChange(t, d, RuleGear); change != wordTooFew {
+		t.Fatalf("%d bots a side is too few to call better: %q", few, change)
+	}
+	if head := checkDiffOf(t, d, RuleGear); head.Change != "not comparable" || head.Rows.NotComparable != 1 {
+		t.Fatalf("the headline has no row it can compare: %+v rows %+v", head, head.Rows)
+	}
+	// One side under the minimum is enough; both at the minimum compare.
+	d = Compare(readingOf("before", botsOf("a", MinBotsForChange, MinBotsForChange)), readingOf("after", botsOf("b", few, 0)))
+	if change := rowChange(t, d, RuleGear); change != wordTooFew {
+		t.Fatalf("one thin side is too few: %q", change)
+	}
+	d = Compare(readingOf("before", botsOf("a", MinBotsForChange, MinBotsForChange)), readingOf("after", botsOf("b", MinBotsForChange, 0)))
+	if change := rowChange(t, d, RuleGear); change != "better" {
+		t.Fatalf("%d bots a side compare: %q", MinBotsForChange, change)
 	}
 }
 
@@ -233,18 +327,7 @@ func TestCompareOnlyBeforeAndOnlyAfter(t *testing.T) {
 }
 
 // tenSixtyBots is ten level 60 bots of which `failing` use a raid-sourced item (a GEAR FAIL).
-func tenSixtyBots(failing int) []Bot {
-	var bots []Bot
-	for i := range 10 {
-		b := goodSixty()
-		b.ID = fmt.Sprintf("bot%02d", i+1)
-		if i < failing {
-			b.Items[0].Source = "raid"
-		}
-		bots = append(bots, b)
-	}
-	return bots
-}
+func tenSixtyBots(failing int) []Bot { return botsOf("bot", 10, failing) }
 
 // TestCompareHeadlineIgnoresBandsInOneSnapshotOnly pins the headline: the same ten level 60 bots
 // (five GEAR FAILs) plus ten new INCONCLUSIVE level 45 bots is no change. Counting whole snapshots
@@ -309,10 +392,12 @@ func TestChangeWordLostReadoutAndShares(t *testing.T) {
 		want          string
 	}{
 		{"fail to inconclusive", CheckCount{Fail: 5, Pass: 5}, CheckCount{Pass: 5, Inconclusive: 5}, "no longer judged"},
+		{"pass to inconclusive", CheckCount{Pass: 10}, CheckCount{Pass: 5, Inconclusive: 5}, "no longer judged"},
 		{"fewer fails", CheckCount{Fail: 5, Pass: 5}, CheckCount{Fail: 2, Pass: 8}, "better"},
 		{"more fails", CheckCount{Fail: 2, Pass: 8}, CheckCount{Fail: 5, Pass: 5}, "worse"},
-		{"same share, more bots", CheckCount{Fail: 1, Pass: 1}, CheckCount{Fail: 5, Pass: 5}, "unchanged"},
-		{"an empty side", CheckCount{}, CheckCount{Fail: 1}, "not comparable"},
+		{"same share, more bots", CheckCount{Fail: 5, Pass: 5}, CheckCount{Fail: 25, Pass: 25}, "unchanged"},
+		{"an empty side", CheckCount{}, CheckCount{Fail: 5}, wordTooFew},
+		{"one bot under the minimum", CheckCount{Fail: 5}, CheckCount{Pass: MinBotsForChange - 1}, wordTooFew},
 	}
 	for _, tc := range cases {
 		if got := changeWord(tc.before, tc.after); got != tc.want {
@@ -323,8 +408,8 @@ func TestChangeWordLostReadoutAndShares(t *testing.T) {
 
 // TestCompareSameReadingIsNoChange pins that two identical snapshots diff to `unchanged` everywhere.
 func TestCompareSameReadingIsNoChange(t *testing.T) {
-	a := JudgeReading(Snapshot{Format: Format, Source: "a", Bots: []Bot{goodSixty()}}, Default())
-	b := JudgeReading(Snapshot{Format: Format, Source: "b", Bots: []Bot{goodSixty()}}, Default())
+	a := readingOf("a", botsOf("a", MinBotsForChange, 0))
+	b := readingOf("b", botsOf("b", MinBotsForChange, 0))
 	d := Compare(a, b)
 	for _, c := range d.Checks {
 		if c.Change != "unchanged" {

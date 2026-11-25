@@ -9,8 +9,9 @@ package realism
 //	             spends in them. The denominator is capped per tree at what that tree's common picks
 //	             hold at the rank the data reports as usual (usual_rank), so a build that takes
 //	             every common pick at its usual rank cannot score under 100% because the file's
-//	             common picks cannot fill the character's whole point budget. PASS at or above
-//	             TalentPointShareMin.
+//	             common picks cannot fill the character's whole point budget. Each common pick
+//	             counts up to its usual rank, so surplus ranks in one pick cannot make up for a
+//	             common pick the build skipped. PASS at or above TalentPointShareMin.
 //	split        level 60 only: the bot's point split (points per tree) against the nearest of the
 //	             spec's 20 most common splits, in points moved between trees. PASS at or below
 //	             SplitPointsMax, and INCONCLUSIVE when a point sits in a talent the tables do not
@@ -106,15 +107,22 @@ func talentCheck(b Bot, t Tables) Check {
 	var unknown []string
 	var total, inCommon int
 	var pointsPerTab [splitTabs]int
-	commonSet := map[int64]bool{}
+	commonRow := map[int64]aotc.TalentPick{}
 	for _, p := range common {
-		commonSet[p.SpellID] = true
+		commonRow[p.SpellID] = p
 	}
 	var offLines []string
 	for _, talent := range b.Talents {
 		total += talent.Rank
-		if commonSet[talent.SpellID] {
-			inCommon += talent.Rank
+		if row, ok := commonRow[talent.SpellID]; ok {
+			// Each common pick counts up to its own usual rank: ranks above it are surplus and cannot
+			// stand in for a common pick the build skipped.
+			counted := min(talent.Rank, usualCapacity(row))
+			inCommon += counted
+			if surplus := talent.Rank - counted; surplus > 0 {
+				offLines = append(offLines, fmt.Sprintf("%d rank(s) of talent %d above its usual rank %d, not counted as in the common picks",
+					surplus, talent.SpellID, usualCapacity(row)))
+			}
 		} else {
 			offLines = append(offLines, fmt.Sprintf("%d point(s) in talent %d, not among the level group's common picks",
 				talent.Rank, talent.SpellID))
@@ -184,9 +192,8 @@ func talentCheck(b Bot, t Tables) Check {
 			fmt.Sprintf("the level group's common picks account for only %d of the build's %d point(s) in its trees: too few to judge",
 				denominator, total))}, nil)
 	}
-	// Ranks above the usual one in a common pick still count as in the common picks, but never past
-	// what they account for: the share is at most 1.
-	inCommon = min(inCommon, denominator)
+	// Per pick, inCommon never exceeds the pick's usual rank, so it cannot exceed the denominator
+	// (the points in a tree, or the tree's common picks' usual ranks, whichever is less).
 	share := float64(inCommon) / float64(denominator)
 	parts := []Part{{
 		Name: "point_share", Verdict: verdictAtLeast(share, TalentPointShareMin), Value: share,
