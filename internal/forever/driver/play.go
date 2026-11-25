@@ -104,8 +104,9 @@ type PlayLimits struct {
 	Recover    time.Duration // one wipe's whole recovery, before the run ends unrecovered
 	CorpseWord time.Duration // between the release whispers and the corpse-run ones
 	Loot       time.Duration // the loot of one fight
-	// PullReach is how long the agent's own pull may spend walking to the mob, and PullBack how long it may spend
-	// bringing it back to the party: the agent pulls the skull itself when the tank's sight never passes (#88).
+	// PullReach is the agent's own approach's bound: how long it may spend walking into the position its pull opens
+	// from and waiting for the mob to turn on it, and PullBack how long it may spend bringing it back to the party:
+	// the agent pulls the skull itself when the tank's sight never passes (#88).
 	PullReach time.Duration
 	PullBack  time.Duration
 	// TankTake is how long an accepted tank order may take to show the mob on the tank before the order counts as not
@@ -343,9 +344,9 @@ type playRun struct {
 	// pullWalk says the walk in progress is a pull's own approach (to the plan's stand, or a retry's step): the walk
 	// skips a pack in the way and the patrol hold, so a pull never starts a nested one.
 	pullWalk bool
-	// pullStand is the plan's pull stand for the group in hand: the agent's own pull never walks further than
-	// PlayPullYd beyond it. agentPulled and agentPulledUnit remember the group and the stranger whose own pull the
-	// agent already made: at most one per group.
+	// pullStand is the plan's pull stand for the group in hand: the agent's own approach never ends further than
+	// PlayAgentApproachPastYd beyond it. agentPulled and agentPulledUnit remember the group and the stranger whose own
+	// pull the agent already made: at most one per group.
 	pullStand       Vec3
 	agentPulled     map[int]bool
 	agentPulledUnit map[wire.GUID]bool

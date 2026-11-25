@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"math"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
 
@@ -720,5 +722,335 @@ func TestAgentPullBossKilledAsAnAddIsNoNeighbour(t *testing.T) {
 	}
 	if g, ok := pulled.D["group"].(float64); !ok || int(g) != 1 {
 		t.Fatalf("agent_pull group = %v; want the second pack's group 1", pulled.D["group"])
+	}
+}
+
+// The failed live fallback of 2026-11-25: the tank refused the pair's skull twice from about 20 yd, the refusal's
+// steps carried the party 14.7 yd toward it, and the fallback fired with the mob still 14.1 yd away. The old bound
+// measured the walk's endpoint against the plan's stand (20 yd) and refused out of hand. livePullPlan is that group's
+// shape: the stand at (40,5) and the pair on at (42,33) and (38,29). livePullSelf is where the refusal's steps left
+// the agent: 14.72 yd from the stand and 14.1 yd from the skull, the live run's own numbers.
+func livePullPlan() *dungeon.Plan {
+	plan := playFightPlan()
+	plan.Legs[0].To = dungeon.Point{X: 40, Y: 36}
+	plan.Legs[0].PullGroups[0].Positions = []dungeon.Point{{X: 40, Y: 31}}
+	plan.Legs[0].PullGroups[0].Approach = []dungeon.Point{{X: 40, Y: 5}}
+	plan.Legs[0].Boss = nil
+	return plan
+}
+
+var (
+	livePullSelf  = Vec3{44.25, 19.08, 0}
+	livePullSkull = Vec3{42, 33, 0}
+)
+
+// livePullRig is that group with the agent put at the live fallback's own position once the refusals are spent (the
+// refusal loop has walked it 20 yd toward the skull by then; the position is what the live events recorded).
+func livePullRig(t *testing.T, mut func(*PlayFake)) *playRig {
+	t.Helper()
+	moved := false
+	rig := newPlayFightRig(t, livePullPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{38, 29, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: livePullSkull})
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		// The module sees the mobs once they come down to the party (the live tunnel floor), never at their spawn.
+		f.ModuleSight = spawnSight
+		f.OnUnits = func(f *PlayFake) {
+			if !moved && f.BlindOrders >= PlayRefuseTries+1 {
+				moved = true
+				f.SelfPos = livePullSelf
+			}
+		}
+		if mut != nil {
+			mut(f)
+		}
+	})
+	rig.ports.Sight = rig.fake
+	rig.ports.Refusals = rig.fake
+	rig.cfg.Out = t.TempDir()
+	return rig
+}
+
+// TestAgentPullOutOfReachApproachesAndBringsTheMob is the live case: the fallback starts 14.1 yd from the skull and
+// 14.7 yd from the stand, walks the navmesh into the range its own attack opens with, pulls, and hands the mob to the
+// tank. No step of it is out-of-reach: the run clears instead of stopping pull-failed.
+func TestAgentPullOutOfReachApproachesAndBringsTheMob(t *testing.T) {
+	stand := Vec3{40, 5, 0}
+	rig := livePullRig(t, nil)
+	approachYd, approachTo := -1.0, Vec3{}
+	rig.fake.OnWalk = func(f *PlayFake, to Vec3) {
+		if approachYd < 0 && dist3(f.SelfPos, livePullSelf) < 0.5 && dist3(to, livePullSkull) <= PlayAgentReachYd+1 {
+			approachYd, approachTo = dist3(to, stand), to
+		}
+	}
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (the fallback approaches and hands the mob over)", res.Stop)
+	}
+	ev := playEvents(t, rig)
+	pulled := ev["agent_pull"]
+	if pulled.Ev == "" {
+		t.Fatalf("the trace has no agent_pull")
+	}
+	if why, _ := pulled.D["why"].(string); why != "sight" {
+		t.Fatalf("agent_pull why = %q; want sight", why)
+	}
+	// The live event's own numbers: 14.1 yd to the mob, 14.7 yd to the stand.
+	if yd, _ := pulled.D["yd"].(float64); math.Abs(yd-14.1) > 0.5 {
+		t.Fatalf("agent_pull yd = %v; want the live 14.1 yd to the mob", pulled.D["yd"])
+	}
+	if yd, _ := pulled.D["stand_yd"].(float64); math.Abs(yd-14.7) > 0.5 {
+		t.Fatalf("agent_pull stand_yd = %v; want the live 14.7 yd to the stand", pulled.D["stand_yd"])
+	}
+	engaged := ev["agent_pull_engaged"]
+	if engaged.Ev == "" {
+		t.Fatalf("the trace has no agent_pull_engaged: the approach never brought the mob into the pull's range")
+	}
+	if yd, _ := engaged.D["yd"].(float64); yd > PlayAgentReachYd {
+		t.Fatalf("agent_pull_engaged yd = %v; want inside the %.0f yd the pull opens with", yd, PlayAgentReachYd)
+	}
+	if !(pulled.T < engaged.T && engaged.T <= ev["agent_pull_back"].T) {
+		t.Fatalf("the agent pull's events are out of order: pull %d ms, engaged %d ms, back %d ms",
+			pulled.T, engaged.T, ev["agent_pull_back"].T)
+	}
+	if n := playEventCount(t, rig, "agent_pull_failed"); n != 0 {
+		t.Fatalf("agent_pull_failed events = %d; want none", n)
+	}
+	// The approach is bounded by the stand and by the pull's own range: its walk ends inside the range, no further
+	// than PlayAgentApproachPastYd past the stand.
+	if approachYd < 0 {
+		t.Fatalf("the fallback never walked to the skull's own range")
+	}
+	if d := dist3(approachTo, livePullSkull); d > PlayAgentReachYd {
+		t.Fatalf("the approach's walk ended %.1f yd from the skull; want inside the pull's %.0f yd", d, PlayAgentReachYd)
+	}
+	if approachYd > PlayAgentApproachPastYd {
+		t.Fatalf("the fallback's approach ended %.1f yd from the stand; want no further than %.0f", approachYd, PlayAgentApproachPastYd)
+	}
+}
+
+// TestAgentPullMeleeReachIsThePullRange: the pull opens with the character's own auto attack, which the client makes in
+// melee reach; there is no ranged opener in the player port, so a class without one is every class here. The approach
+// stops inside PlayAgentReachYd (less the walk's margin), never at the distance the fallback started from.
+func TestAgentPullMeleeReachIsThePullRange(t *testing.T) {
+	rig := livePullRig(t, nil)
+	approach := -1.0
+	rig.fake.OnWalk = func(f *PlayFake, to Vec3) {
+		if approach < 0 && dist3(f.SelfPos, livePullSelf) < 0.5 && dist3(to, livePullSkull) <= PlayAgentReachYd+1 {
+			approach = dist3(to, livePullSkull)
+		}
+	}
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	if approach < 0 {
+		t.Fatalf("the fallback never walked to the skull's own range")
+	}
+	if approach > PlayAgentReachYd {
+		t.Fatalf("the approach stopped %.1f yd from the skull; want inside the melee reach %.0f yd", approach, PlayAgentReachYd)
+	}
+	ev := playEvents(t, rig)
+	if ev["agent_pull_engaged"].Ev == "" {
+		t.Fatalf("the trace has no agent_pull_engaged")
+	}
+	if len(rig.fake.agentAttacks) == 0 {
+		t.Fatalf("the agent never attacked the skull")
+	}
+}
+
+// TestAgentPullNoPathFailsTheApproach: the navmesh answers no route to the skull, so the approach cannot be walked.
+// The fallback records no-path (the path bound) without a step or a swing, the tank gets its one more order, and the
+// run stops pull-failed.
+func TestAgentPullNoPathFailsTheApproach(t *testing.T) {
+	rig := livePullRig(t, func(f *PlayFake) {
+		f.PathFunc = func(from, to Vec3) navmesh.Route {
+			if dist3(to, livePullSkull) <= 0.5 {
+				return navmesh.Route{}
+			}
+			return navmesh.Route{Kind: navmesh.RouteComplete, Points: []Vec3{from, to}}
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed (a mob with no path to it is no pull)", res.Stop)
+	}
+	ev := playEvents(t, rig)
+	failed := ev["agent_pull_failed"]
+	if why, _ := failed.D["reason"].(string); why != "no-path" {
+		t.Fatalf("agent_pull_failed reason = %q; want no-path", why)
+	}
+	if detail, _ := failed.D["detail"].(string); detail != "path" {
+		t.Fatalf("agent_pull_failed detail = %q; want path", detail)
+	}
+	if n := playEventCount(t, rig, "agent_pull_engaged"); n != 0 {
+		t.Fatalf("agent_pull_engaged events = %d; want none", n)
+	}
+	if len(rig.fake.agentAttacks) != 0 {
+		t.Fatalf("the agent attacked %v; want no swing without an approach", rig.fake.agentAttacks)
+	}
+	// The failed fallback does not stop the run at once: the tank has had its one more order.
+	retried := false
+	for _, e := range playEventList(t, rig) {
+		if e.Ev == "pull_retry" && e.D["after"] == "agent-pull" {
+			retried = true
+		}
+	}
+	if !retried {
+		t.Fatalf("the trace has no pull_retry after agent-pull; want the tank's one more attempt")
+	}
+}
+
+// TestAgentPullApproachTimedOut: the mob walks off while the approach walks in, so the fallback never reaches its pull
+// range inside PlayLimits.PullReach. The approach fails approach-timeout, not a stop off into the instance.
+func TestAgentPullApproachTimedOut(t *testing.T) {
+	rig := livePullRig(t, func(f *PlayFake) {})
+	rig.cfg.Limits.PullReach = time.Second
+	moved := false
+	rig.fake.OnWalk = func(f *PlayFake, to Vec3) {
+		if moved || dist3(f.SelfPos, livePullSelf) > 0.1 || dist3(to, livePullSkull) > PlayAgentReachYd {
+			return
+		}
+		// The mob keeps walking: +8 yd at the moment the approach's own walk starts, and the 1 s bound is spent by
+		// that walk.
+		moved = true
+		for i := range f.units {
+			if f.units[i].Entry == 11319 {
+				f.units[i].Pos = Vec3{livePullSkull[0], livePullSkull[1] + 8, livePullSkull[2]}
+			}
+		}
+	}
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if !moved {
+		t.Fatalf("the approach never walked to the skull; want the timeout to be its own bound")
+	}
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed", res.Stop)
+	}
+	ev := playEvents(t, rig)["agent_pull_failed"]
+	if why, _ := ev.D["reason"].(string); why != "approach-timeout" {
+		t.Fatalf("agent_pull_failed = %v; want approach-timeout", ev.D)
+	}
+	if n := playEventCount(t, rig, "agent_pull_engaged"); n != 0 {
+		t.Fatalf("agent_pull_engaged events = %d; want none (the mob stayed out of range)", n)
+	}
+}
+
+// TestPullTankRetriesOnceAfterAgentPullFailed: a failed fallback (here: no path to the skull) is followed by one more
+// tank order, not the stop. The module finds the pack on that order (the fallback's own approach moved the ground),
+// the tank takes it, and the run fights on and clears.
+func TestPullTankRetriesOnceAfterAgentPullFailed(t *testing.T) {
+	rig := livePullRig(t, func(f *PlayFake) {
+		f.PathFunc = func(from, to Vec3) navmesh.Route {
+			if dist3(to, livePullSkull) <= 0.5 {
+				return navmesh.Route{}
+			}
+			return navmesh.Route{Kind: navmesh.RouteComplete, Points: []Vec3{from, to}}
+		}
+		// The tank is blind through the refusals; the fallback's own order after them is the one it answers.
+		f.ModuleSight = func(Vec3, Vec3) bool { return f.BlindOrders > PlayRefuseTries }
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (the tank's one more attempt takes the pack)", res.Stop)
+	}
+	var failed, retried int64
+	retried = -1
+	for _, e := range playEventList(t, rig) {
+		switch {
+		case e.Ev == "agent_pull_failed":
+			failed = e.T
+		case e.Ev == "pull_retry" && e.D["after"] == "agent-pull":
+			retried = e.T
+		}
+	}
+	if failed == 0 {
+		t.Fatalf("the trace has no agent_pull_failed; want the fallback's failure first")
+	}
+	if retried < failed {
+		t.Fatalf("pull_retry after agent-pull at %d ms; want it after the failure at %d ms", retried, failed)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 1 {
+		t.Fatalf("agent_pull events = %d; want the one fallback", n)
+	}
+}
+
+// TestAgentPullHandoffNeedsTheTank: the mob turns on another bot during the agent's pull, not on the tank, and the
+// module's order cannot move it off that bot. A mob on the healer or a damage dealer is the party's fight, but it is
+// not the tank's take: the hand-off records no agent_pull_back, fails bring-back at its own bound, and the run stops
+// pull-failed rather than entering the fight with someone else tanking.
+func TestAgentPullHandoffNeedsTheTank(t *testing.T) {
+	for _, bot := range []string{"Bottwo", "Botthree"} { // the healer and a damage dealer
+		t.Run(bot, func(t *testing.T) {
+			handed := false
+			rig := agentPullRig(t, spawnSight, func(f *PlayFake) {
+				f.OnUnits = func(f *PlayFake) {
+					if handed || len(f.agentAttacks) == 0 {
+						return
+					}
+					other, ok := f.PlayerGUID(bot)
+					if !ok {
+						return
+					}
+					for i := range f.units {
+						if f.units[i].Entry == 11319 && f.units[i].Target == f.selfGUID {
+							handed = true
+							f.units[i].Target = other
+						}
+					}
+				}
+			})
+			res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+			if !handed {
+				t.Fatalf("the mob never turned on %s; want the hand-off's other-bot case", bot)
+			}
+			if res.Stop != "pull-failed" {
+				t.Fatalf("stop = %q; want pull-failed (a mob on %s is not the tank's take)", res.Stop, bot)
+			}
+			if n := playEventCount(t, rig, "agent_pull_back"); n != 0 {
+				t.Fatalf("agent_pull_back events = %d; want none: the tank never took the mob", n)
+			}
+			failed := playEvents(t, rig)["agent_pull_failed"]
+			if why, _ := failed.D["reason"].(string); why != "bring-back" {
+				t.Fatalf("agent_pull_failed reason = %q; want bring-back", why)
+			}
+		})
+	}
+}
+
+// TestPullTankRetryWaitsForTheSkull: after the fallback fails, an add the party's social aggro put on the tank is no
+// proof that the skull is off the agent. The one more order is the skull's own; refused, the run stops pull-failed
+// rather than entering the fight with the leading character still tanking the skull.
+func TestPullTankRetryWaitsForTheSkull(t *testing.T) {
+	moved := false
+	rig := agentPullRig(t, func(Vec3, Vec3) bool { return false }, func(f *PlayFake) {
+		f.OnUnits = func(f *PlayFake) {
+			if moved || len(f.agentAttacks) == 0 {
+				return
+			}
+			tank, ok := f.PlayerGUID("Botone")
+			if !ok {
+				return
+			}
+			moved = true
+			for i := range f.units {
+				if f.units[i].Entry == 11320 { // the pack's add turns on the tank
+					f.units[i].Target = tank
+				}
+			}
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if !moved {
+		t.Fatalf("the add never turned on the tank; want the retry's multi-mob case")
+	}
+	if res.Stop != "pull-failed" {
+		t.Fatalf("stop = %q; want pull-failed (an add on the tank is not the skull's take)", res.Stop)
+	}
+	if slices.Contains(res.States, StateFight) {
+		t.Fatalf("states %v; want no fight while the skull is still on the agent", res.States)
+	}
+	if n := playEventCount(t, rig, "agent_pull_back"); n != 0 {
+		t.Fatalf("agent_pull_back events = %d; want none: the skull never reached the tank", n)
 	}
 }

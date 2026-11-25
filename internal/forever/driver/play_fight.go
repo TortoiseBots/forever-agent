@@ -13,6 +13,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/command/botcmd"
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 // The player run's fight (round P2b): the pull that marks the pack's kill order and orders the tank, the fight the
@@ -85,6 +86,18 @@ const (
 	// it of the unit the character hits is drawn into the fight too. A plan boss inside it of the mob the agent would
 	// pull is the boss's own pull, never a swing's neighbour: the agent does not pull there (agent_pull_skipped).
 	PlayAssistYd = 10.0
+	// PlayAgentPullMarginYd is the margin inside the agent's own pull range that its approach stops at (2 yd): the
+	// walk's own arrival tolerance (PlayArriveYd) must still land inside the range of the attack the pull opens with.
+	PlayAgentPullMarginYd = 2.0
+	// PlayAgentApproachPathYd is the longest navmesh path the agent's own approach may walk to reach its pull range
+	// (40 yd): a mob farther on is the leg walk's business, not a pull's.
+	PlayAgentApproachPathYd = 40.0
+	// PlayAgentApproachPastYd is how far past the plan's pull stand the agent's approach may end (30 yd): the party
+	// waits at the stand, and a pull taken beyond it drags the mob and whatever lies past it onto the group.
+	PlayAgentApproachPastYd = 30.0
+	// PlayAgentApproachPackYd is the radius around another pack's live unit the approach never walks through (10 yd,
+	// the core's assistance radius): the walk would draw that pack into the fight with the pull.
+	PlayAgentApproachPackYd = 10.0
 )
 
 // pull is the pack in the way: the agent first walks to the plan's stand with the party beside it, then the skull goes
@@ -186,6 +199,22 @@ func (p *playRun) pull(ctx context.Context) string {
 		if p.agentPulled[g.ID] {
 			p.agentPullFailed(g.ID, "already-pulled")
 		} else if p.agentPull(ctx, g.ID, members, skull, why) {
+			return StateFight
+		}
+		if p.stopReason != "" {
+			return ""
+		}
+		// One more normal attempt before the stop: the fallback's own walk moved the party's ground, and the pack may
+		// now stand in the tank's sight (live 2026-11-25: the fallback itself is what brings the mob close enough).
+		members = p.liveMembers(g)
+		if len(members) == 0 {
+			p.pulled[g.ID] = true
+			p.pack = -1
+			return StateLegWalk
+		}
+		retrySkull, retryCross := p.skullAndCross(members)
+		p.rec.Event(p.now(), "pull_retry", map[string]any{"group": g.ID, "after": "agent-pull"})
+		if p.tankRetry(ctx, members, retrySkull, retryCross) {
 			return StateFight
 		}
 		if p.stopReason != "" {
@@ -975,27 +1004,37 @@ const playAgentHealthStatsEvery = 3 * time.Second
 // agentPullFailed records why the agent's own pull did not reach the mob. The reason names the cause the caller then
 // stops pull-failed with (a stranger is given up instead).
 func (p *playRun) agentPullFailed(group int, reason string) {
-	p.rec.Event(p.now(), "agent_pull_failed", map[string]any{"group": group, "reason": reason})
+	p.agentPullFailedDetail(group, reason, "")
 }
 
-// mobOnBots says whether the mob is fighting one of the bots (not the agent): the party has it, and the agent's own
-// pull is done.
-func (p *playRun) mobOnBots(u Unit) bool {
-	if u.Target.IsZero() || u.Target == p.ports.Group.Leader() {
-		return false
+// agentPullFailedDetail is agentPullFailed with the bound that refused the approach (path, path-length, past-stand,
+// pack-near), so a no-path reads its cause from the trace alone.
+func (p *playRun) agentPullFailedDetail(group int, reason, detail string) {
+	d := map[string]any{"group": group, "reason": reason}
+	if detail != "" {
+		d["detail"] = detail
 	}
-	return p.partyMember(u.Target)
+	p.rec.Event(p.now(), "agent_pull_failed", d)
+}
+
+// mobOnTank says whether the mob is fighting the configured tank: the tank's take, which the fallback's hand-off
+// waits for. A mob on the healer or a damage dealer is the party's fight, but it is not the tank's take, and the
+// bring-back keeps ordering (or fails at its own bound) instead of calling the hand-off done.
+func (p *playRun) mobOnTank(u Unit) bool {
+	tank := p.tankGUID()
+	return !tank.IsZero() && u.Target == tank
 }
 
 // agentPull is the leading player's own pull (part of #88's live 2026-11-24 pull): a fallback, taken only after the
 // tank was ordered and refused the sight of the marked skull at least once (the review of 2026-11-24). The agent
-// attacks the skull itself the way a player leading a group would, and as soon as the mob
-// is fighting it, walks back to where the party waits so the mob follows. The tank is ordered onto it again once the
-// mob stands within PlayTankEngageYd of it (a body beside the tank is inside the module's own line of sight), and the
-// normal fight goes on from there. It is bounded by the limits' PullReach (the walk to the mob) and PullBack (the
-// walk back) and by the plan's pull distance (never further than PlayPullYd beyond the group's stand), and it never
-// stands and tanks under PlayAgentPullHP of the agent's health or with that health unknown. At most one per group.
-// false means the pull failed: the caller stops pull-failed (a pack) or gives the stranger up.
+// walks into the range its own attack opens from, in line of sight of the skull (agentReach's approach, bounded by the
+// approach's own limits), attacks it the way a player leading a group would, and as soon as the mob is fighting it,
+// walks back to where the party waits so the mob follows. The tank is ordered onto it again once the mob stands within
+// PlayTankEngageYd of it (a body beside the tank is inside the module's own line of sight), and the normal fight goes
+// on from there. It is bounded by the limits' PullReach (the approach and the wait for the mob to turn) and PullBack
+// (the walk back), and it never stands and tanks under PlayAgentPullHP of the agent's health or with that health
+// unknown. At most one per group. false means the pull failed: the caller takes one more tank attempt and then stops
+// pull-failed (a pack) or gives the stranger up.
 func (p *playRun) agentPull(ctx context.Context, group int, members []Unit, skull Unit, why string) bool {
 	if p.stopReason != "" {
 		return false
@@ -1072,10 +1111,73 @@ func (p *playRun) agentPull(ctx context.Context, group int, members []Unit, skul
 	return true
 }
 
-// agentReach walks the agent into its own melee reach of the skull, attacks it and waits (bounded by PlayPullReach)
-// for it to turn on the agent. The walk is the navmesh's, never further than PlayPullYd beyond the plan's stand, and
-// the agent stops advancing and backs off to the party while its health is under PlayAgentPullHP or unknown. A mob
-// that turns on the party meanwhile is answered by that (true). A stop of the run's own is the run's.
+// tankRetry is the one normal attempt a pack gets after its agent pull failed: the same marks and the tank's order as
+// the pull makes them, and a wait (the pull's own window) for the TANK's take - the mob on a bot, never merely on the
+// agent, whose own fight is exactly what failed. The module's sight refusal ends the attempt at once: the order is
+// spent, and waiting out the window would not change its verdict. A mob the pull has already killed (or one the party
+// holds) answers it. It is the caller's stop when false.
+func (p *playRun) tankRetry(ctx context.Context, members []Unit, skull, cross Unit) bool {
+	if skull.GUID.IsZero() {
+		return false
+	}
+	if !p.mark(ctx, skull.GUID, party.MarkSkull) || !p.mark(ctx, cross.GUID, party.MarkCross) {
+		return false
+	}
+	p.skull = skull.GUID
+	p.pullSet = p.pullSet[:0]
+	for _, u := range members {
+		p.pullSet = append(p.pullSet, u.GUID)
+	}
+	p.refused, p.orderCode = false, ""
+	before := p.sightRefusals()
+	if !p.order(ctx, p.cfg.Bots[0], skull.GUID) {
+		return false
+	}
+	deadline := p.now().Add(p.lim.Pull)
+	seenDead := map[wire.GUID]bool{}
+	for {
+		units := p.ports.World.Units()
+		for _, g := range p.pullSet {
+			if u, ok := unitByGUID(units, g); ok && u.Dead {
+				seenDead[g] = true
+			}
+		}
+		if p.pullCleared(units, seenDead) {
+			return true
+		}
+		// The retry's take is the skull's own: an add the party's social aggro put on the tank is no proof that the
+		// mob the agent pulled is off the agent and on the tank.
+		for _, u := range units {
+			if u.GUID != skull.GUID || u.Dead || u.Friendly {
+				continue
+			}
+			if p.mobOnTank(u) {
+				return true
+			}
+		}
+		if p.sightRefusals() > before {
+			p.refused = true
+			return false
+		}
+		if p.timeUp() {
+			p.stop("time")
+			return false
+		}
+		if !p.now().Before(deadline) {
+			return false
+		}
+		if !p.sleep(ctx, p.lim.Poll) {
+			return false
+		}
+	}
+}
+
+// agentReach walks the agent into the position its own pull opens from - the range of the attack it attacks with, in
+// line of sight of the skull - attacks it and waits (bounded by PlayLimits.PullReach) for it to turn on the agent. The
+// walk is the navmesh's, along the approach's own bounds (agentApproachPoint); a target the bounds cannot reach fails
+// the pull with the reason (no-path, no-sight-after-approach, approach-timeout). The agent stops advancing and backs
+// off to the party while its health is under PlayAgentPullHP or unknown. A mob that turns on the party meanwhile is
+// answered by that (true). A stop of the run's own is the run's.
 func (p *playRun) agentReach(ctx context.Context, group int, skull Unit, wait Vec3) (Unit, bool) {
 	deadline := p.now().Add(p.lim.PullReach)
 	attacking := false
@@ -1097,19 +1199,19 @@ func (p *playRun) agentReach(ctx context.Context, group int, skull Unit, wait Ve
 		if p.partyMember(u.Target) {
 			return u, true
 		}
-		if !p.now().Before(deadline) {
-			reason := "reach-timeout"
-			if pct, known := p.agentHealth(); !known {
-				reason = "health-unknown"
-			} else if pct < PlayAgentPullHP {
-				reason = "low-health"
-			}
-			p.agentPullFailed(group, reason)
-			return Unit{}, false
-		}
 		// Low or unknown health: never walk into the mob, keep to the party instead (the pull is bounded and fails
 		// there). An unknown row is asked for afresh while the bound lasts, so a stale roster can answer it.
 		if !p.agentSafeToPull() {
+			if !p.now().Before(deadline) {
+				reason := "approach-timeout"
+				if pct, known := p.agentHealth(); !known {
+					reason = "health-unknown"
+				} else if pct < PlayAgentPullHP {
+					reason = "low-health"
+				}
+				p.agentPullFailed(group, reason)
+				return Unit{}, false
+			}
 			if _, known := p.agentHealth(); !known {
 				if now := p.now(); !now.Before(statsAt) {
 					if lead := p.ports.Group.Leader(); !lead.IsZero() {
@@ -1123,9 +1225,7 @@ func (p *playRun) agentReach(ctx context.Context, group int, skull Unit, wait Ve
 			}
 			if dist3(p.self, wait) > PlayPullGatherYd {
 				attacking = false
-				p.pullWalk = true
-				p.walkTo(ctx, wait, false, false)
-				p.pullWalk = false
+				p.agentWalkTo(ctx, wait, deadline)
 				if p.stopReason != "" {
 					return Unit{}, false
 				}
@@ -1136,16 +1236,28 @@ func (p *playRun) agentReach(ctx context.Context, group int, skull Unit, wait Ve
 			}
 			continue
 		}
-		if dist3(p.self, u.Pos) > PlayAgentReachYd {
-			attacking = false
-			to, ok := p.agentPullPoint(u.Pos)
-			if !ok {
-				p.agentPullFailed(group, "out-of-reach") // beyond the group's pull distance from the stand
+		if !p.inPullPosition(u) {
+			if !p.now().Before(deadline) {
+				p.agentPullFailed(group, "approach-timeout")
 				return Unit{}, false
 			}
-			p.pullWalk = true
-			p.walkTo(ctx, to, false, false)
-			p.pullWalk = false
+			attacking = false
+			to, detail, ok := p.agentApproachPoint(group, u.Pos)
+			if !ok {
+				p.agentPullFailedDetail(group, "no-path", detail)
+				return Unit{}, false
+			}
+			if dist3(p.self, to) <= PlayArriveYd {
+				// The bounds leave no nearer point: in range without a line is an approach that reached its own end;
+				// out of range means the path's own end is not inside the range.
+				if dist3(p.self, u.Pos) <= PlayAgentReachYd {
+					p.agentPullFailed(group, "no-sight-after-approach")
+				} else {
+					p.agentPullFailedDetail(group, "no-path", detail)
+				}
+				return Unit{}, false
+			}
+			p.agentWalkTo(ctx, to, deadline)
 			if p.stopReason != "" {
 				return Unit{}, false
 			}
@@ -1181,7 +1293,7 @@ func (p *playRun) agentReach(ctx context.Context, group int, skull Unit, wait Ve
 
 // agentBringBack walks the agent back to where the party waits, the mob following it, and orders the tank onto the mob
 // as soon as it stands within PlayTankEngageYd of the tank (its re-order re-sends the mark). It is bounded by
-// PlayPullBack and by the run's own clock. A mob the bots took (mobOnBots) or that died on the way is the party's
+// PlayPullBack and by the run's own clock. A mob the tank took (mobOnTank) or that died on the way is the party's
 // already. A refused tank order is not a stop in itself: the order goes again on the next poll while the bound lasts,
 // and an accepted one still waits (PlayLimits.TankTake) for the tank to actually take the mob, because a sight refusal
 // arrives as a whisper, not as the order's code. Under PlayAgentPullHP of health the agent keeps retreating to the
@@ -1206,8 +1318,8 @@ func (p *playRun) agentBringBack(ctx context.Context, wait Vec3, guid wire.GUID)
 			p.rec.Event(p.now(), "agent_pull_back", map[string]any{"target": guid.String(), "dead": true})
 			return true
 		}
-		// A bot already has it: the party has the mob, and the walk back is not needed.
-		if p.mobOnBots(u) {
+		// The tank already has it: the walk back is not needed.
+		if p.mobOnTank(u) {
 			p.rec.Event(p.now(), "agent_pull_back", map[string]any{
 				"target": guid.String(), "tank_yd": p.tankYdTo(u.Pos), "yd": dist3(p.self, wait),
 			})
@@ -1221,9 +1333,7 @@ func (p *playRun) agentBringBack(ctx context.Context, wait Vec3, guid wire.GUID)
 		// party, so a low agent (whose chase pushes it out and which may not trade blows) keeps retreating instead of
 		// standing where it ended up.
 		if dist3(p.self, wait) > PlayPullGatherYd {
-			p.pullWalk = true
-			p.walkTo(ctx, wait, false, false)
-			p.pullWalk = false
+			p.agentWalkTo(ctx, wait, deadline)
 			if p.stopReason != "" {
 				return false
 			}
@@ -1293,7 +1403,7 @@ func (p *playRun) orderTank(ctx context.Context, guid wire.GUID, until time.Time
 		if !ok {
 			return false
 		}
-		if u.Dead || p.mobOnBots(u) {
+		if u.Dead || p.mobOnTank(u) {
 			return true
 		}
 		if p.sightRefusals() > before {
@@ -1346,24 +1456,170 @@ func (p *playRun) bossNear(at Vec3, yd float64) (uint32, float64, bool) {
 	return 0, 0, false
 }
 
-// agentPullPoint is where the agent's own pull walks to: inside the character's own reach of the mob along the navmesh
-// path (the straight line when the mesh gives no path), PlayArriveYd inside it so the walk's own arrival tolerance
-// still lands in reach, and never further than the group's pull distance PlayPullYd beyond the plan's stand. ok is
-// false when the mob cannot be reached inside that bound: the pull fails rather than walk the agent off into the
-// instance.
-func (p *playRun) agentPullPoint(skull Vec3) (Vec3, bool) {
+// agentWalkTo walks one step of the pull's own movement (the approach, the retreat to the party, the walk back) inside
+// the pull's clock: the navmesh path split into the run's walk segments, with the pull's deadline on the walk's own
+// context (a blocked mover answers it), and without the leg walk's straggler waits - the pull is short and the party
+// waits at the stand. A walk the deadline ended is the caller's own bound (its deadline check names the timeout), a
+// map change is the next look's, and a stop of the run's own is the run's.
+func (p *playRun) agentWalkTo(ctx context.Context, to Vec3, deadline time.Time) {
 	p.refreshSelf()
-	stop := PlayAgentReachYd - PlayArriveYd
-	to := p.self
-	if route, err := p.ports.Walker.Path(p.self, skull); err == nil && len(route.Points) >= 2 {
-		to = pathEndPoint(route.Points, stop)
-	} else if d := dist3(p.self, skull); d > stop {
-		to = lerpVec(p.self, skull, (d-stop)/d)
+	if dist3(p.self, to) <= PlayArriveYd {
+		return
 	}
-	if dist3(p.pullStand, to) > PlayPullYd {
-		return Vec3{}, false
+	route, err := p.ports.Walker.Path(p.self, to)
+	if err != nil {
+		if errors.Is(err, ErrLinkLost) {
+			p.linkLost()
+		} else {
+			p.stop("walk")
+		}
+		return
 	}
-	return to, true
+	if route.Kind != navmesh.RouteComplete {
+		p.stop("walk:" + string(route.Kind))
+		return
+	}
+	// The pull's clock is the run's own (virtual under the fake), and a context deadline is wall time: the remaining
+	// duration, not the deadline instant, is what a blocked walker is given.
+	left := deadline.Sub(p.now())
+	if left <= 0 {
+		return
+	}
+	wctx, cancel := context.WithTimeout(ctx, left)
+	defer cancel()
+	for _, seg := range SplitRoute(route.Points, PlaySegmentYd) {
+		if !p.now().Before(deadline) {
+			return
+		}
+		if err := p.ports.Walker.Walk(wctx, seg); err != nil {
+			switch {
+			case errors.Is(err, ErrMapChange):
+			case errors.Is(err, ErrLinkLost):
+				p.linkLost()
+			case errors.Is(err, context.DeadlineExceeded):
+			default:
+				p.stop("walk")
+			}
+			return
+		}
+		p.refreshSelf()
+		if _, bad := p.route.InAvoid(p.self); bad {
+			p.stop("avoid")
+			return
+		}
+	}
+}
+
+// inPullPosition says whether the agent's own pull can land from where it stands: inside the range of the attack the
+// pull opens with, and in line of sight of the mob. Sight unknown (no port, no answer) is not a refusal: the module
+// judges its own line, and the swing's contact is the fallback's proof.
+func (p *playRun) inPullPosition(u Unit) bool {
+	if dist3(p.self, u.Pos) > PlayAgentReachYd {
+		return false
+	}
+	in, known := p.sightAt(p.self, u.Pos)
+	return !known || in
+}
+
+// agentApproachPoint is where the agent's own approach walks to: a point on the navmesh path to the mob, PlayArriveYd
+// inside the range of the attack the pull opens with so the walk's own arrival tolerance still lands in range, and
+// bounded four ways: PlayAgentApproachPathYd (the path it may walk), PlayAgentApproachPastYd (never this far past the
+// plan's pull stand), PlayAgentApproachPackYd (another pack's radius it must keep clear of) and the pull's own time
+// limit, which the caller reads. ok is false when no point inside those bounds exists; detail names the bound that
+// refused it (path, path-length, past-stand, pack-near).
+func (p *playRun) agentApproachPoint(group int, at Vec3) (Vec3, string, bool) {
+	p.refreshSelf()
+	stop := PlayAgentReachYd - PlayAgentPullMarginYd
+	route, err := p.ports.Walker.Path(p.self, at)
+	if err != nil || len(route.Points) < 2 {
+		return Vec3{}, "path", false
+	}
+	if walked := pathLength(route.Points) - stop; walked > PlayAgentApproachPathYd {
+		return Vec3{}, "path-length", false
+	}
+	to := pathEndPoint(route.Points, stop)
+	if dist3(p.pullStand, to) > PlayAgentApproachPastYd {
+		return Vec3{}, "past-stand", false
+	}
+	if _, _, near := p.packOnPath(group, route.Points, stop); near {
+		return Vec3{}, "pack-near", false
+	}
+	return to, "", true
+}
+
+// packOnPath reports the first live unit of another pack within PlayAgentApproachPackYd of the approach's own path (the
+// polyline walked from its start to stop yd short of its end): the walk would draw that pack into the fight with the
+// pull. A pack the run already fought is no pack in the way. The units are the view's, claimed by the route's other
+// groups; a pack with no unit in view has nothing to tell and blocks nothing.
+func (p *playRun) packOnPath(group int, points []Vec3, stop float64) (uint32, float64, bool) {
+	units := p.ports.World.Units()
+	claim := p.claim(units)
+	groups := p.route.AllGroups()
+	for _, g := range groups {
+		if g.ID == group || p.pulled[g.ID] {
+			continue
+		}
+		for _, ui := range claim.Members(g.ID) {
+			u := units[ui]
+			if u.Dead || u.Friendly {
+				continue
+			}
+			if yd := pathYd(points, stop, u.Pos); yd <= PlayAgentApproachPackYd {
+				return u.Entry, yd, true
+			}
+		}
+	}
+	return 0, 0, false
+}
+
+// pathYd is the distance from at to the approach's own path: the polyline walked from its start to stop yd short of
+// its end.
+func pathYd(points []Vec3, stop float64, at Vec3) float64 {
+	left := pathLength(points) - stop
+	if left <= 0 {
+		return math.Inf(1)
+	}
+	best := math.Inf(1)
+	for i := 1; i < len(points) && left > 0; i++ {
+		a, b := points[i-1], points[i]
+		seg := dist3(a, b)
+		if seg <= 0 {
+			continue
+		}
+		end := b
+		if seg > left {
+			end = lerpVec(a, b, left/seg)
+		}
+		best = math.Min(best, segmentYd(at, a, end))
+		left -= seg
+	}
+	return best
+}
+
+// segmentYd is the distance from p to the segment a-b.
+func segmentYd(p, a, b Vec3) float64 {
+	ab := [3]float64{float64(b[0] - a[0]), float64(b[1] - a[1]), float64(b[2] - a[2])}
+	ap := [3]float64{float64(p[0] - a[0]), float64(p[1] - a[1]), float64(p[2] - a[2])}
+	den := ab[0]*ab[0] + ab[1]*ab[1] + ab[2]*ab[2]
+	if den == 0 {
+		return dist3(p, a)
+	}
+	t := (ap[0]*ab[0] + ap[1]*ab[1] + ap[2]*ab[2]) / den
+	t = math.Max(0, math.Min(1, t))
+	return dist3(p, Vec3{
+		a[0] + float32(ab[0]*t),
+		a[1] + float32(ab[1]*t),
+		a[2] + float32(ab[2]*t),
+	})
+}
+
+// pathLength is the polyline's length.
+func pathLength(points []Vec3) float64 {
+	var total float64
+	for i := 1; i < len(points); i++ {
+		total += dist3(points[i-1], points[i])
+	}
+	return total
 }
 
 // pathEndPoint is the point of the polyline that stands yd short of its end (the start when the path is shorter).

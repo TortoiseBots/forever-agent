@@ -73,27 +73,38 @@ would add no sight — the leading player pulls the mob itself:
 1. `agent_pull` records the fallback: `group`, `why` (`sight` for the spent retries, `reach` for the in-reach
    shortcut), `refusals` (the tank's whispers so far), the distance to the mob (`yd`) and to the party's stand
    (`stand_yd`), and the stand itself (`x`, `y`, `z`).
-2. The agent selects the skull, walks into its own 5 yd reach — never further than 20 yd from the pull stand — and
-   attacks it. It never walks in under 40 per cent of its own health or with that health unknown (the row is re-read
-   every 3 s while it is missing); under the floor it keeps to the party and never trades blows.
+2. The agent walks along the navmesh into the position its own pull opens from and attacks it: within the range of
+   the attack it attacks with (the character's own auto attack, whose client chases into melee reach: `PlayAgentReachYd`
+   less `PlayAgentPullMarginYd`, so the walk's arrival tolerance still lands in range) and in line of sight of the mob.
+   The approach is bounded four ways: by `PlayLimits.PullReach` (the time), `PlayAgentApproachPathYd` (the path it may
+   walk), `PlayAgentApproachPastYd` (how far past the party's stand it may end) and `PlayAgentApproachPackYd` (it never
+   walks through another pack's radius). It never walks in under 40 per cent of its own health or with that health
+   unknown (the row is re-read every 3 s while it is missing); under the floor it keeps to the party and never trades
+   blows. An approach that cannot be made fails the fallback with `no-path` (the walker's path bound; its `detail` says
+   which bound: `path`, `path-length`, `past-stand` or `pack-near`), `no-sight-after-approach` (in range, the line never
+   cleared) or `approach-timeout` (the time ran out before the mob was in range and in sight).
 3. `agent_pull_engaged` records the mob that turned on the agent (`target`, `entry`, `yd`).
 4. The agent walks back to where the party waits, the mob following. The tank is ordered onto it once the mob stands
    within 10 yd of the tank (a body beside the tank is inside the module's own line of sight), and an accepted order is
    given 3 s to show the mob on the tank or dead: the module's sight refusal arrives as a whisper, not as the order's
    code, so the reply alone is no proof of the take. A refusal, or the window's end, re-orders while the walk back
-   lasts.
+   lasts. A mob on the healer or a damage dealer is the party's fight, but it is not the tank's take: the hand-off is
+   not done until the tank has it.
 5. `agent_pull_back` records the end: `target` and `dead: true` when the mob died on the way, or `target`, `tank_yd`
-   and `yd` (the agent's distance to the stand) when the party took it. The normal fight follows.
+   and `yd` (the agent's distance to the stand) when the tank took it. The normal fight follows.
 
 The fallback is bounded and it never becomes a second tank:
 
 | Limit | Default | Meaning |
 |---|---|---|
-| `PlayLimits.PullReach` | 20 s | The walk to the mob and the wait for it to turn on the agent. |
+| `PlayLimits.PullReach` | 20 s | The approach's time bound: the walk into the pull's range and the wait for the mob to turn on the agent. |
 | `PlayLimits.PullBack` | 20 s | The walk back to the party and the tank's take. |
 | `PlayLimits.TankTake` | 3 s | How long an accepted tank order may take to show the mob on the tank or dead. |
-| `PlayAgentReachYd` | 5 yd | The agent's own melee reach; a skull inside it skips the remaining step-closer retries. |
-| `PlayPullYd` | 20 yd | The pull stand's own limit: the agent never walks further from it. |
+| `PlayAgentReachYd` | 5 yd | The agent's own melee reach: the range its own pull opens from; a skull already inside it skips the remaining step-closer retries. |
+| `PlayAgentPullMarginYd` | 2 yd | The approach stops this far inside the pull's range, so the walk's arrival tolerance lands in range. |
+| `PlayAgentApproachPathYd` | 40 yd | The longest navmesh path the approach may walk to the mob. |
+| `PlayAgentApproachPastYd` | 30 yd | How far past the party's pull stand the approach may end. |
+| `PlayAgentApproachPackYd` | 10 yd | The radius around another pack's live unit the approach never walks through (the core's assistance radius). |
 | `PlayTankEngageYd` | 10 yd | How near the tank the brought-back mob must stand before the tank is ordered again. |
 | `PlayAgentPullHP` | 40 % | The character's health floor for pulling; unknown health fails closed. |
 | `PlayAssistYd` | 10 yd | The core's assistance radius: a plan boss inside it of the mob makes the pull the boss's. |
@@ -113,15 +124,19 @@ A failed fallback records `agent_pull_failed` with its reason:
 |---|---|
 | `gone` | The mob left the view or turned friendly before or during the approach. |
 | `already-pulled` | This group (or this unknown unit) already had its one agent pull. |
-| `reach-timeout` | The 20 s reach bound ended with the mob still not on the agent. |
+| `no-path` | No walk to the mob inside the approach's bounds; `detail` says which: `path` (no navmesh route), `path-length` (past 40 yd), `past-stand` (past 30 yd from the stand) or `pack-near` (another pack's radius is in the way). |
+| `no-sight-after-approach` | The approach reached the pull's range but the line to the mob never cleared. |
+| `approach-timeout` | `PlayLimits.PullReach` ran out before the agent stood in range and in sight. |
 | `health-unknown` | The character's health row could not be read: it never walks in. |
 | `low-health` | The character stood under its 40 per cent floor. |
-| `out-of-reach` | The mob stands beyond the pull distance from the stand. |
 | `bring-back` | The mob never came to the tank inside the 20 s walk back. |
 
-A pack's failed agent pull stops the run `pull-failed`; a hostile the plan does not know (a patrol candidate) is given
-up with `patrol_unpullable` (reason `agent-pull`) and the leg walks on. A pack the bots finish during the refusals is
-no failed pull at all: nothing is left to pull, the pack counts as fought, and the leg walks on.
+A pack's failed agent pull does not stop the run at once: the tank gets one more normal order (a `pull_retry` event
+with `after: agent-pull`) for the pull's own window, because the fallback's approach may have moved the pack into the
+tank's sight; only when that order fails too does the run stop `pull-failed`. A hostile the plan does not know (a
+patrol candidate) is given up with `patrol_unpullable` (reason `agent-pull`) and the leg walks on. A pack the bots
+finish during the refusals is no failed pull at all: nothing is left to pull, the pack counts as fought, and the leg
+walks on.
 
 # Flags
 
