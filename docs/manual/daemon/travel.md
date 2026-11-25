@@ -16,6 +16,10 @@ sources:
     resource: internal/forever/world/mapchange.go
   - id: map-check
     resource: cmd/forever-agent/forever_map.go
+  - id: serve-trigger
+    resource: internal/forever/world/trigger.go
+  - id: serve-fall
+    resource: internal/forever/world/fall.go
 ---
 
 # What this is

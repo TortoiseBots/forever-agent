@@ -14,6 +14,8 @@ sources:
     resource: docs/PLANS.md
   - id: dungeongen
     resource: tools/dungeongen/main.go
+  - id: play-core
+    resource: internal/forever/driver/play.go
 ---
 
 # What a plan is

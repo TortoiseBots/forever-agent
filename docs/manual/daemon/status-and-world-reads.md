@@ -18,6 +18,10 @@ sources:
     resource: internal/forever/world/serve_item_info.go
   - id: serve-map
     resource: internal/forever/world/serve_map.go
+  - id: objects-cc
+    resource: internal/forever/objects/cc.go
+  - id: objects-mover
+    resource: internal/forever/objects/mover.go
 ---
 
 # What this is

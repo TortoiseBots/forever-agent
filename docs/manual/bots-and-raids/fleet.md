@@ -12,6 +12,8 @@ sources:
     resource: cmd/forever-agent/fleet_forever.go
   - id: main
     resource: cmd/forever-agent/main.go
+  - id: bnet
+    resource: internal/forever/bnet/bnet.go
 ---
 
 `fleet --forever` starts one `forever serve` daemon per member of a fleet file,

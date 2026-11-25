@@ -18,6 +18,8 @@ sources:
     resource: internal/spellstate/spellstate.go
   - id: trade-cast
     resource: internal/forever/world/trade_cast.go
+  - id: combat-reasons
+    resource: internal/forever/combat/reasons.go
 ---
 
 This page covers what a `forever serve` session (or a script run with `forever act`) can do with spells and
