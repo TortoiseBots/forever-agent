@@ -442,6 +442,18 @@ func (g *playGroup) Mark(target wire.GUID, mark party.Mark) error {
 // Disband uninvites every other member (no disband packet exists) and waits for the group's end.
 func (g *playGroup) Disband() error { return dungeonPortErr(g.s.groupDisband(g.ctx)) }
 
+// ConvertRaid and RaidMove are the raid half of the group port (SPEC #108 R4b): the same two calls the commander's
+// raid watch makes, sent by the session's group layer (CMSG_CONVERT_RAID, CMSG_CHANGE_SUB_GROUP), gated there by the
+// raid's rank rule and read back by the party roster. They are not `.tb` lines, so they never pass the command
+// transport.
+func (g *playGroup) ConvertRaid(ctx context.Context) error {
+	return dungeonPortErr(g.s.convertRaid(g.ctx))
+}
+
+func (g *playGroup) RaidMove(ctx context.Context, name string, subgroup int) error {
+	return dungeonPortErr(g.s.raidMove(g.ctx, wire.EmptyGUID, name, subgroup, ""))
+}
+
 // --- Player: the agent's own character ---
 
 // playPlayer is the Player port. It keeps the little state a tick needs: the target it is swinging at, whether the
@@ -852,7 +864,8 @@ func playObjectState(st int8) string {
 
 // compile-time interface checks: the player run's ports must stay satisfiable by these types.
 var (
-	_ driver.Owner      = (*playOwner)(nil)
-	_ driver.GroupPort  = (*playGroup)(nil)
-	_ driver.PlayerPort = (*playPlayer)(nil)
+	_ driver.Owner         = (*playOwner)(nil)
+	_ driver.GroupPort     = (*playGroup)(nil)
+	_ driver.RaidGroupPort = (*playGroup)(nil)
+	_ driver.PlayerPort    = (*playPlayer)(nil)
 )

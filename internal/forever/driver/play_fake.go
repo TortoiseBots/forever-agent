@@ -102,6 +102,14 @@ type PlayFake struct {
 	// Marks are the icons set and Disbanded whether the group was disbanded.
 	Marks     []party.MarkEntry
 	Disbanded bool
+	// RaidGroup is whether the group was converted to a raid, ConvertCalls how many converts were sent and RaidMoves
+	// every move the layout asked for (SPEC #108 R4b). ConvertErr and MoveErr answer the two calls instead of working:
+	// the run's raid-convert and raid-move stops.
+	RaidGroup    bool
+	ConvertCalls int
+	ConvertErr   error
+	MoveErr      error
+	RaidMoves    []RaidSlot
 	// frozen is the roster served while it is set: what the party said when FreezeRoster took it. A stats request
 	// clears it, the way the server's SMSG_PARTY_MEMBER_FULL_STATE answers would.
 	frozen []PartyMember
@@ -574,9 +582,13 @@ type PlayModule struct {
 	f *PlayFake
 }
 
-// Add is `.bot add`.
+// Add is `.bot add`. The core refuses a sixth member of a party: until the group is converted to a raid, an add that
+// would make it larger than party.MaxPartyMembers is refused with `party-full`.
 func (m *PlayModule) Add(ctx context.Context, name string) (botcmd.Reply, error) {
 	m.f.send(botcmd.VerbAdd, name)
+	if !m.f.RaidGroup && m.f.partyMembers() >= party.MaxPartyMembers {
+		return m.GoldenOwner.refuse(botcmd.VerbAdd, name, "party-full", "your party is full: convert it to a raid first")
+	}
 	rep, err := m.GoldenOwner.Add(ctx, name)
 	if err == nil {
 		// The bot logs in at its owner's side.
@@ -796,6 +808,17 @@ func (f *PlayFake) FreezeRoster() {
 	f.frozen = append([]PartyMember(nil), f.rosterLive()...)
 }
 
+// partyMembers is the group's size as the core would count it: this character and every bot in the party.
+func (f *PlayFake) partyMembers() int {
+	n := 1
+	for _, b := range f.GoldenOwner.Bots {
+		if b.InParty {
+			n++
+		}
+	}
+	return n
+}
+
 // MemberFacts is the dump's raw rows: the fake has one source (its own party table), so each row carries the roster
 // reading only.
 func (f *PlayFake) MemberFacts() []MemberFacts {
@@ -835,6 +858,28 @@ func (f *PlayFake) LootMethod(method party.LootMethod, threshold int) error {
 func (f *PlayFake) Mark(target wire.GUID, mark party.Mark) error {
 	f.Marks = append(f.Marks, party.MarkEntry{Mark: mark, Target: target})
 	f.act("mark")
+	return nil
+}
+
+// ConvertRaid is the group layer's convert_raid (SPEC #108 R4b): the party becomes a raid, and `.bot add` then takes
+// more than five members (before it, a sixth add is refused the way the core refuses it).
+func (f *PlayFake) ConvertRaid(ctx context.Context) error {
+	f.ConvertCalls++
+	f.act("convert-raid")
+	if f.ConvertErr != nil {
+		return f.ConvertErr
+	}
+	f.RaidGroup = true
+	return nil
+}
+
+// RaidMove is the group layer's raid_move: the member goes to its subgroup, or MoveErr answers.
+func (f *PlayFake) RaidMove(ctx context.Context, name string, subgroup int) error {
+	f.act("raid-move " + name + " " + strconv.Itoa(subgroup))
+	if f.MoveErr != nil {
+		return f.MoveErr
+	}
+	f.RaidMoves = append(f.RaidMoves, RaidSlot{Name: name, Subgroup: subgroup})
 	return nil
 }
 

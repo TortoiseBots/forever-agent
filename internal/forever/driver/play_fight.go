@@ -1842,6 +1842,17 @@ func pathEndPoint(points []Vec3, yd float64) Vec3 {
 	return points[0]
 }
 
+// orderDamage orders every damage dealer onto a target: a party's two, or a raid's damage dealers and off-tanks. It
+// reports whether every order was sent; the first failure ends the fight.
+func (p *playRun) orderDamage(ctx context.Context, target wire.GUID) bool {
+	for _, name := range p.damageNames() {
+		if !p.order(ctx, name, target) {
+			return false
+		}
+	}
+	return true
+}
+
 // fight runs one fight: the damage dealers are ordered onto the skull once the pack is on the tank, the agent swings
 // himself 1.5 s later, a dead skull moves to the cross and the cross to the next living unit (with both damage dealers
 // re-ordered), the tank is ordered back onto a skull that took the pack off it, and the fight ends when no living unit
@@ -1864,7 +1875,7 @@ func (p *playRun) fight(ctx context.Context) string {
 			return ""
 		}
 	}
-	if !p.order(ctx, p.cfg.Bots[2], p.skull) || !p.order(ctx, p.cfg.Bots[3], p.skull) {
+	if !p.orderDamage(ctx, p.skull) {
 		return ""
 	}
 	for {
@@ -1933,7 +1944,7 @@ func (p *playRun) fight(ctx context.Context) string {
 				}
 				// The tank goes with them: a pack member that never came at the party (behind a pillar) is the one
 				// still up, and no TankBreak order will come for a skull nothing targets.
-				if !p.order(ctx, p.cfg.Bots[0], p.skull) || !p.order(ctx, p.cfg.Bots[2], p.skull) || !p.order(ctx, p.cfg.Bots[3], p.skull) {
+				if !p.order(ctx, p.cfg.Bots[0], p.skull) || !p.orderDamage(ctx, p.skull) {
 					return ""
 				}
 				if swinging {
@@ -2004,7 +2015,7 @@ func (p *playRun) endFight(ctx context.Context, adds int, units []Unit) string {
 		p.pack = -1
 		return StateWipe
 	}
-	for _, name := range p.cfg.Bots {
+	for _, name := range p.members() {
 		if _, err := p.follow(ctx, name); p.fatal(err) {
 			return ""
 		}
@@ -2452,6 +2463,13 @@ func (p *playRun) withGateBars(d map[string]any) map[string]any {
 // boss is the leg's boss: the run walks to it (the plan's approach points first), waits for a patrolling boss that the
 // plan says waits, and pulls it. A boss the view never shows is not dead, so the run stops (bosses-alive).
 func (p *playRun) boss(ctx context.Context) string {
+	// A player-led raid stops at the boss (SPEC #108 R4b): boss behaviour belongs to the server module's raid watch,
+	// never to the player's group. Onyxia's tunnel leg has no boss, so a run whose last leg is the tunnel ends at DONE.
+	if p.cfg.Raid != nil {
+		p.rec.Event(p.now(), "raid_boss_reached", map[string]any{"leg": p.legName()})
+		p.stop("raid-boss-reached")
+		return ""
+	}
 	leg := p.leg()
 	if leg == nil || leg.Boss == nil {
 		return StateLegWalk

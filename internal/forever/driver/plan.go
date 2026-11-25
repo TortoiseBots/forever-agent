@@ -186,6 +186,10 @@ func LoadRaidWatchRoute(path string) (*Route, error) { return loadRoute(path, mo
 // cannot run (NewPlayRoute).
 func LoadPlayRoute(path string) (*Route, error) { return loadRoute(path, modePlay) }
 
+// LoadPlayRaidRoute reads a raid plan file for a player-led raid run: the same player run, with the plan's raid block
+// as the group it leads (NewPlayRaidRoute).
+func LoadPlayRaidRoute(path string) (*Route, error) { return loadRoute(path, modePlayRaid) }
+
 func loadRoute(path string, mode routeMode) (*Route, error) {
 	p, err := dungeon.Load(path)
 	if err != nil {
@@ -228,9 +232,15 @@ func NewPlayRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, modePlay
 // raid and its raid block is refused: raid-watch runs a raid, never a five-bot party.
 func NewRaidWatchRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, modeRaidWatch) }
 
+// NewPlayRaidRoute is NewPlayRoute for a raid plan: the player leads the raid group himself, so the plan's raid block
+// becomes the group's size and role split (Route.Raid), and every rule of the player run holds unchanged — the same
+// accepted steps, the same refusals, the same time budget. A plan without kind raid and its raid block is refused:
+// a player-led raid runs a raid, never a five-bot party (NewPlayRoute keeps refusing a raid).
+func NewPlayRaidRoute(p *dungeon.Plan) (*Route, error) { return newRoute(p, modePlayRaid) }
+
 // routeMode says who runs the fight: this client (modeRun), the server module's own bot (modeWatch), the player
-// who leads the party himself (modePlay) or the server module's own bot leading a raid (modeRaidWatch). It decides
-// which plan fields are inputs and which are refused.
+// who leads the party himself (modePlay), the server module's own bot leading a raid (modeRaidWatch) or the player
+// who leads the raid group himself (modePlayRaid). It decides which plan fields are inputs and which are refused.
 type routeMode int
 
 const (
@@ -238,7 +248,12 @@ const (
 	modeWatch
 	modePlay
 	modeRaidWatch
+	modePlayRaid
 )
+
+// playerRun says the mode is the player leading the group himself: a five-bot party or a raid. Every rule of the
+// player run holds for both, so the checks read this instead of modePlay alone.
+func (m routeMode) playerRun() bool { return m == modePlay || m == modePlayRaid }
 
 func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 	var refusals []error
@@ -248,11 +263,14 @@ func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 	if p.Team != "" {
 		refuse("team", "team", "a plan limited to one team is not run by this round")
 	}
-	if p.Kind == dungeon.KindRaid && mode != modeRaidWatch {
+	if p.Kind == dungeon.KindRaid && mode != modeRaidWatch && mode != modePlayRaid {
 		refuse("kind", "kind", "this round runs a five-bot dungeon party, not a raid")
 	}
 	if mode == modeRaidWatch && (p.Kind != dungeon.KindRaid || p.Raid == nil) {
 		refuse("kind", "kind", "a raid watch runs a raid plan: kind raid with its raid block")
+	}
+	if mode == modePlayRaid && (p.Kind != dungeon.KindRaid || p.Raid == nil) {
+		refuse("kind", "kind", "a player-led raid runs a raid plan: kind raid with its raid block")
 	}
 	// The in-fight run fields are the watched module's own inputs; a run this client leads does not run them, so it
 	// refuses them rather than silently dropping them. A player run is the party's leader and fights itself: it reads
@@ -279,7 +297,7 @@ func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 			refuse("tank_min_hp", "tank_min_hp", "the tank health preflight is not run by this round")
 		}
 	}
-	if mode == modePlay && len(p.SummonedKillFirst) > 0 {
+	if mode.playerRun() && len(p.SummonedKillFirst) > 0 {
 		refuse("summoned_kill_first", "summoned_kill_first", "a summoned kill target is not run by this round")
 	}
 	if p.PullCeiling != 0 {
@@ -300,7 +318,7 @@ func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 	if lo, hi := p.Band(); lo > 0 {
 		r.LevelLo, r.LevelHi = lo, hi
 	}
-	if mode == modeRaidWatch && p.Raid != nil {
+	if (mode == modeRaidWatch || mode == modePlayRaid) && p.Raid != nil {
 		raid := *p.Raid
 		r.Raid = &raid
 	}
@@ -313,7 +331,7 @@ func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 	for _, b := range p.Avoid {
 		r.Avoid = append(r.Avoid, Box{Min: vec(b.Min), Max: vec(b.Max)})
 	}
-	if mode == modePlay {
+	if mode.playerRun() {
 		if noCC {
 			r.Notes = append(r.Notes, playNoCCNote)
 		}
@@ -334,7 +352,7 @@ func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 			l.Start = vec(p.Legs[i-1].To)
 		}
 		if len(pl.Steps) > 0 {
-			if mode != modePlay {
+			if !mode.playerRun() {
 				refuse(where, "steps", "a step is not run by this round")
 			} else {
 				for j, s := range pl.Steps {
@@ -384,7 +402,7 @@ func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 				refuse(fmt.Sprintf("%s.via[%d]", where, j), "via.exact", "a stand-on-the-point hop is not run by this round")
 			}
 			l.Via = append(l.Via, vec(w.Point))
-			if mode == modePlay {
+			if mode.playerRun() {
 				// Wailing Caverns' Serpentis leg: stand on the foot of the jump, then hop it. A player run walks
 				// both itself (the walk is this round's), so it keeps the flags instead of refusing the plan.
 				l.ViaExact = append(l.ViaExact, w.Exact)
@@ -460,7 +478,7 @@ func newRoute(p *dungeon.Plan, mode routeMode) (*Route, error) {
 			if mode == modeRun && pl.Boss.Tactics != nil {
 				refuse(bw, "tactics", "the party's fight tactics are not run by this round")
 			}
-			if mode == modePlay && pl.Boss.Tactics != nil {
+			if mode.playerRun() && pl.Boss.Tactics != nil {
 				hasTactics = true // noted once, after the legs: no player order for a tactic exists in v1
 			}
 			// The wait for a patrolling boss is the module's own: the watch follows the leg and sees the boss come.
