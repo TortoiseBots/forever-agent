@@ -294,7 +294,7 @@ func teardownCallAgent(dir string, port int, tokenFile string, noAuth, dryRun bo
 		return nil, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := readReplyBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}

@@ -271,7 +271,8 @@ func TestServeClientTypesMatchTheDaemon(t *testing.T) {
 // TA-stack counters unknown_opcodes and last_seq exists on ServeStatus.
 func TestStatusKeysPinContract(t *testing.T) {
 	pinned := []string{
-		"addon", "base_time", "character", "combo_points", "combo_target", "dead", "error", "falling",
+		"addon", "base_time", "character", "combo_points", "combo_target", "dead", "error", "fall_land_z", "fall_ms",
+		"falling",
 		"gcd_ms", "ghost", "guid", "guild", "guild_name", "health", "in_combat", "latency_ms", "level", "locale", "map",
 		"max_health", "max_power", "mono_ms", "o", "on_taxi", "parse_errors", "power", "power_type",
 		"reconnect_attempt", "reconnect_limit", "server_packets", "state", "target", "team",

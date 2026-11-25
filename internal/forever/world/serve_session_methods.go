@@ -796,6 +796,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		}
 		return serveEmpty{}, s.EnterAreaTrigger(p.ID)
 	}))
+	registerTriggerWatch(srv, st)
 	srv.Register("death_status", serveReadTyped(st, func(s *session, _ context.Context, _ serveEmpty) (ServeDeath, error) {
 		return s.serveDeath(), nil
 	}))
@@ -1014,13 +1015,24 @@ func (s *session) attackFor(ctx context.Context, guid wire.GUID, d time.Duration
 }
 
 func (s *session) serveGMResult(ctx context.Context, text string) (ServeCommand, error) {
-	rep, err := s.serveGM(ctx, text)
+	out, err := s.serveGMLine(ctx, text)
 	if err != nil {
 		return ServeCommand{}, err
 	}
-	// A `.go xyz` above the navmesh's ground starts the fall (fall.go): the line is done when the character has
-	// landed, so the call that follows does not meet a mover that is still in the air.
+	// A `.go xyz` above the navmesh's ground starts the fall (fall.go): the command line is done when the character
+	// has landed, so the call that follows does not meet a mover that is still in the air. teleport does not use this
+	// form: its answer reports the fall in flight instead, so status can see it (the flight runs on every wait).
 	if err := s.waitFallLanded(ctx); err != nil {
+		return ServeCommand{}, err
+	}
+	return out, nil
+}
+
+// serveGMLine runs one line through the GM path and answers what the server said, without waiting for a fall the line
+// may have started.
+func (s *session) serveGMLine(ctx context.Context, text string) (ServeCommand, error) {
+	rep, err := s.serveGM(ctx, text)
+	if err != nil {
 		return ServeCommand{}, err
 	}
 	return commandResult(strings.TrimSpace(text), rep), nil

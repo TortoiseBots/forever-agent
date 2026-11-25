@@ -531,6 +531,9 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 		case wire.CMSGAreaTrigger:
 			f.mu.Lock()
 			f.serveArea = true
+			if r := wire.NewReader(payload); r.Remaining() >= 4 {
+				f.serveAreas = append(f.serveAreas, r.ReadI32())
+			}
 			f.mu.Unlock()
 		case wire.CMSGLogoutRequest:
 			f.mu.Lock()
@@ -867,6 +870,192 @@ func TestServeWalkAndFace(t *testing.T) {
 	}
 	a.mustFail(t, "path_to", map[string]any{"x": 1010.0, "y": 2000.0, "z": 50.0}, -32003, "no navmesh")
 	a.mustFail(t, "walk_ray", map[string]any{"x": 1010.0, "y": 2000.0, "z": 50.0}, -32003, "no navmesh")
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeWalkCrossesArmedAreaTrigger: a client sends CMSG_AREA_TRIGGER itself on stepping into a trigger; the walked
+// volume arms once and sends exactly once per crossing (issue #228's Deadmines portal row: the walk alone moved no
+// map because nothing was sent, and the explicit area_trigger call did).
+func TestServeWalkCrossesArmedAreaTrigger(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	deadline := time.Now().Add(5 * time.Second)
+	var st ServeStatus
+	for {
+		var units []ServeUnit
+		json.Unmarshal(a.mustCall(t, "units", nil), &units)
+		json.Unmarshal(a.mustCall(t, "status", nil), &st)
+		if len(units) > 0 && st.X != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no position after 5 s\n%s", steps.joined())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// The volume straddles the walk's line, 5 yd ahead of the character, with a 3 yd reach: the leg starts outside,
+	// samples inside twice and ends outside, so exactly one packet goes out.
+	cx := st.X + 5
+	var watch ServeAreaTriggerWatch
+	json.Unmarshal(a.mustCall(t, "area_trigger_watch", map[string]any{
+		"id": 78, "x": cx, "y": st.Y, "z": st.Z, "radius": 3,
+	}), &watch)
+	if len(watch.Triggers) != 1 || watch.Triggers[0].ID != 78 || watch.Triggers[0].Radius != 3 {
+		t.Fatalf("armed %+v", watch.Triggers)
+	}
+	f.mu.Lock()
+	before := len(f.serveAreas)
+	f.mu.Unlock()
+	a.mustCall(t, "walk_to", map[string]any{"x": cx + 5, "y": st.Y, "z": st.Z})
+	f.mu.Lock()
+	first := append([]int32(nil), f.serveAreas[before:]...)
+	f.mu.Unlock()
+	if len(first) != 1 || first[0] != 78 {
+		t.Fatalf("the crossing sent %v, want one trigger 78\n%s", first, steps.joined())
+	}
+	// Walking back crosses it again: once per crossing, not once per volume.
+	a.mustCall(t, "walk_to", map[string]any{"x": cx - 5, "y": st.Y, "z": st.Z})
+	f.mu.Lock()
+	back := append([]int32(nil), f.serveAreas[before:]...)
+	f.mu.Unlock()
+	if len(back) != 2 || back[0] != 78 || back[1] != 78 {
+		t.Fatalf("the second crossing sent %v, want two triggers\n%s", back, steps.joined())
+	}
+	// Clearing arms nothing; a walk then sends nothing new.
+	var cleared ServeAreaTriggerWatch
+	json.Unmarshal(a.mustCall(t, "area_trigger_watch", map[string]any{"clear": true}), &cleared)
+	if len(cleared.Triggers) != 0 {
+		t.Fatalf("after clear %+v", cleared.Triggers)
+	}
+	a.mustCall(t, "walk_to", map[string]any{"x": cx + 5, "y": st.Y, "z": st.Z})
+	f.mu.Lock()
+	after := len(f.serveAreas)
+	f.mu.Unlock()
+	if after != before+2 {
+		t.Fatalf("a cleared watch sent %d more packets", after-(before+2))
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// serveWaitPosition waits for the daemon to know where the character stands (the login's own create).
+func serveWaitPosition(t *testing.T, a *serveAgent, steps *stepLog) ServeStatus {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var st ServeStatus
+		json.Unmarshal(a.mustCall(t, "status", nil), &st)
+		if st.X != 0 {
+			return st
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no position after 5 s\n%s", steps.joined())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// serveAreaCount is how many CMSG_AREA_TRIGGER the fake has seen.
+func serveAreaCount(f *fakeServer) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.serveAreas)
+}
+
+// TestServeAreaTriggerRearmIsIdempotent: arming a volume that is already armed is not a new crossing. A caller that
+// lost the RPC's reply and retries the identical call while standing inside the volume must not send
+// CMSG_AREA_TRIGGER a second time — for a portal trigger that is another teleport request from a position the server
+// still holds (MiscHandler.cpp:556-561 accepts it). A volume that changes and still holds the character is not a new
+// entry either; one that moves off the character clears the entered state, so arming it back sends once.
+func TestServeAreaTriggerRearmIsIdempotent(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	st := serveWaitPosition(t, a, steps)
+	// No point: the volume is centred on the character, so the first arm is an entry at once.
+	var watch ServeAreaTriggerWatch
+	json.Unmarshal(a.mustCall(t, "area_trigger_watch", map[string]any{"id": 78}), &watch)
+	if len(watch.Triggers) != 1 {
+		t.Fatalf("armed %+v", watch.Triggers)
+	}
+	// The answer to the first call may race the packet; the entry is what this test counts.
+	deadline := time.Now().Add(3 * time.Second)
+	for serveAreaCount(f) == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("the arm under the character sent nothing\n%s", steps.joined())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// An identical retry, twice: no new entry while the character stands inside.
+	for range 2 {
+		json.Unmarshal(a.mustCall(t, "area_trigger_watch", map[string]any{"id": 78}), &watch)
+	}
+	if got := serveAreaCount(f); got != 1 {
+		t.Fatalf("two identical re-arms sent %d packets, want the one entry\n%s", got, steps.joined())
+	}
+	// A changed volume (a wider reach) that still holds the character is not a new entry.
+	json.Unmarshal(a.mustCall(t, "area_trigger_watch", map[string]any{"id": 78, "radius": 6}), &watch)
+	if got := serveAreaCount(f); got != 1 {
+		t.Fatalf("a widened re-arm sent %d packets, want the one entry\n%s", got, steps.joined())
+	}
+	if len(watch.Triggers) != 1 || watch.Triggers[0].Radius != 6 {
+		t.Fatalf("after the widened arm %+v", watch.Triggers)
+	}
+	// Moved 50 yd away: the character is outside, so the entered state clears without a packet.
+	json.Unmarshal(a.mustCall(t, "area_trigger_watch", map[string]any{
+		"id": 78, "x": st.X + 50, "y": st.Y, "z": st.Z, "radius": 4,
+	}), &watch)
+	if got := serveAreaCount(f); got != 1 {
+		t.Fatalf("a volume moved off the character sent %d packets, want the one entry\n%s", got, steps.joined())
+	}
+	// Armed back under the character: a real entry from outside, so one more packet.
+	json.Unmarshal(a.mustCall(t, "area_trigger_watch", map[string]any{"id": 78}), &watch)
+	if got := serveAreaCount(f); got != 2 {
+		t.Fatalf("arming the volume back onto the character sent %d packets, want two\n%s", got, steps.joined())
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeWalkPassesThroughAnArmedAreaTriggerBetweenHeartbeats: the volume is smaller than the gap between two
+// heartbeats' positions. The walk's samples at 0, 3.5 and 7 yd are all outside a 0.5 yd sphere 1.75 yd ahead, yet the
+// straight path cuts through it. A real client's trigger table sees that crossing; this client's samples do not, so
+// the mover must report a position inside the volume before CMSG_AREA_TRIGGER goes out — the server accepts the
+// packet only from a position inside it (MiscHandler.cpp:556-561).
+func TestServeWalkPassesThroughAnArmedAreaTriggerBetweenHeartbeats(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	st := serveWaitPosition(t, a, steps)
+	// The fake's create block gives the character 7 yd/s, so heartbeats are 3.5 yd apart; the sphere sits between the
+	// start and the first heartbeat.
+	cx := st.X + 1.75
+	var watch ServeAreaTriggerWatch
+	json.Unmarshal(a.mustCall(t, "area_trigger_watch", map[string]any{
+		"id": 78, "x": cx, "y": st.Y, "z": st.Z, "radius": 0.5,
+	}), &watch)
+	if len(watch.Triggers) != 1 || watch.Triggers[0].Radius != 0.5 {
+		t.Fatalf("armed %+v", watch.Triggers)
+	}
+	before := serveAreaCount(f)
+	a.mustCall(t, "walk_to", map[string]any{"x": st.X + 10, "y": st.Y, "z": st.Z})
+	if got := serveAreaCount(f) - before; got != 1 {
+		t.Fatalf("the pass-through sent %d packets, want one crossing\n%s", got, steps.joined())
+	}
+	// No second packet: the packet that carried the character through the sphere's inside is followed by an outside
+	// sample, which re-arms the volume but does not send.
+	a.mustCall(t, "walk_to", map[string]any{"x": st.X + 10, "y": st.Y + 20, "z": st.Z})
+	if got := serveAreaCount(f) - before; got != 1 {
+		t.Fatalf("walking on sent %d packets, want only the one crossing\n%s", got, steps.joined())
+	}
 	a.stop(t)
 	f.wait(t)
 }

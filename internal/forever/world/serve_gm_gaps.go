@@ -37,8 +37,10 @@ type serveTeleportParams struct {
 	RequireGround bool `json:"require_ground,omitempty"`
 }
 
-// ServeTeleport is teleport's result: the line sent, where the client stands afterwards (the landing's height when
-// a fall was flown), and the fall.
+// ServeTeleport is teleport's result: the line sent, where the client is, and the fall a point above the ground starts.
+// A fall answers at its start (ground "falling", Falling set, DropYd and FallLandZ from the flight's own computation),
+// not at the landing: the fall flies on the session's own waits and status reports it meanwhile. Waiting for it here
+// set and cleared the falling state inside one call, so a status poll never saw it.
 type ServeTeleport struct {
 	Sent     string  `json:"sent"`
 	Map      uint32  `json:"map"`
@@ -49,9 +51,14 @@ type ServeTeleport struct {
 	DropYd   float32 `json:"drop_yd,omitempty"`
 	Seq      uint64  `json:"teleport_seq"`
 	ZUnknown bool    `json:"z_unknown,omitempty"`
-	// Ground says what was found under the point: "standing" (ground within a yard), "landed" (a fall was flown), or
-	// "unknown" with GroundWhy (no navmesh, no floor in reach, a failed query, water, or a far teleport, which starts no
-	// fall). An unknown ground means the height is the one stated, not a checked one.
+	// Falling is true when the character was left in the air by this teleport and the answer came before the landing;
+	// FallLandZ is the floor the flight will land on and FallMS the computed flight still left.
+	Falling   bool    `json:"falling,omitempty"`
+	FallLandZ float32 `json:"fall_land_z,omitempty"`
+	FallMS    int64   `json:"fall_ms,omitempty"`
+	// Ground says what was found under the point: "standing" (ground within a yard), "falling" (a fall is in flight),
+	// "landed" (a fall has landed) or "unknown" with GroundWhy (no navmesh, no floor in reach, a failed query, water, or
+	// a far teleport, which starts no fall). An unknown ground means the height is the one stated, not a checked one.
 	Ground    string `json:"ground"`
 	GroundWhy string `json:"ground_why,omitempty"`
 }
@@ -94,8 +101,8 @@ func serveTeleportLine(p serveTeleportParams) (string, error) {
 }
 
 // serveTeleport puts the character at a point with the core's `.go xyz`, waits for the server's own move of it (the
-// gm path's teleport confirmation), and, when the point is above the ground the navmesh knows, for the fall the
-// client flies from there (fall.go) to land.
+// gm path's teleport confirmation) and reports the fall a point above the ground starts (fall.go) at its start: the
+// flight itself goes on flying on every later wait, so status can report it while it is in the air.
 func (s *session) serveTeleport(ctx context.Context, p serveTeleportParams) (ServeTeleport, error) {
 	line, err := serveTeleportLine(p)
 	if err != nil {
@@ -103,15 +110,13 @@ func (s *session) serveTeleport(ctx context.Context, p serveTeleportParams) (Ser
 	}
 	falls := s.fallStarts
 	s.ground = groundNote{}
-	if _, err := s.serveGMResult(ctx, line); err != nil {
+	// The GM line alone: the fall it starts is NOT waited for here (fall.go flies it on every later wait), so the
+	// answer arrives with the fall in the air and status can report it. A caller that needs the landing polls status
+	// (falling false) or waits: the flight's own time is FallMS.
+	if _, err := s.serveGMLine(ctx, line); err != nil {
 		return ServeTeleport{}, fmt.Errorf("teleport: %w", err)
 	}
 	out := ServeTeleport{Sent: line, Fell: s.fallStarts != falls}
-	if s.fallActive() {
-		if err := s.waitFallLanded(ctx); err != nil {
-			return ServeTeleport{}, err
-		}
-	}
 	out.Map = s.world.MapID()
 	out.Seq = s.teleportSeq
 	out.ZUnknown = s.zUnknown
@@ -121,7 +126,12 @@ func (s *session) serveTeleport(ctx context.Context, p serveTeleportParams) (Ser
 	} else if o, ok := s.world.Object(s.selfOrMover()); ok {
 		out.X, out.Y, out.Z = o.X, o.Y, o.Z
 	}
-	if out.Fell {
+	if f := s.flight; out.Fell && f != nil && f.fall {
+		out.Falling = true
+		out.FallLandZ = f.landZ
+		out.FallMS = max(f.land.Sub(s.Now()).Milliseconds(), 0)
+		out.DropYd = float32(*p.Z) - f.landZ
+	} else if out.Fell {
 		out.DropYd = float32(*p.Z) - out.Z
 	}
 	out.Ground, out.GroundWhy = s.ground.state, s.ground.why

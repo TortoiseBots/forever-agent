@@ -169,6 +169,8 @@ type Status struct {
 	PowerType        uint8     `json:"power_type,omitempty"`
 	InCombat         bool      `json:"in_combat"`
 	Falling          bool      `json:"falling"`
+	FallMS           int64     `json:"fall_ms,omitempty"`
+	FallLandZ        float32   `json:"fall_land_z,omitempty"`
 	ZUnknown         bool      `json:"z_unknown"`
 	TeleportSeq      uint64    `json:"teleport_seq"`
 	LatencyMS        uint32    `json:"latency_ms"`
@@ -821,7 +823,7 @@ func (c *Client) call(ctx context.Context, method string, params, out any, timeo
 	}
 	deadline := time.Now().Add(retryWindow)
 	for {
-		result, rpcErr, err := c.post(ctx, method, raw, timeout)
+		rpcErr, err := c.post(ctx, method, raw, out, timeout)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
 				return fmt.Errorf("serveclient: %s: %w", method, ctxErr)
@@ -845,11 +847,6 @@ func (c *Client) call(ctx context.Context, method string, params, out any, timeo
 				return &Error{Code: rpcErr.Code, Message: rpcErr.Message, Method: method}
 			}
 		}
-		if out != nil && len(bytes.TrimSpace(result)) > 0 && string(bytes.TrimSpace(result)) != "null" {
-			if err := json.Unmarshal(result, out); err != nil {
-				return fmt.Errorf("serveclient: %s: bad result: %v", method, err)
-			}
-		}
 		return nil
 	}
 }
@@ -860,21 +857,20 @@ type rpcWireError struct {
 	Message string `json:"message"`
 }
 
-// post sends one JSON-RPC 2.0 request and returns the result or the error
-// the daemon answered. Anything that is not a valid 2.0 envelope for our id
-// is a transport error, so the caller can tell a bad reply from a dead
-// daemon.
-func (c *Client) post(ctx context.Context, method string, params json.RawMessage, timeout time.Duration) (json.RawMessage, *rpcWireError, error) {
+// post sends one JSON-RPC 2.0 request and decodes the result of its reply into out (nil: only the envelope is
+// checked). Anything that is not a valid 2.0 envelope for our id is a transport error, so the caller can tell a bad
+// reply from a dead daemon. The reply body is never held whole: decodeReply streams it into the JSON decoder.
+func (c *Client) post(ctx context.Context, method string, params json.RawMessage, out any, timeout time.Duration) (*rpcWireError, error) {
 	reqBody := map[string]any{"jsonrpc": "2.0", "id": requestID, "method": method}
 	if params != nil {
 		reqBody["params"] = params
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if len(body) > maxRequestBytes {
-		return nil, nil, fmt.Errorf("%w (%d bytes)", ErrRequestTooLarge, len(body))
+		return nil, fmt.Errorf("%w (%d bytes)", ErrRequestTooLarge, len(body))
 	}
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -883,7 +879,7 @@ func (c *Client) post(ctx context.Context, method string, params json.RawMessage
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", c.addr, bytes.NewReader(body))
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if c.token != "" {
@@ -891,51 +887,161 @@ func (c *Client) post(ctx context.Context, method string, params json.RawMessage
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	defer resp.Body.Close()
-	// Reading the (bounded) rest of the body lets the connection be reused.
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if resp.StatusCode == http.StatusUnauthorized {
-		return nil, nil, ErrUnauthorized
-	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, nil, fmt.Errorf("http %d", resp.StatusCode)
+		// Drain the (bounded) rest so the connection can be reused; the error is the status, not the body.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxReplyBytes+1))
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, ErrUnauthorized
+		}
+		return nil, fmt.Errorf("http %d", resp.StatusCode)
 	}
+	return decodeReply(resp.Body, out)
+}
+
+// countingReader counts the bytes read from a body, so a reply over the bound can be named as such instead of
+// reading as a truncated document.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// replyReadErr names an over-bound reply when the read stopped at the bound, and the decoder's own error otherwise.
+func replyReadErr(cr *countingReader, err error) error {
+	if cr.n > maxReplyBytes {
+		return fmt.Errorf("bad reply: larger than the %d-byte bound", maxReplyBytes)
+	}
+	return fmt.Errorf("bad reply: %v", err)
+}
+
+// skipValue passes one value of the decoder's stream without keeping it: an object or array is walked token by token,
+// and a scalar is consumed by its own token.
+func skipValue(dec *json.Decoder) error {
+	tok, err := dec.Token()
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
-	var reply struct {
-		JSONRPC string          `json:"jsonrpc"`
-		ID      json.RawMessage `json:"id"`
-		Result  json.RawMessage `json:"result"`
-		Error   *rpcWireError   `json:"error"`
+	delim, ok := tok.(json.Delim)
+	if !ok || (delim != '{' && delim != '[') {
+		return nil
 	}
-	if err := json.Unmarshal(raw, &reply); err != nil {
-		return nil, nil, fmt.Errorf("bad reply: %v", err)
+	for dec.More() {
+		if delim == '{' {
+			if _, err := dec.Token(); err != nil { // the key
+				return err
+			}
+		}
+		if err := skipValue(dec); err != nil {
+			return err
+		}
 	}
-	if reply.JSONRPC != "2.0" {
-		return nil, nil, fmt.Errorf("bad reply: not a JSON-RPC 2.0 envelope")
+	_, err = dec.Token() // the closing delimiter
+	return err
+}
+
+// decodeReply reads one JSON-RPC 2.0 reply from r, decodes its result straight into out (nil: the result is only
+// checked for presence), and refuses a body over maxReplyBytes by name. The body is streamed: the result is decoded
+// once, into out, as the decoder passes the body, so a large map_snapshot is not held as a body buffer and a copy of
+// its result beside the decoded value. A reply whose result field does not fit out fails the call; out may hold a
+// partly decoded result then, which the caller ignores with the error.
+func decodeReply(r io.Reader, out any) (*rpcWireError, error) {
+	cr := &countingReader{r: r}
+	dec := json.NewDecoder(io.LimitReader(cr, maxReplyBytes+1))
+	bad := func(format string, args ...any) (*rpcWireError, error) {
+		return nil, fmt.Errorf("bad reply: "+format, args...)
 	}
-	hasResult := len(reply.Result) > 0
-	if hasResult == (reply.Error != nil) {
-		return nil, nil, fmt.Errorf("bad reply: want exactly one of result and error")
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, replyReadErr(cr, err)
+	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '{' {
+		return bad("not a JSON-RPC 2.0 envelope")
+	}
+	var (
+		version   string
+		id        json.RawMessage
+		hasResult bool
+		rpcErr    *rpcWireError
+	)
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return nil, replyReadErr(cr, err)
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return bad("not a JSON-RPC 2.0 envelope")
+		}
+		switch key {
+		case "jsonrpc":
+			err = dec.Decode(&version)
+		case "id":
+			err = dec.Decode(&id)
+		case "result":
+			hasResult = true
+			if out != nil {
+				err = dec.Decode(out)
+			} else {
+				err = skipValue(dec)
+			}
+		case "error":
+			err = dec.Decode(&rpcErr)
+		default:
+			err = skipValue(dec)
+		}
+		if err != nil {
+			return nil, replyReadErr(cr, err)
+		}
+	}
+	if _, err := dec.Token(); err != nil { // the closing '}'
+		return nil, replyReadErr(cr, err)
+	}
+	// The body ends after the object (whitespace reads as EOF); draining it to the bound also says whether the body
+	// was longer than the bound at all.
+	var extra json.RawMessage
+	switch err := dec.Decode(&extra); {
+	case err == nil:
+		return bad("trailing data after the reply")
+	case !errors.Is(err, io.EOF):
+		return nil, replyReadErr(cr, err)
+	}
+	if cr.n > maxReplyBytes {
+		return nil, fmt.Errorf("bad reply: larger than the %d-byte bound", maxReplyBytes)
+	}
+	if version != "2.0" {
+		return nil, fmt.Errorf("bad reply: not a JSON-RPC 2.0 envelope")
+	}
+	if hasResult == (rpcErr != nil) {
+		return nil, fmt.Errorf("bad reply: want exactly one of result and error")
 	}
 	// A request the daemon could not parse is answered with id null (a parse
 	// or invalid-request error); every other reply carries our id.
-	if id := strings.TrimSpace(string(reply.ID)); id != strconv.Itoa(requestID) &&
-		!(reply.Error != nil && (id == "null" || id == "")) {
-		return nil, nil, fmt.Errorf("bad reply: id %s is not the request's %d", id, requestID)
+	if id := strings.TrimSpace(string(id)); id != strconv.Itoa(requestID) &&
+		!(rpcErr != nil && (id == "null" || id == "")) {
+		return nil, fmt.Errorf("bad reply: id %s is not the request's %d", id, requestID)
 	}
-	if reply.Error != nil {
-		return nil, reply.Error, nil
-	}
-	return reply.Result, nil, nil
+	return rpcErr, nil
 }
 
 // requestID is the id of every request: a client sends one call at a time
 // per connection, so one id is enough, and a reply is checked against it.
 const requestID = 1
+
+// maxReplyBytes bounds one reply body. A map_snapshot with the navmesh background is the biggest answer a method
+// gives: mapview draws at most 40000 polygons of the background on a floor, and such a floor measures 1.8 MiB of
+// SVG (see docs/forever/SESSION-A-FIX-NOTES.md), with the replay HTML adding one image per floor. 16 MiB is eight
+// such floors, where the branch first carried a guessed 64 MiB that let a valid reply cost several copies of that
+// much. A longer body is refused by name, not cut and read as bad JSON. A variable so a test can lower it, like the
+// CLI's rpcMaxReply.
+var maxReplyBytes int64 = 16 << 20
 
 // Status reads status: where the character is, what it is doing, and the
 // link's lifecycle (state online/reconnecting/offline).

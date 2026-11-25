@@ -409,7 +409,7 @@ func (f *fightLog) castGo(c *combat.SpellCast) {
 // this client and names the spell it asked for). SMSG_SPELL_FAILURE names the caster and the server's cast id; when
 // a start was seen, its id must match that start's. A failure of another spell changes nothing, however large its
 // reason.
-func (f *fightLog) castFail(spellID int32, castID wire.GUID, reason int32, preCast bool) {
+func (f *fightLog) castFail(spellID int32, castID wire.GUID, reason, arg1 int32, preCast bool) {
 	if !f.castOpen || spellID != f.castSpell || reason == 0 {
 		return
 	}
@@ -419,7 +419,7 @@ func (f *fightLog) castFail(spellID int32, castID wire.GUID, reason int32, preCa
 	f.castOpen = false
 	f.castStarted = false
 	f.castSeq++
-	f.castResult = combat.SpellFailureName(reason)
+	f.castResult = combat.SpellFailureResult(reason, arg1)
 	if len(f.casts) < maxFightRows {
 		f.casts = append(f.casts, FightRow{SpellID: spellID, Result: f.castResult, At: f.elapsed()})
 	}

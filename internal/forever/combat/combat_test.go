@@ -672,6 +672,27 @@ func TestSpellFailureName(t *testing.T) {
 	if got := SpellFailureName(9999); got != "spell failure 9999" {
 		t.Errorf("the fallback = %q", got)
 	}
+	for _, tc := range []struct {
+		code, arg1 int32
+		want       string
+	}{
+		// SPELL_FAILED_TOTEMS with the tool item the cast lacked: Pick Lock (1804) needs Thieves' Tools 5060 in
+		// the 1.60.1.70959 data, which is why a cast at a trade slot was refused with the bare "153" (issue #228).
+		{153, 5060, "totems (needs tool item 5060 in the bags)"},
+		{152, 165, "totem category (needs a totem of category 165)"},
+		{121, 2589, "reagents (needs item 2589)"},
+		{123, 42, "requires spell focus (needs focus 42)"},
+		// The argument is only added when the core filled one: a zero keeps the plain name.
+		{153, 0, "totems"},
+		{153, -1, "totems"},
+		{121, -1, "reagents"}, // a currency reagent carries -1
+		{118, 5, "out of range"},
+		{9999, 5060, "spell failure 9999"},
+	} {
+		if got := SpellFailureResult(tc.code, tc.arg1); got != tc.want {
+			t.Errorf("SpellFailureResult(%d, %d) = %q, want %q", tc.code, tc.arg1, got, tc.want)
+		}
+	}
 }
 
 // TestSwingErrString pins the four swing error names.

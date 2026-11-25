@@ -585,6 +585,10 @@ type session struct {
 	knockOrder []wire.GUID
 	// flight is the mover's own knockback arc, which the client simulates: the server sends none of its positions.
 	flight *selfFlight
+	// triggers are the armed area-trigger volumes (trigger.go), in arming order, and triggersIn is whether the mover
+	// is inside each: a volume entered from outside sends CMSG_AREA_TRIGGER once, and leaving re-arms it.
+	triggers   []srvTrigger
+	triggersIn map[int32]bool
 	// echoOwed is set by each CMSG_MOVE_KNOCK_BACK_ACK we send: the server's echo of it (SMSG_MOVE_UPDATE_KNOCK_BACK to
 	// the mover) is owed until it arrives or echoOwedUntil passes, whether or not the takeoff has landed meanwhile.
 	echoOwed      bool
@@ -2584,7 +2588,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			return
 		}
 		s.world.ApplySpellFailure(v, now)
-		s.combatRow("spell_fail", now, v.SpellID, 0, v.Caster, wire.EmptyGUID, combat.SpellFailureName(v.Reason))
+		s.combatRow("spell_fail", now, v.SpellID, 0, v.Caster, wire.EmptyGUID, combat.SpellFailureResult(v.Reason, v.Arg1))
 		if p.Core == wire.SMSGCastFailed || (s.selfSeen && v.Caster == s.self) {
 			s.onOwnSpellFailure(p.Core, v, now)
 		}
@@ -2595,7 +2599,7 @@ func (s *session) handleCombat(p worldconn.Packet) {
 			if s.fight.staleCast(v.SpellID, v.CastID, now) {
 				return
 			}
-			s.fight.castFail(v.SpellID, v.CastID, v.Reason, p.Core == wire.SMSGCastFailed)
+			s.fight.castFail(v.SpellID, v.CastID, v.Reason, v.Arg1, p.Core == wire.SMSGCastFailed)
 		}
 	case wire.SMSGSpellNonMeleeDamage:
 		v, err := combat.ParseSpellNonMeleeDamage(p.Payload)
@@ -3012,6 +3016,8 @@ func (s *session) applyUpdate(u *objects.Update) {
 					ClientTime: func(time.Time) uint32 { return clientTimeMs() },
 					Logf:       s.opts.logf,
 					Refuse:     s.taxiMovementBlocked,
+					Cross:      s.triggerCrossing,
+					Samples:    s.triggerSamples,
 					X:          b.Movement.X,
 					Y:          b.Movement.Y,
 					Z:          b.Movement.Z,

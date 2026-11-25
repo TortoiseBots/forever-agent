@@ -175,11 +175,30 @@ func rpcPostCall(ctx context.Context, port int, token, method string, params jso
 	if resp.StatusCode != http.StatusOK {
 		return nil, nil, &rpcBadReplyError{reason: fmt.Sprintf("http %d", resp.StatusCode)}
 	}
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := readReplyBody(resp.Body)
 	if err != nil {
 		return nil, nil, err
 	}
 	return rpcCheckReply(raw)
+}
+
+// rpcMaxReply bounds one reply body. It is a variable so a test can lower it. A map_snapshot with the navmesh
+// background is far past the 1 MiB this started at (the old bound cut the body mid-JSON, and the CLI reported
+// "invalid JSON: unexpected end of JSON input" instead of naming the bound); 16 MiB is twice the measured worst case
+// (docs/forever/SESSION-A-FIX-NOTES.md), not the blanket 64 MiB this first became.
+var rpcMaxReply int64 = 16 << 20
+
+// readReplyBody reads a reply body up to rpcMaxReply and refuses a longer one by name: a cut body is not JSON and an
+// "invalid JSON" error hides that the agent answered at all.
+func readReplyBody(r io.Reader) ([]byte, error) {
+	raw, err := io.ReadAll(io.LimitReader(r, rpcMaxReply+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(raw)) > rpcMaxReply {
+		return nil, &rpcBadReplyError{reason: fmt.Sprintf("the reply is larger than the %d-byte bound", rpcMaxReply)}
+	}
+	return raw, nil
 }
 
 // rpcBadReplyError is a reply that fails the JSON-RPC envelope check: a
