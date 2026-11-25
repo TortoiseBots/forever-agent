@@ -3,7 +3,7 @@
   "name": "razorfen_kraul",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-25: 15 Turtle-only units (62501/62502/62503) have no ForeverCore map-47 spawn, 5 more stand 16.3-52.2 yd from any core spawn of their entry and 34 of 227 exported segments do not walk on the Forever tiles)",
   "map": 47,
   "entrance": {"x": 1942.27, "y": 1544.23, "z": 83.3055},
   "entrance_trigger": 244,
@@ -30,7 +30,8 @@
     "DRAFT: a skeleton from the world database export of map 47 (tools/dungeongen, spec tools/dungeongen/plans.json). The boss order is the usual clear order, the packs are the spawn clusters nearest each boss; walls, doors, stairs and events are unknown to it. Not mapped, not live-checked: do the GM-invisible mapping walk and correct the route before the first run (AUTO-IMPROVE step 0); dungeon_run refuses it without allow_draft.",
     "A wait_for on a door a lever or key opens needs timeout_s 60 (the default): a linked door can open 30 s after the use.",
     "Needs: Agathelos' Ward (GO_AGATHELOS_WARD) is opened by the keep script before Agathelos the Raging",
-    "Needs: Willix the Importer escort (optional)"
+    "Needs: Willix the Importer escort (optional)",
+    "Forever check (2026-11-25, issue #223 batch 2, ForeverCore world DB, tools/dungeongen/export-forever.sh map 47: 203 normal spawns): plan-export --forever writes 9 legs, 228 steps, 122 pulls, 99 moves, 195 units and 7 boss rows and refuses no field. plan-probe --forever on the Forever map-47 tiles reports 20 of the 195 units with no core spawn of their entry within the row's radius and 34 of 227 segments that do not walk (26 stop 2.6-112.6 yd short of the row, 8 find no floor within 5 yd of its z); plan-check --forever fails 64 of 287 points (63 re-anchored after the first) with 185 findings (99 edge, 34 short hop, 19 climb_anchor, 17 ledge, 9 hop_len, 5 patrol, 2 aggro) and 104 joiners; trash-check reports 136 danger, 27 own and 9 patrol segments of 227. The 15 Turtle-only units of 62501 (Bramblehide Rootshaper), 62502 (Gnarled Bramblehide) and 62503 (Rotthorn) have no map-47 spawn in the core, and 5 more (4442, 4511, 4514, 4515, 4541) stand 16.3-52.2 yd from any core spawn of their entry, so the plan is refused for Forever rather than trimmed for it."
   ],
   "legs": [
     {

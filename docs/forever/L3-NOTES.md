@@ -44,8 +44,11 @@ export untouched instead of a mixed generation. The staging directory is removed
 ## Shared plan files
 
 A plan file serves both stacks. A Forever check never deletes a Turtle spawn, leg or step: where ForeverCore lacks
-content a plan uses (Deadmines' Defias Companions, Shadowfang Keep's Sever/Prelate Ironmane/Mistblade Rippers,
-Blackfathom Deeps' Velthelaxx wing), the plan keeps it, `forever_status` says `refused` with the missing content named,
+content a plan uses (Deadmines' Defias Companions; Shadowfang Keep's Sever/Prelate Ironmane/Mistblade Rippers;
+Blackfathom Deeps' Velthelaxx wing; Razorfen Kraul's Bramblehide Rootshaper, Gnarled Bramblehide and Rotthorn;
+Scarlet Graveyard's Scarlet Jailer pack, Duke Dreadmoore and Scorn; Scarlet Library's Brother Wystan; Scarlet
+Armory's Quartermaster Daghelm; Scarlet Cathedral's Mograine hold, which the module has no hold row for), the plan
+keeps it, `forever_status` says `refused` with the missing content named,
 and `alt_entries` is the only per-server field (object entries at one position). The plans that can be cleared for
 Forever say `exported`; a plan whose Forever data does not match says `refused` with the field or spawns named.
 
