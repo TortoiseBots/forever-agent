@@ -24,6 +24,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/npc"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
+	"github.com/pjerra/forever-agent/internal/forever/sightcmd"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/forever/worldconn"
 )
@@ -215,10 +216,24 @@ func TestPlaySessionSelectionGoesBeforeTheAttackOrder(t *testing.T) {
 }
 
 func TestPlaySessionLinkAdmitsOnlyBotLines(t *testing.T) {
+	sightGuid := "F1300000000000000000000000060001"
 	for text, want := range map[string]bool{
-		".bot add Botone":           true,
-		".bot attack Bottwo":        true,
-		".bot who":                  true,
+		".bot add Botone":    true,
+		".bot attack Bottwo": true,
+		".bot who":           true,
+		// The one read-only sight query of the player run's channel, in exactly the two shapes the pull builds.
+		".tb los Bottwo " + sightGuid:                     true,
+		".tb los -285.52,-20.88,-60.41 " + sightGuid:      true,
+		".tb los 0.00,0.00,0.00 " + sightGuid:             true,
+		".tb los target " + sightGuid:                     false,
+		".tb los Bottwo":                                  false,
+		".tb los Bottwo " + strings.ToLower(sightGuid):    false,
+		".tb los Bottwo " + sightGuid + " map=389":        false,
+		".tb los Bo=two " + sightGuid:                     false,
+		".tb los 1,2,3 " + sightGuid:                      false,
+		".tb los Bottwo " + sightGuid + "\n.tb run start": false,
+		".tb gps":                   false,
+		".tb state":                 false,
 		".bot  add   Botone":        false,
 		".bot who extra":            false,
 		".bot who ":                 false,
@@ -266,6 +281,68 @@ func TestPlaySessionLinkAdmitsOnlyBotLines(t *testing.T) {
 	s.gmStop = errors.New("said aloud")
 	if err := l.SendCommand(context.Background(), ".bot who"); err == nil {
 		t.Fatal("a send went out after the say echo stopped the channel")
+	}
+}
+
+// TestPlayServerSightAsksAndReads: the adapter sends the one sight line and reads the module's one-line answer as the
+// pull needs it. A line for another target, a rate refusal and no answer at all are unknown, and no other line leaves.
+func TestPlayServerSightAsksAndReads(t *testing.T) {
+	s, sc := newPlaySession(t)
+	prev := playLosQueryEvery
+	playLosQueryEvery = time.Millisecond
+	t.Cleanup(func() { playLosQueryEvery = prev })
+	target := unitGUID(3)
+	guid := sightcmd.GUIDText(target)
+	other := sightcmd.GUIDText(unitGUID(4))
+	var asks []string
+	answer := ""
+	sc.onSay = func(text string) {
+		asks = append(asks, text)
+		if answer != "" {
+			sc.sys(answer)
+		}
+	}
+	st := newPlayServerSight(s)
+
+	answer = "los a=Bottwo b=" + guid + " map=389 los=1 dist=17.4 same_map=1 in_world=1"
+	if in, dist, known := st.TankSees("bottwo", target); !in || !known || dist != 17.4 {
+		t.Fatalf("TankSees = (%v, %v, %v); want seen at 17.4 yd", in, dist, known)
+	}
+	if len(asks) != 1 || asks[0] != ".tb los Bottwo "+guid {
+		t.Fatalf("sent %v; want the one tank sight line", asks)
+	}
+
+	answer = "los a=1.00,2.00,3.00 b=" + guid + " map=389 los=0 dist=0.0 same_map=0 in_world=1 reason=different-maps"
+	if in, _, known := st.PointSees(driver.Vec3{1, 2, 3}, target); in || !known {
+		t.Fatalf("PointSees = (%v, %v); want a known NO (another map)", in, known)
+	}
+	if len(asks) != 2 || asks[1] != ".tb los 1.00,2.00,3.00 "+guid {
+		t.Fatalf("sent %v; want the point sight line", asks)
+	}
+
+	// An answer about another unit, a rate refusal, and silence are all unknown.
+	for _, a := range []string{
+		"los a=Bottwo b=" + other + " map=389 los=1 dist=17.4 same_map=1 in_world=1",
+		"los a=Bottwo b=" + guid + " map=389 los=0 dist=0.0 same_map=1 in_world=1 reason=rate",
+		"",
+	} {
+		answer = a
+		if in, _, known := st.TankSees("Bottwo", target); known || in {
+			t.Fatalf("TankSees with %q = (%v, %v); want unknown", a, in, known)
+		}
+	}
+
+	// A module without the command answers the core's own line: unknown, never a refusal of sight.
+	answer = ""
+	sc.onSay = func(text string) {
+		asks = append(asks, text)
+		sc.sys("There is no such command")
+	}
+	if _, _, known := st.TankSees("Bottwo", target); known {
+		t.Fatal("the core's unknown-command line was read as a sight answer")
+	}
+	if s.gmConfirmed {
+		t.Fatal("a player run asked for the GM guard")
 	}
 }
 

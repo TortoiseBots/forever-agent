@@ -190,6 +190,13 @@ type PlayFake struct {
 	// "I dont see my rti attack target" to the agent; SightRefusals counts them per bot.
 	ModuleSight  func(from, to Vec3) bool
 	RefuseOrders int
+	// SrvSight, when set, answers the ServerSight port (the module's own read-only sight query): TankSees asks it from
+	// the tank's live position and PointSees from the spot given, both inside PlayModuleSightYd (the module's range gate).
+	// SrvUnknown makes every answer unknown (an older module without the command, or a rate refusal), and SrvQueries
+	// records each query asked ("tank", "point") so a test can read the search's bound.
+	SrvSight   func(from, to Vec3) bool
+	SrvUnknown bool
+	SrvQueries []string
 	// WhisperOnce scripts the live module's one whisper for a mark it cannot find: the order is still refused, but the
 	// Refusals count stands at one, as it did live (three orders, one whisper, 2026-11-24).
 	WhisperOnce bool
@@ -706,6 +713,40 @@ func (f *PlayFake) InSight(from, to Vec3) (bool, bool) {
 		return false, false
 	}
 	return f.SightFunc(from, to), true
+}
+
+// TankSees is the ServerSight port asked from the tank: SrvSight's rule at the bot's live position, inside the module's
+// own range gate. Unknown with no SrvSight or with SrvUnknown set.
+func (f *PlayFake) TankSees(bot string, target wire.GUID) (in bool, dist float64, known bool) {
+	if f.SrvSight == nil || f.SrvUnknown {
+		return false, 0, false
+	}
+	u, ok := unitByGUID(f.units, target)
+	if !ok {
+		return false, 0, false
+	}
+	from := f.SelfPos
+	if b := f.GoldenOwner.bot(bot); b != nil {
+		from = f.botPos(b)
+	}
+	f.SrvQueries = append(f.SrvQueries, "tank")
+	d := dist3(from, u.Pos)
+	return f.SrvSight(from, u.Pos) && d <= PlayModuleSightYd, d, true
+}
+
+// PointSees is the ServerSight port asked from a spot on the ground: SrvSight's rule at that spot, inside the module's
+// own range gate. Unknown with no SrvSight or with SrvUnknown set.
+func (f *PlayFake) PointSees(at Vec3, target wire.GUID) (in bool, dist float64, known bool) {
+	if f.SrvSight == nil || f.SrvUnknown {
+		return false, 0, false
+	}
+	u, ok := unitByGUID(f.units, target)
+	if !ok {
+		return false, 0, false
+	}
+	f.SrvQueries = append(f.SrvQueries, "point")
+	d := dist3(at, u.Pos)
+	return f.SrvSight(at, u.Pos) && d <= PlayModuleSightYd, d, true
 }
 
 // Summon is `.bot summon`: the bot moves to the agent's map and side.

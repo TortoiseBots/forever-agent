@@ -108,6 +108,24 @@ const (
 	// agent's own distance by more than this, so a path that walks away (or only sidesteps) is not refused for the
 	// ground the agent already stands on.
 	PlayAgentApproachStartEpsYd = 0.5
+	// The server's own sight query (#262). The module refuses an attack order whose mark its own line-of-sight test
+	// cannot see from the BOT's position (RtiTargetValue.h), which the agent's navmesh ray is not: so the pull asks the
+	// server, read-only, before and after a refusal.
+	//
+	// PlaySrvSightStepYd is how finely the search samples the navmesh path from the tank toward the unit (2 yd), and
+	// PlayLosEyeYd is the height above the ground the spot query is asked from (2 yd, the core's standing eye), so a
+	// sample asks the ray a character standing there would.
+	//
+	// PlayAgentLeadYd is how far the agent steps ahead of the tank on one try (2 yd): the tank's follow trails a body
+	// behind, so the agent's own stand alone brings the tank no sight.
+	//
+	// PlayTankSightTries and PlayTankSightTime bound the search: at most 8 tries and 60 s from the first look, then the
+	// pull goes on as it stands and the module is the judge.
+	PlaySrvSightStepYd = 2.0
+	PlayLosEyeYd       = 2.0
+	PlayAgentLeadYd    = 2.0
+	PlayTankSightTries = 8
+	PlayTankSightTime  = 60 * time.Second
 )
 
 // pull is the pack in the way: the agent first walks to the plan's stand with the party beside it, then the skull goes
@@ -153,14 +171,10 @@ func (p *playRun) pull(ctx context.Context) string {
 		p.pack = -1
 		return StateLegWalk
 	}
-	// The module orders the tank onto the mark only when the tank itself sees it; from a stand it cannot see the skull
-	// from, the agent closes in before the first order (and the tank follows).
-	first, _ := p.skullAndCross(members)
-	p.closeToSee(ctx, g.ID, first)
-	if p.stopReason != "" {
-		return ""
-	}
-	if p.stall != "" {
+	// The module orders the tank onto the mark only when the tank itself sees it: the server's own sight says which
+	// member that is, and walks the tank into sight of one when it sees none. With no answer from the module (no port,
+	// an older module, a rate refusal) this is the navmesh close-in as before.
+	if !p.tankSightBefore(ctx, g.ID, members) {
 		return ""
 	}
 	members = p.liveMembers(g)
@@ -179,7 +193,7 @@ func (p *playRun) pull(ctx context.Context) string {
 			p.rec.Event(p.now(), "pull_retry", map[string]any{"group": g.ID})
 		}
 		skull, cross := p.skullAndCross(members)
-		if p.engageSeen(ctx, members, skull, cross) {
+		if p.engageSeen(ctx, g.ID, members, skull, cross) {
 			return StateFight
 		}
 		if p.stopReason != "" {
@@ -302,11 +316,7 @@ func (p *playRun) pullStranger(ctx context.Context) string {
 	members := []Unit{u}
 	// The stranger's own pull stand is where the agent stood: there is no plan point for a unit the plan does not know.
 	p.pullStand = p.self
-	p.closeToSee(ctx, -1, u)
-	if p.stopReason != "" {
-		return ""
-	}
-	if p.stall != "" {
+	if !p.tankSightBefore(ctx, -1, members) {
 		return ""
 	}
 	p.rec.PullStart(p.now(), PullRecord{Leg: p.legName(), Group: -1, Entries: []uint32{u.Entry}, Mobs: 1})
@@ -322,7 +332,7 @@ func (p *playRun) pullStranger(ctx context.Context) string {
 			p.stranger = wire.GUID{}
 			return StateLegWalk
 		}
-		if p.engageSeen(ctx, members, skull, Unit{}) {
+		if p.engageSeen(ctx, -1, members, skull, Unit{}) {
 			p.stranger = wire.GUID{}
 			return StateFight
 		}
@@ -544,6 +554,221 @@ func sightSamples(points []Vec3, yd float64) []Vec3 {
 	return out
 }
 
+// --- The server's own sight of the skull (#262) ---
+
+// tankSight is the ServerSight port's answer for the unit as the TANK sees it; known false when the module cannot say.
+func (p *playRun) tankSight(u Unit) (in bool, dist float64, known bool) {
+	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 || u.GUID.IsZero() {
+		return false, 0, false
+	}
+	return p.ports.ServerSight.TankSees(p.cfg.Bots[0], u.GUID)
+}
+
+// pointSight asks the ServerSight port whether a spot on the ground sees the unit. at is a point on the floor; the
+// query is made from the core's standing eye above it (PlayLosEyeYd). known false when the module cannot say.
+func (p *playRun) pointSight(at Vec3, u Unit) (in bool, dist float64, known bool) {
+	if p.ports.ServerSight == nil || u.GUID.IsZero() {
+		return false, 0, false
+	}
+	return p.ports.ServerSight.PointSees(Vec3{at[0], at[1], at[2] + float32(PlayLosEyeYd)}, u.GUID)
+}
+
+// tankSightPick is the pull's marks read from the server's own sight: the skull on the first live member of the kill
+// order the TANK sees from where it stands, the cross on the next one in that order. seen is false when the tank sees
+// none (the caller's search then walks it into sight of the first). ok is false when the module cannot answer at all,
+// and the caller keeps the navmesh flow exactly as it was.
+func (p *playRun) tankSightPick(members []Unit) (skull, cross Unit, seen, ok bool) {
+	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 || len(members) == 0 {
+		return Unit{}, Unit{}, false, false
+	}
+	order := p.killOrder(members)
+	for i, u := range order {
+		in, _, known := p.tankSight(u)
+		if !known {
+			return Unit{}, Unit{}, false, false
+		}
+		if !in {
+			continue
+		}
+		skull = order[i]
+		for _, o := range order {
+			if o.GUID != skull.GUID {
+				cross = o
+				break
+			}
+		}
+		return skull, cross, true, true
+	}
+	skull = order[0]
+	if len(order) > 1 {
+		cross = order[1]
+	}
+	return skull, cross, false, true
+}
+
+// tankSightStand puts the tank in the server's own sight of u before the pull is ordered (#262 step 4). The search
+// walks the navmesh path the tank would take toward u: its samples are asked through the server's spot query (the eye
+// at PlayLosEyeYd), never nearer than PlaySightTouchYd to the unit to pull from and never more than
+// PlayAgentApproachPastYd past the plan's stand (a pack pull only); the agent walks to the first sample the server
+// clears, then steps PlayAgentLeadYd along the path until the TANK itself sees the unit, so the follow advances with
+// it. Bounded by PlayTankSightTries and PlayTankSightTime. seen is whether the tank sees the unit at the end; known is
+// false when the module stopped answering (a rate refusal, an error), and the caller then keeps its older flow. A stop
+// of the run's own is the run's.
+func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit) (seen, known bool) {
+	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 {
+		return false, false
+	}
+	if in, _, ok := p.tankSight(u); !ok {
+		return false, false
+	} else if in {
+		return true, true
+	}
+	p.refreshSelf()
+	start := p.now()
+	tries := 0
+	from := p.self
+	if at, ok := p.tankPos(); ok {
+		from = at
+	}
+	route, err := p.ports.Walker.Path(from, u.Pos)
+	if err != nil || route.Kind != navmesh.RouteComplete || len(route.Points) < 2 {
+		// The module answered and says the tank cannot see it, and the mesh has no complete path to walk: the pull
+		// goes on as it stands (the module is the judge).
+		return false, true
+	}
+	samples := p.tankSightSamples(group, route.Points, u)
+	stand := Vec3{}
+	walked := false
+	for _, at := range samples {
+		in, _, ok := p.pointSight(at, u)
+		if !ok {
+			return false, false
+		}
+		if !in {
+			continue
+		}
+		stand = at
+		if dist3(p.self, at) > PlayArriveYd {
+			p.pullWalk = true
+			p.walkTo(ctx, at, false, false)
+			p.pullWalk = false
+			if p.stopReason != "" || p.stall != "" {
+				return false, true
+			}
+		}
+		walked = true
+		break
+	}
+	if !walked {
+		return false, true
+	}
+	record := func(in, ok bool) {
+		p.rec.Event(p.now(), "pull_sight_stand", map[string]any{
+			"group": group, "target": u.GUID.String(), "seen": in, "known": ok, "tries": tries,
+			"x": stand[0], "y": stand[1], "z": stand[2],
+		})
+	}
+	for {
+		if seen, _, ok := p.tankSight(u); !ok {
+			record(false, false)
+			return false, false
+		} else if seen {
+			record(true, true)
+			return true, true
+		}
+		if tries >= PlayTankSightTries || p.now().Sub(start) >= PlayTankSightTime {
+			record(false, true)
+			return false, true
+		}
+		tries++
+		next, ok := p.leadPoint(samples, u)
+		if !ok {
+			record(false, true)
+			return false, true
+		}
+		p.pullWalk = true
+		p.walkTo(ctx, next, false, false)
+		p.pullWalk = false
+		if p.stopReason != "" || p.stall != "" {
+			return false, true
+		}
+	}
+}
+
+// tankSightSamples is the path points the sight search may use: every PlaySrvSightStepYd along the path, cut where it
+// comes within PlaySightTouchYd of the unit (a stand nearer than a body's reach is its own feet), and, for a pack pull,
+// cut where it is further than PlayAgentApproachPastYd past the plan's stand.
+func (p *playRun) tankSightSamples(group int, points []Vec3, u Unit) []Vec3 {
+	out := make([]Vec3, 0, len(points))
+	for _, at := range sightSamples(points, PlaySrvSightStepYd) {
+		if dist3(at, u.Pos) < PlaySightTouchYd {
+			break
+		}
+		if group >= 0 && dist3(at, p.pullStand) > PlayAgentApproachPastYd {
+			continue
+		}
+		out = append(out, at)
+	}
+	return out
+}
+
+// leadPoint is the next spot the agent steps to in the sight search: the first path sample at least PlayAgentLeadYd
+// from where the agent stands and at least PlaySightTouchYd from the unit. ok is false when the path has none left.
+func (p *playRun) leadPoint(samples []Vec3, u Unit) (Vec3, bool) {
+	p.refreshSelf()
+	for _, at := range samples {
+		if dist3(at, u.Pos) < PlaySightTouchYd {
+			break
+		}
+		if dist3(at, p.self) >= PlayAgentLeadYd {
+			return at, true
+		}
+	}
+	return Vec3{}, false
+}
+
+// tankSightBefore is the pull's sight before its first order (#262 steps 3 and 4). With the server's port the skull goes
+// on the first member of the kill order the tank sees, and a tank that sees none is walked along the path into sight
+// of the first. With no port, or an answer the module cannot give, it is today's flow: the plan's marks and the
+// navmesh close-in (closeToSee). false means the run stopped or a regroup is next.
+func (p *playRun) tankSightBefore(ctx context.Context, group int, members []Unit) bool {
+	p.skullPick = wire.GUID{}
+	p.sightBlocked = false
+	fallback := func() bool {
+		first, _ := p.skullAndCross(members)
+		p.closeToSee(ctx, group, first)
+		return p.stopReason == "" && p.stall == ""
+	}
+	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 || len(members) == 0 {
+		return fallback()
+	}
+	skull, _, seen, ok := p.tankSightPick(members)
+	if !ok {
+		return fallback()
+	}
+	p.skullPick = skull.GUID
+	seenNow := seen
+	if !seen {
+		var known bool
+		seenNow, known = p.tankSightStand(ctx, group, skull)
+		if p.stopReason != "" || p.stall != "" {
+			return false
+		}
+		if !known {
+			return fallback()
+		}
+	}
+	if !seenNow {
+		// No point of the path is in the tank's server sight: the order goes out as it stands, and a pull it refuses
+		// through everything stops pull-no-sight, as the navmesh close-in's own bound did.
+		p.sightBlocked = true
+	}
+	p.rec.Event(p.now(), "pull_tank_sight", map[string]any{
+		"group": group, "target": skull.GUID.String(), "seen": seenNow, "yd": dist3(p.self, skull.Pos),
+	})
+	return true
+}
+
 // tankNear says whether the tank's live position stands within yd of at.
 func (p *playRun) tankNear(at Vec3, yd float64) bool {
 	tank, ok := p.tankPos()
@@ -716,7 +941,7 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 				return StateLegWalk
 			}
 		}
-		if p.engageSeen(ctx, members, skull, cross) {
+		if p.engageSeen(ctx, -1, members, skull, cross) {
 			return StateFight
 		}
 		if p.stopReason != "" || p.stall != "" {
@@ -896,17 +1121,21 @@ func (p *playRun) sightRefusals() int {
 }
 
 // engageSeen is engage plus the reaction to the tank's refusal. A refused order means the module did not find the
-// skull from where the tank stands, whatever the agent's own check said: the party steps toward the skull along the
-// navmesh path (refusalStand), the agent waits (bounded) for the tank to come beside the new stand, and engage marks
-// and orders again. Bounded by PlayRefuseTries steps and PlayRefuseTime from the pull's first refusal; spent, with
-// no step left to take, or with the skull already inside the agent's own reach (the remaining retries would not add
-// sight), refusedOut is set and the caller pulls the skull itself (agentPull). A pull that is not refused at all (no
-// answer, no whisper) is engage's as before: the caller's own second try and then the stop.
+// skull from where the tank stands, whatever the agent's own check said. With the server's own sight (the port) the
+// pull runs the same search the sight-before step runs (#262 step 5): the tank is walked along the navmesh path into
+// the server's sight of the skull, and the marks and the order go out again from there. With no answer from the module
+// it is the older step, which is measured FROM the tank (refusalStand): the agent steps toward the skull along the
+// navmesh path, waits (bounded) for the tank to come beside the new stand, and orders again.
+//
+// Bounded by PlayRefuseTries steps and PlayRefuseTime from the pull's first refusal; spent, with no step left to take
+// (or no point on the path the server clears), or with the skull already inside the agent's own reach (the remaining
+// retries would not add sight), refusedOut is set and the caller pulls the skull itself (agentPull). A pull that is not
+// refused at all (no answer, no whisper) is engage's as before: the caller's own second try and then the stop.
 //
 // The bounds are read from the pull's first refusal, not from the order in hand: the module whispers once for a mark
 // it cannot find (live 2026-11-24: the tank refused the first order and stayed silent on the next two, and the run
 // stopped 58 s in against its 90 s bound, the outer two-try loop spending the pull on two silent orders).
-func (p *playRun) engageSeen(ctx context.Context, members []Unit, skull, cross Unit) bool {
+func (p *playRun) engageSeen(ctx context.Context, group int, members []Unit, skull, cross Unit) bool {
 	p.refusedOut, p.reachedOut = false, false
 	start := p.sightRefusals()
 	var first time.Time
@@ -939,7 +1168,26 @@ func (p *playRun) engageSeen(ctx context.Context, members []Unit, skull, cross U
 			p.refusedOut = true
 			return false
 		}
-		stand := p.refusalStand(u.Pos)
+		skull = u
+		if seen, known := p.tankSightStand(ctx, group, u); known {
+			if p.stopReason != "" || p.stall != "" {
+				return false
+			}
+			if seen {
+				// The tank has the server's sight of the skull from where the search ended: the marks and the order go
+				// out again from there.
+				continue
+			}
+			if group >= 0 {
+				// The server sees the skull from no point of the path: no step adds sight, and the agent pulls it.
+				p.sightBlocked = true
+				p.refusedOut = true
+				return false
+			}
+			// A boss and a stranger have no fallback pull of this kind: the older step from the tank is all that is
+			// left, and the module stays the judge of the order.
+		}
+		stand := p.refusalStand(skull.Pos)
 		d := dist3(p.self, stand)
 		if d <= 0.01 {
 			p.refusedOut = true // nothing nearer to try
@@ -958,7 +1206,6 @@ func (p *playRun) engageSeen(ctx context.Context, members []Unit, skull, cross U
 		if p.stopReason != "" {
 			return false
 		}
-		skull = u
 	}
 }
 
@@ -1077,9 +1324,19 @@ func (p *playRun) agentPullFailed(group int, reason string) {
 // agentPullFailedDetail is agentPullFailed with the bound that refused the approach (path, path-length, past-stand,
 // pack-near), so a no-path reads its cause from the trace alone.
 func (p *playRun) agentPullFailedDetail(group int, reason, detail string) {
+	p.agentPullFailedBlocker(group, reason, detail, Unit{}, 0)
+}
+
+// agentPullFailedBlocker is agentPullFailedDetail that also names the hostile a pack-near bound stopped short of: its
+// guid, its entry and how far it stood from the mob (one `blocker` field of the event), so the trace says WHICH pack
+// the ground would have dragged in.
+func (p *playRun) agentPullFailedBlocker(group int, reason, detail string, blocker Unit, yd float64) {
 	d := map[string]any{"group": group, "reason": reason}
 	if detail != "" {
 		d["detail"] = detail
+	}
+	if !blocker.GUID.IsZero() {
+		d["blocker"] = map[string]any{"guid": guidText(blocker.GUID), "entry": blocker.Entry, "yd": yd}
 	}
 	p.rec.Event(p.now(), "agent_pull_failed", d)
 }
@@ -1324,9 +1581,9 @@ func (p *playRun) agentReach(ctx context.Context, group int, skull Unit, wait Ve
 		}
 		if !p.inPullPosition(u) {
 			attacking = false
-			to, path, detail, ok := p.agentApproachPoint(group, u.Pos)
+			to, path, detail, blocker, blockerYd, ok := p.agentApproachPoint(group, u.Pos)
 			if !ok {
-				p.agentPullFailedDetail(group, "no-path", detail)
+				p.agentPullFailedBlocker(group, "no-path", detail, blocker, blockerYd)
 				return Unit{}, false
 			}
 			if dist3(p.self, to) <= PlayArriveYd {
@@ -1335,7 +1592,7 @@ func (p *playRun) agentReach(ctx context.Context, group int, skull Unit, wait Ve
 				if dist3(p.self, u.Pos) <= PlayAgentReachYd {
 					p.agentPullFailed(group, "no-sight-after-approach")
 				} else {
-					p.agentPullFailedDetail(group, "no-path", detail)
+					p.agentPullFailedBlocker(group, "no-path", detail, blocker, blockerYd)
 				}
 				return Unit{}, false
 			}
@@ -1624,34 +1881,36 @@ func (p *playRun) inPullPosition(u Unit) bool {
 // cannot keep that clearance, the best path inside the other bounds is the longest prefix of it that ends a walk
 // margin short of the first hostile: the approach walks that prefix and plans again from there, never through the
 // pack. ok is false when no point inside those bounds exists; detail names the bound that refused it (path,
-// path-length, past-stand, pack-near). path is the checked polyline, ending exactly on to.
-func (p *playRun) agentApproachPoint(group int, at Vec3) (Vec3, []Vec3, string, bool) {
+// path-length, past-stand, pack-near), and blocker is the hostile a pack-near bound stopped short of, with its
+// distance from the mob (the zero unit for every other bound). path is the checked polyline, ending exactly on to.
+func (p *playRun) agentApproachPoint(group int, at Vec3) (Vec3, []Vec3, string, Unit, float64, bool) {
 	p.refreshSelf()
 	stop := PlayAgentReachYd - PlayAgentPullMarginYd
 	route, err := p.ports.Walker.Path(p.self, at)
 	if err != nil || route.Kind != navmesh.RouteComplete || len(route.Points) < 2 {
-		return Vec3{}, nil, "path", false
+		return Vec3{}, nil, "path", Unit{}, 0, false
 	}
 	walked := pathLength(route.Points) - stop
 	if walked > PlayAgentApproachPathYd {
-		return Vec3{}, nil, "path-length", false
+		return Vec3{}, nil, "path-length", Unit{}, 0, false
 	}
 	to := pathEndPoint(route.Points, stop)
 	if dist3(p.pullStand, to) > PlayAgentApproachPastYd {
-		return Vec3{}, nil, "past-stand", false
+		return Vec3{}, nil, "past-stand", Unit{}, 0, false
 	}
-	if enterAt, blocked := p.packOnPath(group, at, route.Points, stop); blocked {
+	if enterAt, blocker, blocked := p.packOnPath(group, at, route.Points, stop); blocked {
+		blockerYd := dist3(blocker.Pos, at)
 		clear := enterAt - PlayAgentPullMarginYd
 		if clear <= PlayArriveYd {
-			return Vec3{}, nil, "pack-near", false
+			return Vec3{}, nil, "pack-near", blocker, blockerYd, false
 		}
 		detour := pathEndPoint(route.Points, pathLength(route.Points)-clear)
 		if dist3(p.pullStand, detour) > PlayAgentApproachPastYd {
-			return Vec3{}, nil, "pack-near", false
+			return Vec3{}, nil, "pack-near", blocker, blockerYd, false
 		}
-		return detour, pathPrefix(route.Points, clear), "", true
+		return detour, pathPrefix(route.Points, clear), "", Unit{}, 0, true
 	}
-	return to, pathPrefix(route.Points, walked), "", true
+	return to, pathPrefix(route.Points, walked), "", Unit{}, 0, true
 }
 
 // packOnPath reports the first live hostile the approach's walked path comes within PlayAgentApproachPackYd of, and
@@ -1664,10 +1923,10 @@ func (p *playRun) agentApproachPoint(group int, at Vec3) (Vec3, []Vec3, string, 
 // already stands inside a hostile's clearance, the path blocks only where it comes nearer to that hostile than the
 // agent stands now (less PlayAgentApproachStartEpsYd); outside it the clearance is the plain radius. A pack the view
 // does not carry is unknown and blocks nothing.
-func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64) (float64, bool) {
+func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64) (float64, Unit, bool) {
 	limit := pathLength(points) - stop
 	if limit <= 0 {
-		return 0, false
+		return 0, Unit{}, false
 	}
 	units := p.ports.World.Units()
 	claim := p.claim(units)
@@ -1685,6 +1944,7 @@ func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64
 		return false
 	}
 	best := math.Inf(1)
+	var blocker Unit
 	for i, u := range units {
 		if u.Dead || u.Friendly || u.Critter || p.partyOwned(u) {
 			continue
@@ -1723,7 +1983,7 @@ func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64
 			continue
 		}
 		if at, ok := pathEnterYd(points, limit, u.Pos, radius); ok && at < best {
-			best = at
+			best, blocker = at, u
 		}
 	}
 	// A hostile the view no longer carries is unknown: its remembered distance goes with it, so a later sighting cannot
@@ -1742,9 +2002,9 @@ func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64
 		}
 	}
 	if math.IsInf(best, 1) {
-		return 0, false
+		return 0, Unit{}, false
 	}
-	return best, true
+	return best, blocker, true
 }
 
 // pathEnterYd is how far along the polyline's first limit yd the path first comes within radius of at.
@@ -2570,9 +2830,8 @@ func (p *playRun) claim(units []Unit) packClaim {
 	return MatchPacks(units, groups, len(groups))
 }
 
-// skullAndCross is the pull's marks: the skull on the first live unit of the plan's kill order that is in the pack,
-// else on the unit nearest the agent; the cross on the nearest other unit. A pack of one unit has no cross.
-func (p *playRun) skullAndCross(members []Unit) (Unit, Unit) {
+// nearestOrder is the pack's units nearest the agent first.
+func (p *playRun) nearestOrder(members []Unit) []Unit {
 	near := append([]Unit(nil), members...)
 	self := p.self
 	slices.SortStableFunc(near, func(a, b Unit) int {
@@ -2585,11 +2844,49 @@ func (p *playRun) skullAndCross(members []Unit) (Unit, Unit) {
 		}
 		return 0
 	})
-	skull := near[0]
+	return near
+}
+
+// killOrder is the pull's kill order over its live members: the plan's KillFirst entries first, each with its nearest
+// unit, then the rest nearest the agent first.
+func (p *playRun) killOrder(members []Unit) []Unit {
+	near := p.nearestOrder(members)
+	var order []Unit
 	for _, e := range p.route.KillFirst {
 		if i := slices.IndexFunc(near, func(u Unit) bool { return u.Entry == e }); i >= 0 {
+			first := near[i]
+			if !slices.ContainsFunc(order, func(o Unit) bool { return o.GUID == first.GUID }) {
+				order = append(order, first)
+			}
+		}
+	}
+	for _, u := range near {
+		if !slices.ContainsFunc(order, func(o Unit) bool { return o.GUID == u.GUID }) {
+			order = append(order, u)
+		}
+	}
+	return order
+}
+
+// skullAndCross is the pull's marks: the skull on the first live unit of the plan's kill order that is in the pack,
+// else on the unit nearest the agent; the cross on the nearest other unit. A pack of one unit has no cross. When the
+// server's own sight picked a skull for this pull (skullPick) and it still lives, the skull is that one; a pick that
+// died is forgotten and the marks fall back to the plan's order.
+func (p *playRun) skullAndCross(members []Unit) (Unit, Unit) {
+	near := p.nearestOrder(members)
+	skull := near[0]
+	if !p.skullPick.IsZero() {
+		if i := slices.IndexFunc(near, func(u Unit) bool { return u.GUID == p.skullPick }); i >= 0 {
 			skull = near[i]
-			break
+		} else {
+			p.skullPick = wire.GUID{}
+		}
+	} else {
+		for _, e := range p.route.KillFirst {
+			if i := slices.IndexFunc(near, func(u Unit) bool { return u.Entry == e }); i >= 0 {
+				skull = near[i]
+				break
+			}
 		}
 	}
 	var cross Unit

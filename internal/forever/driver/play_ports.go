@@ -166,3 +166,19 @@ type Sight interface {
 type Refusals interface {
 	SightRefusals(bot string) int
 }
+
+// ServerSight is the server's own line-of-sight query (the bot module's read-only sight command): the same core call
+// the module makes before it orders a bot onto a mark (RtiTargetValue.h's IsWithinLOSInMap from the BOT's own
+// position). The agent's Sight port is a navmesh ray and not that test, so a pull reads this one where it can: the
+// skull goes on a member the tank really sees, and a tank that sees none is walked into sight of one.
+//
+// known is false when the module cannot answer: no port, an older module without the command, a rate refusal, an
+// access refusal, an unknown unit or an error. The caller then keeps its older flow exactly, and the module's own
+// refusal of the order stays the only verdict on sight.
+type ServerSight interface {
+	// TankSees asks whether the bot sees the unit from where the bot stands, and how far apart they stand.
+	TankSees(bot string, target wire.GUID) (in bool, dist float64, known bool)
+	// PointSees asks whether a spot on the ground sees the unit. at is the eye's point, already raised by the caller
+	// (PlayLosEyeYd); dist is what the server measured and 0 when it refused.
+	PointSees(at Vec3, target wire.GUID) (in bool, dist float64, known bool)
+}

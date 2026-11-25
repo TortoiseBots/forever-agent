@@ -296,6 +296,10 @@ type PlayPorts struct {
 	// refuses ("I dont see my rti attack target") is read at once and the pull steps in toward the skull and orders
 	// again; with none, a refused order waits out the pull window as before.
 	Refusals Refusals
+	// ServerSight is the module's own sight query, optional: with it, the skull goes on the first member of the kill
+	// order the TANK sees, and a tank that sees none is walked along the path into sight of one before the order; with
+	// none (an older module, a rate refusal), the navmesh close-in and the module's refusal are the flow as before.
+	ServerSight ServerSight
 }
 
 // playRun is one player run's machine. It is strictly sequential: one goroutine owns every port call.
@@ -371,7 +375,10 @@ type playRun struct {
 	// pullStand is the plan's pull stand for the group in hand: the agent's own approach never ends further than
 	// PlayAgentApproachPastYd beyond it. agentPulled and agentPulledUnit remember the group and the stranger whose own
 	// pull the agent already made: at most one per group.
-	pullStand       Vec3
+	pullStand Vec3
+	// skullPick is the skull the server's own sight put on a member of the pull in hand (the first of the kill order
+	// the tank sees): the marks go on it while it lives, and a pull whose skull died forgets it.
+	skullPick       wire.GUID
 	agentPulled     map[int]bool
 	agentPulledUnit map[wire.GUID]bool
 	// approachBase is how far the agent's own approach stood from each hostile at the first plan that stood inside its
