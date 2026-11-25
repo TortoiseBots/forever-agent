@@ -26,7 +26,7 @@ import (
 // exitRaidSuiteRegression: at least one raid regressed or its walk failed (spec 2.1).
 const exitRaidSuiteRegression = 24
 
-const raidSuiteUsage = `usage: forever-agent raid-suite (--suite FILE | --dir DIR) --history DIR [--server m910q] [--slot N]
+const raidSuiteUsage = `usage: forever-agent raid-suite (--suite FILE | --dir DIR) --history DIR [--server m910q] [--slot N] [--forever]
     [--only p1,p2] [--speed X] [--gap 60s] [--out DIR] [--dash-url URL] [--dash-user U] [--dash-pass-file PATH] [--dash-insecure-http]
     [--mmaps DIR] [--slots FILE] [--binary PATH] [--compare-only] [--dry-run] [--json]`
 
@@ -74,6 +74,9 @@ type raidSuiteOptions struct {
 	compareOnly      bool
 	dryRun           bool
 	jsonOut          bool
+	// forever says the raids are Forever raid plans: each entry's own server and slot are leased and its walk is
+	// `forever raid-watch`, in this process, on the slot dir `slot setup --forever` builds.
+	forever bool
 }
 
 // raidSuiteFile is the tb-raid-suite v1 file: its raids in walk order.
@@ -83,12 +86,17 @@ type raidSuiteFile struct {
 	Raids   []raidSuiteEntry `json:"raids"`
 }
 
-// raidSuiteEntry is one raid as the suite file (or --dir) names it.
+// raidSuiteEntry is one raid as the suite file (or --dir) names it. A `--forever` entry also names the leader of the
+// module's run and the Forever server and slot its watch leases; its `sql` and `hires` are refused, because a watch
+// places nothing.
 type raidSuiteEntry struct {
-	Plan  string `json:"plan"`
-	Dir   string `json:"dir"`
-	SQL   string `json:"sql"`
-	Hires string `json:"hires"`
+	Plan   string `json:"plan"`
+	Dir    string `json:"dir"`
+	SQL    string `json:"sql"`
+	Hires  string `json:"hires"`
+	Leader string `json:"leader,omitempty"`
+	Server string `json:"server,omitempty"`
+	Slot   string `json:"slot,omitempty"`
 }
 
 // raidSuiteCounts is the report's verdict counts.
@@ -156,6 +164,15 @@ type raidSuite struct {
 	out     string
 	env     walkEnv
 	deps    walkDeps
+	// fworld is the slots table a `--forever` suite resolves its entries against and holds their leases in (nil
+	// without --forever).
+	fworld *autoForeverWorld
+	// holder is this invocation's lease holder: the process and its start instant, so two suites running one plan
+	// never share a holder name and cannot adopt each other's lease.
+	holder string
+	// aborted is set when a cancelled watch did not stop inside raidSuiteWatchStop: it may still sit at its account,
+	// so the suite walks no further raid and the command ends after the report.
+	aborted bool
 	stdout  io.Writer
 	stderr  io.Writer
 }
@@ -171,15 +188,19 @@ func raidSuiteCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		fmt.Fprintln(stderr, "raid-suite never uses slot 3 (owner rule)")
 		return exitSlotRefused
 	}
-	// A Forever server is not this (Turtle) suite's: refuse before the lease.
-	if refused, code := refuseTurtleOnly("raid-suite", o.server, o.slotsPath, scopeForever("raid-suite"), stderr); refused {
-		return code
+	// A Forever server is not a Turtle suite's: refuse before the lease. --forever is the Forever suite, and its
+	// entries carry their own servers.
+	if !o.forever {
+		if refused, code := refuseTurtleOnly("raid-suite", o.server, o.slotsPath, scopeForever("raid-suite"), stderr); refused {
+			return code
+		}
 	}
 	entries, code := raidSuiteEntries(o, stderr)
 	if code != exitOK {
 		return code
 	}
-	s := &raidSuite{o: o, history: slots.ExpandTilde(o.history), stdout: stdout, stderr: stderr}
+	s := &raidSuite{o: o, history: slots.ExpandTilde(o.history), stdout: stdout, stderr: stderr,
+		holder: fmt.Sprintf("raid-suite-%d-%d", os.Getpid(), time.Now().UnixNano())}
 	if o.dryRun {
 		for _, e := range entries {
 			fmt.Fprintln(stdout, s.dryLine(e))
@@ -187,15 +208,27 @@ func raidSuiteCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		return exitOK
 	}
 	if !o.compareOnly {
-		if !slotsSupported() {
-			return slotsUnsupported("raid-suite", stderr)
+		if o.forever {
+			// The autopilot's own lease path, with no new lease code: the entries' servers and slots come from the
+			// slots table, and the gap between two raids is this process's own sleep.
+			w, err := newAutoForeverWorld(o.slotsPath)
+			if err != nil {
+				fmt.Fprintf(stderr, "raid-suite: %v\n", err)
+				return exitUsage
+			}
+			s.fworld = w
+			s.env = walkEnv{sleep: sleepCtx}
+		} else {
+			if !slotsSupported() {
+				return slotsUnsupported("raid-suite", stderr)
+			}
+			env, deps, err := raidSuiteEnv(&raidWalkOptions{slotsPath: o.slotsPath})
+			if err != nil {
+				fmt.Fprintf(stderr, "raid-suite: %v\n", err)
+				return exitUsage
+			}
+			s.env, s.deps = env, deps
 		}
-		env, deps, err := raidSuiteEnv(&raidWalkOptions{slotsPath: o.slotsPath})
-		if err != nil {
-			fmt.Fprintf(stderr, "raid-suite: %v\n", err)
-			return exitUsage
-		}
-		s.env, s.deps = env, deps
 	}
 	out := slots.ExpandTilde(o.out)
 	if out == "" {
@@ -219,6 +252,9 @@ func raidSuiteCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	for i, e := range entries {
 		r, walked := s.raid(ctx, e)
 		rep.Raids = append(rep.Raids, r)
+		if s.aborted {
+			break
+		}
 		// The gap is between two raids: after a walk, when another raid follows and the run was not interrupted.
 		if walked && i < len(entries)-1 && ctx.Err() == nil {
 			_ = s.env.sleep(ctx, o.gap)
@@ -271,6 +307,7 @@ func parseRaidSuiteArgs(args []string, stderr io.Writer) (raidSuiteOptions, int)
 	fs.BoolVar(&o.compareOnly, "compare-only", false, "walk nothing: compare each plan's newest walk in the history with the last good one before it")
 	fs.BoolVar(&o.dryRun, "dry-run", false, "print each raid's tier and until, send nothing")
 	fs.BoolVar(&o.jsonOut, "json", false, "print the report as JSON on stdout (suite.json is written either way)")
+	fs.BoolVar(&o.forever, "forever", false, "walk each raid as a Forever raid watch: every suite entry names its leader, server and slot, the slot is leased and the watch runs in this process")
 	if err := fs.Parse(args); err != nil {
 		return o, exitUsage
 	}
@@ -280,6 +317,10 @@ func parseRaidSuiteArgs(args []string, stderr io.Writer) (raidSuiteOptions, int)
 	}
 	if strings.Contains(o.slot, ",") {
 		fmt.Fprintln(stderr, "raid-suite walks one raid at a time (--slot A,B is raid-walk's two-raid form)")
+		return o, exitUsage
+	}
+	if o.forever && o.dir != "" {
+		fmt.Fprintln(stderr, "raid-suite: --forever walks a suite file's raids: each entry names its leader, server and slot")
 		return o, exitUsage
 	}
 	if (o.suite == "") == (o.dir == "") {
@@ -375,6 +416,25 @@ func raidSuiteEntries(o raidSuiteOptions, stderr io.Writer) ([]raidSuiteEntry, i
 		}
 		seen[e.Plan] = true
 	}
+	if o.forever {
+		for _, e := range raids {
+			// The watch enters the entry's slot as its own character and starts the module's run on the entry's
+			// leader; without either there is nobody to watch. `sql` and `hires` are the Turtle walk's placement
+			// inputs, and a watch places nothing.
+			if e.Leader == "" || e.Server == "" || e.Slot == "" {
+				fmt.Fprintf(stderr, "raid-suite: raid %s: a --forever entry needs leader, server and slot\n", e.Plan)
+				return nil, exitUsage
+			}
+			if e.SQL != "" || e.Hires != "" {
+				fmt.Fprintf(stderr, "raid-suite: raid %s: --forever refuses sql and hires (a watch places nothing)\n", e.Plan)
+				return nil, exitUsage
+			}
+			if e.Slot == "3" {
+				fmt.Fprintf(stderr, "raid-suite: raid %s: slot 3 is never used (owner rule)\n", e.Plan)
+				return nil, exitUsage
+			}
+		}
+	}
 	if len(o.only) == 0 {
 		return raids, exitOK
 	}
@@ -446,14 +506,19 @@ func raidSuitePrepare(e raidSuiteEntry) (raidSuitePrep, error) {
 	return raidSuitePrep{plan: p, tier: tier, source: source, until: until}, nil
 }
 
-// dryLine is one raid of --dry-run: its tier, source and until, and the walk dir it would get.
+// dryLine is one raid of --dry-run: its tier, source and until, and the walk dir it would get. A `--forever` entry's
+// until is the module's own run (the watch decides where the raid ends), so it prints that.
 func (s *raidSuite) dryLine(e raidSuiteEntry) string {
 	prep, err := raidSuitePrepare(e)
 	if err != nil {
 		return fmt.Sprintf("%s: refused: %v", e.Plan, err)
 	}
+	until := prep.until
+	if s.o.forever {
+		until = raidSuiteForeverUntil
+	}
 	dir := filepath.Join(s.history, e.Plan, time.Now().Format(raidSuiteStamp))
-	return fmt.Sprintf("%s tier %d (%s) until %s out %s", e.Plan, prep.tier, prep.source, prep.until, dir)
+	return fmt.Sprintf("%s tier %d (%s) until %s out %s", e.Plan, prep.tier, prep.source, until, dir)
 }
 
 // raid walks one raid (or compares it with the history in --compare-only) and returns its report line. The bool is
@@ -467,6 +532,9 @@ func (s *raidSuite) raid(ctx context.Context, e raidSuiteEntry) (raidSuiteRaidRe
 		return rep, false
 	}
 	rep.Map, rep.Tier, rep.TierSource, rep.Until = prep.plan.Map, prep.tier, prep.source, prep.until
+	if s.o.forever {
+		rep.Until = raidSuiteForeverUntil
+	}
 	if s.o.compareOnly {
 		s.compareHistory(&rep)
 		return rep, false
@@ -474,6 +542,9 @@ func (s *raidSuite) raid(ctx context.Context, e raidSuiteEntry) (raidSuiteRaidRe
 	if ctx.Err() != nil {
 		rep.Verdict, rep.Reason = suiteSkipped, "interrupted"
 		return rep, false
+	}
+	if s.o.forever {
+		return rep, s.walkForever(ctx, e, prep, &rep)
 	}
 	walked := s.walk(ctx, e, prep, &rep)
 	return rep, walked
@@ -507,6 +578,177 @@ func (s *raidSuite) walk(ctx context.Context, e raidSuiteEntry, prep raidSuitePr
 	}
 	verdictOf(rep, cur, filepath.Join(out, "summary.json"), hist, exit)
 	return true
+}
+
+// raidSuiteForeverUntil is a `--forever` entry's until: the module's own run decides where the raid ends, and the
+// watch has no --until at all.
+const raidSuiteForeverUntil = "watch"
+
+// raidSuiteForeverWatch runs one `--forever` raid's watch in this process: forever raid-watch in production, a fake in
+// the tests (it answers the exit code and writes the summary the next step reads).
+var raidSuiteForeverWatch = foreverRaidWatchCmd
+
+// raidSuiteLeaseRenew is how often a running `--forever` watch's lease is renewed: the autopilot's own interval. A
+// watch's budget (two hours by default) outlives the lease's thirty minutes, so the slot would be free to another run
+// while the first still sits at its account. A test shortens it.
+var raidSuiteLeaseRenew = autoForeverLeaseRenew
+
+// raidSuiteLeaseRenewTries is how many consecutive renewal failures a watch survives before its lease counts as lost.
+// At the default five-minute interval three failures span fifteen minutes of the lease's thirty-minute TTL, so one
+// store or lock error that passes is retried and a lease another run really took ends the watch inside its TTL.
+const raidSuiteLeaseRenewTries = 3
+
+// raidSuiteWatchStop bounds the wait for a cancelled watch to return after its lease was lost. The watch is this
+// process's own call, but cancellation is cooperative: a session stuck in a network read would otherwise hold the
+// suite (and its record) forever while another run holds the slot. A test shortens it.
+var raidSuiteWatchStop = time.Minute
+
+// raidSuiteRenewHeld renews the lease this suite holds for one raid; a test replaces it to fail once and pass.
+var raidSuiteRenewHeld = func(w *autoForeverWorld, f autoForeverSlot) error { return w.renewHeld(f) }
+
+// raidSuiteSlotSetup builds one `--forever` raid's slot dir: the autopilot's own prepareForeverAttempt, which takes
+// the entry's lease and runs `slot setup --forever` into <out>/slot. A test replaces it.
+var raidSuiteSlotSetup = func(w *autoForeverWorld, binary string, f autoForeverSlot, out string) error {
+	sup := &autoSupervisor{o: autoOptions{binary: binary, fworld: w}}
+	return sup.prepareForeverAttempt(f, out)
+}
+
+// walkForever runs one raid as a Forever raid watch: the entry's server and slot are resolved against the slots file
+// and leased (autoForeverLeaseTTL), the slot dir is built with `slot setup --forever`, the watch runs in this process
+// and the lease is released however the watch ends. The summary is judged against the history as any walk's. The bool
+// is whether a walk ran (the gap follows it).
+func (s *raidSuite) walkForever(ctx context.Context, e raidSuiteEntry, prep raidSuitePrep, rep *raidSuiteRaidReport) bool {
+	out := filepath.Join(s.history, e.Plan, time.Now().Format(raidSuiteStamp))
+	rep.Out = out
+	args := []string{filepath.Join(slots.ExpandTilde(e.Dir), e.Plan+".json"), "--leader", e.Leader}
+	if ctx.Err() != nil {
+		rep.Verdict, rep.Reason = suiteSkipped, "interrupted"
+		return false
+	}
+	target := raidwalk.AutoTarget{ID: e.Plan, Server: e.Server, Slot: e.Slot, Holder: s.holder, Args: args}
+	f, err := s.fworld.resolve(target)
+	if err != nil {
+		rep.Verdict, rep.Reason = suiteRefused, err.Error()
+		return false
+	}
+	if err := s.fworld.hold(f); err != nil {
+		rep.Verdict, rep.Reason = suiteRefused, err.Error()
+		return false
+	}
+	// The lease is released however the watch ends: a failed setup or a failed watch must not keep the slot.
+	defer s.releaseForever(f)
+	if err := os.MkdirAll(out, 0o700); err != nil {
+		rep.Verdict, rep.Reason = suiteFailed, err.Error()
+		return false
+	}
+	if err := raidSuiteSlotSetup(s.fworld, s.o.binary, f, out); err != nil {
+		rep.Verdict, rep.Reason = suiteFailed, err.Error()
+		return false
+	}
+	watchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan raidSuiteWatchResult, 1)
+	go func() {
+		// A panic in the watch still releases the lease: it is caught here and raised again on the run's own
+		// goroutine, so walkForever's deferred release runs on the way out.
+		defer func() {
+			if r := recover(); r != nil {
+				done <- raidSuiteWatchResult{panicValue: r}
+			}
+		}()
+		done <- raidSuiteWatchResult{exit: raidSuiteForeverWatch(watchCtx, autoForeverCommandArgs(target, f, filepath.Join(out, "slot"), out)[2:], s.stdout, s.stderr)}
+	}()
+	watched, renewErr := s.superviseForeverWatch(cancel, f, done)
+	if watched.panicValue != nil {
+		panic(watched.panicValue)
+	}
+	exit := watched.exit
+	rep.ExitCode = &exit
+	if renewErr != nil {
+		// The watch was taken off a lease it no longer holds: the raid failed, and its report's exit carries a
+		// non-zero code (the suite's regression code) even though the watch itself never answered.
+		failed := exitRaidSuiteRegression
+		rep.ExitCode = &failed
+		rep.Verdict, rep.Reason = suiteFailed, renewErr.Error()
+		return true
+	}
+	cur, err := readRaidSuiteSummary(out)
+	if err != nil {
+		rep.Verdict, rep.Reason = suiteFailed, "no summary: "+err.Error()
+		return true
+	}
+	if exit != exitOK {
+		verdictOf(rep, cur, "", nil, exit)
+		return true
+	}
+	hist, notes, err := raidwalk.ReadHistory(s.history, e.Plan)
+	rep.Notes = append(rep.Notes, notes...)
+	if err != nil {
+		rep.Verdict, rep.Reason = suiteFailed, err.Error()
+		return true
+	}
+	verdictOf(rep, cur, filepath.Join(out, "summary.json"), hist, exit)
+	return true
+}
+
+// raidSuiteWatchResult is one `--forever` watch's answer: its exit code, or the panic it died with (raised again on
+// the run's goroutine after the lease is released).
+type raidSuiteWatchResult struct {
+	exit       int
+	panicValue any
+}
+
+// superviseForeverWatch waits for one `--forever` watch and keeps its lease alive: every raidSuiteLeaseRenew the lease
+// is renewed. A store error that passes is retried, up to raidSuiteLeaseRenewTries consecutive failures: only then
+// is the lease counted lost, and the watch cancelled, because a run may not keep a slot it no longer holds. A
+// definitive answer (the lease is gone, or held by another holder) cancels the watch at once. It
+// returns the watch's own answer and, when the lease was lost, the last renewal's error.
+func (s *raidSuite) superviseForeverWatch(cancel context.CancelFunc, f autoForeverSlot, done <-chan raidSuiteWatchResult) (raidSuiteWatchResult, error) {
+	tick := time.NewTicker(raidSuiteLeaseRenew)
+	defer tick.Stop()
+	failures := 0
+	for {
+		select {
+		case res := <-done:
+			return res, nil
+		case <-tick.C:
+			err := raidSuiteRenewHeld(s.fworld, f)
+			if err == nil {
+				failures = 0
+				continue
+			}
+			failures++
+			fmt.Fprintf(s.stderr, "raid-suite: renew %s/%s (%d/%d): %v\n", f.server, f.slot, failures, raidSuiteLeaseRenewTries, err)
+			// A definitive answer (the lease is gone, or another holder has it) is lost at once: waiting would only
+			// let the watch run on at a slot it no longer holds. A store error that may pass gets the retries.
+			if !autoLeaseLost(err) && failures < raidSuiteLeaseRenewTries {
+				continue
+			}
+			cancel()
+			select {
+			case res := <-done:
+				return res, fmt.Errorf("renew %s/%s: %v (after %d consecutive failures)", f.server, f.slot, err, failures)
+			case <-time.After(raidSuiteWatchStop):
+				// The watch ignored its cancellation: release the lease and stop the suite here, rather than start
+				// another raid beside a session that may still sit at the account (the process end closes it).
+				s.aborted = true
+				return raidSuiteWatchResult{}, fmt.Errorf("renew %s/%s: %v (after %d consecutive failures; the watch did not stop within %s)",
+					f.server, f.slot, err, failures, raidSuiteWatchStop)
+			}
+		}
+	}
+}
+
+// releaseForever releases the lease this suite holds for one raid. A lease that is gone or held by someone else is
+// left alone: the release is this run's own, never another holder's.
+func (s *raidSuite) releaseForever(f autoForeverSlot) {
+	cur, err := s.fworld.store.Get(f.server, f.slot)
+	if err != nil || cur == nil || cur.Holder != f.holder {
+		return
+	}
+	if _, err := s.fworld.store.Release(f.server, f.slot, f.holder, cur.LeaseID, false); err != nil {
+		fmt.Fprintf(s.stderr, "raid-suite: release %s/%s: %v\n", f.server, f.slot, err)
+	}
 }
 
 // walkArgs is the raid-walk command line of one raid. raid-walk's own flag parse gives every default, so the suite

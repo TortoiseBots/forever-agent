@@ -147,6 +147,13 @@ live capture into a fixture:
 3. Read the result once more. A fixture is a permanent public file.
 4. Keep the fixture small: it is meant to exercise one layout, not to archive a run.
 
+# The documentation checker
+
+`make docs-check` reads every Markdown file under `docs/`, not only the user manual: a test-result line must be cut
+down to `RESULT: PASS` (or `FAIL`) and the counts, never the build runner's machine name. Outside the manual the
+checker also refuses an RFC 1918 or link-local address and a home-directory or Windows drive path, so a round's notes
+quote the result and the numbers and nothing about the machine.
+
 # The repository scan
 
 `.github/workflows/privacy-scan.yml` runs nightly on `main` and refuses the tree when it finds

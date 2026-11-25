@@ -288,6 +288,9 @@ func (g *playGroup) Roster() []driver.PartyMember {
 			Pos:       driver.Vec3{float32(m.X), float32(m.Y), float32(m.Z)},
 			Map:       unknownMap,
 		}
+		if s.party.Raid {
+			pm.Subgroup = raidSubgroup(m)
+		}
 		o, inView := s.world.Object(m.GUID)
 		self := m.GUID == s.party.SelfGUID
 		if inView || self {
@@ -441,6 +444,24 @@ func (g *playGroup) Mark(target wire.GUID, mark party.Mark) error {
 
 // Disband uninvites every other member (no disband packet exists) and waits for the group's end.
 func (g *playGroup) Disband() error { return dungeonPortErr(g.s.groupDisband(g.ctx)) }
+
+// ConvertRaid and RaidMove are the raid half of the group port (SPEC #108 R4b): the same two calls the commander's
+// raid watch makes, sent by the session's group layer (CMSG_CONVERT_RAID, CMSG_CHANGE_SUB_GROUP), gated there by the
+// raid's rank rule and read back by the party roster. They are not `.tb` lines, so they never pass the command
+// transport.
+func (g *playGroup) ConvertRaid(ctx context.Context) error {
+	return dungeonPortErr(g.s.convertRaid(g.ctx))
+}
+
+func (g *playGroup) RaidMove(ctx context.Context, name string, subgroup int) error {
+	return dungeonPortErr(g.s.raidMove(g.ctx, wire.EmptyGUID, name, subgroup, ""))
+}
+
+// RaidSwap is the move a full subgroup needs: the member trades subgroups with swapWith (CMSG_SWAP_SUB_GROUPS),
+// gated and read back by the same raidMove.
+func (g *playGroup) RaidSwap(ctx context.Context, name string, subgroup int, swapWith string) error {
+	return dungeonPortErr(g.s.raidMove(g.ctx, wire.EmptyGUID, name, subgroup, swapWith))
+}
 
 // --- Player: the agent's own character ---
 
@@ -852,7 +873,8 @@ func playObjectState(st int8) string {
 
 // compile-time interface checks: the player run's ports must stay satisfiable by these types.
 var (
-	_ driver.Owner      = (*playOwner)(nil)
-	_ driver.GroupPort  = (*playGroup)(nil)
-	_ driver.PlayerPort = (*playPlayer)(nil)
+	_ driver.Owner         = (*playOwner)(nil)
+	_ driver.GroupPort     = (*playGroup)(nil)
+	_ driver.RaidGroupPort = (*playGroup)(nil)
+	_ driver.PlayerPort    = (*playPlayer)(nil)
 )

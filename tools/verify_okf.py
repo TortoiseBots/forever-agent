@@ -66,6 +66,14 @@ Privacy (every file in the bundle, and nothing outside it):
     (<password>, PASSWORD, $ENV, ...) is fine, and a *_file/*_env/*_path key
     names a place or a variable, not a secret.
 
+Privacy (every Markdown file under docs/, the manual included):
+  * no test-result runner field naming a machine: a result line is cut down
+    to RESULT and the counts, never the build runner;
+  * outside the manual, no private-network IPv4 address (RFC 1918 or
+    link-local; the documentation ranges and loopback are fine) and no
+    home-directory or Windows drive path. The manual's own rule
+    above already refuses every non-loopback address and home path.
+
 Every page is LF-only: a CRLF line ending is a problem.
 
 Commands (fenced code blocks and indented code blocks in every .md page):
@@ -154,6 +162,17 @@ HOME_PATH = re.compile(r"/home/")
 ROOT_PATH = re.compile(r"/root/")
 USERS_PATH = re.compile(r"/Users/")
 WINDOWS_PATH = re.compile(r"(?<![A-Za-z])[A-Za-z]:\\")
+
+# A test result line's build runner: the runner field names the machine a test ran on, and a public repository never
+# publishes it (a quoted result is cut down to RESULT and the counts).
+RUNNER_FIELD = re.compile(r"(?<![\w-])" + "runner" + "=" + r"([A-Za-z0-9][A-Za-z0-9_.-]*)")
+# The private networks the tree-wide scan refuses: RFC 1918 and link-local IPv4. Documentation ranges (192.0.2.0/24,
+# 198.51.100.0/24, 203.0.113.0/24) and the unspecified address 0.0.0.0 are placeholders, not a private host.
+PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16")
+)
+# Files under docs/ that are not text: the tree-wide privacy scan skips them.
+BINARY_SUFFIXES = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".ico", ".pdf", ".zip", ".gz", ".tar"}
 
 # An e-mail address; example.invalid and example.com are the placeholders the manual may show.
 EMAIL = re.compile(r"(?<![\w.+-])([A-Za-z0-9._%+-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,}))(?![\w-])")
@@ -701,6 +720,47 @@ def _check_privacy(rel, text, report):
             if _placeholder_value(match.group("value")):
                 continue
             report(rel, number, "secret value in the manual: %s" % match.group(0)[:120])
+
+
+def _check_docs_tree_privacy(root, report):
+    """The tree-wide privacy rule: any Markdown file under docs/ may not name a build runner, and the files outside
+    the manual may not carry a private-network address or a home path either. The manual's own privacy check already
+    refuses every non-loopback address and home path, so those files get the runner rule only (no duplicate report)."""
+    docs = os.path.join(root, "docs")
+    if not os.path.isdir(docs):
+        return
+    bundle_prefix = BUNDLE + os.sep
+    for directory, dirs, files in os.walk(docs):
+        dirs[:] = sorted(d for d in dirs if not d.startswith("."))
+        for name in sorted(files):
+            if not name.endswith(".md") or os.path.splitext(name)[1].lower() in BINARY_SUFFIXES:
+                continue
+            full = os.path.join(directory, name)
+            rel = posixpath.join(*os.path.relpath(full, root).split(os.sep))
+            try:
+                with open(full, encoding="utf-8", errors="replace") as handle:
+                    text = handle.read()
+            except OSError:
+                continue
+            in_bundle = rel.startswith(bundle_prefix)
+            for number, line in enumerate(text.splitlines(), start=1):
+                for match in RUNNER_FIELD.finditer(line):
+                    report(rel, number, "a test-result runner field names a machine under docs: %s" % match.group(1))
+                if in_bundle:
+                    continue
+                for match in IPV4.finditer(line):
+                    address = match.group(1)
+                    try:
+                        parsed = ipaddress.ip_address(address)
+                    except ValueError:
+                        continue
+                    if parsed.is_loopback or not any(parsed in net for net in PRIVATE_NETWORKS):
+                        continue
+                    report(rel, number, "private-network IPv4 address under docs: %s" % address)
+                if HOME_PATH.search(line) or ROOT_PATH.search(line) or USERS_PATH.search(line):
+                    report(rel, number, "absolute home directory path under docs: %s" % line.strip()[:120])
+                if WINDOWS_PATH.search(line):
+                    report(rel, number, "Windows drive path under docs: %s" % line.strip()[:120])
 
 
 def _go_tokens(text):
@@ -1548,6 +1608,7 @@ def check_bundle(root):
         _check_command_coverage(root, registry, report)
     if method_registry is not None:
         _check_method_coverage(root, method_registry, report)
+    _check_docs_tree_privacy(root, report)
 
     return problems
 

@@ -496,6 +496,33 @@ case15() {
   ok "case15 TERM during a run: exit 143, walk dead, no second run"
 }
 
+# case26 (SPEC #108 R4b): a Forever walk is the autopilot's. A cmd file that starts with `forever` — or with the binary
+# and then `forever` — is refused with exit 2 and a line that names the replacement; nothing runs.
+case26() {
+  local d="$T/c26" rc runs
+  mkdir -p "$d"
+  {
+    printf '"forever" "raid-watch" "--plan" "%s" "--leader" "%s" "--out" "%s"\n' "/tmp/raid.json" "Tankbot" "$d/run0"
+  } >"$d/cmd-forever.txt"
+  FAKE_ARGS_LOG="$d/args.log" \
+    "$SUPER_BIN" "$d/cmd-forever.txt" 5 "$d/restart.log" >"$d/stdout.log" 2>"$d/stderr.log"
+  rc=$?
+  runs="$(runs_done "$d/args.log")"
+  (( rc == 2 )) || { bad "case26 exit=$rc want 2"; return; }
+  (( runs == 0 )) || { bad "case26 runs=$runs want 0 (nothing runs)"; return; }
+  grep -qF -e 'use raid-autopilot --forever' "$d/stderr.log" || { bad "case26 stderr missing the replacement line"; return; }
+  # The same command behind the binary: the second word is read too.
+  make_cmd "$d/cmd-binary.txt" forever raid-watch --plan /tmp/raid.json --leader Tankbot --out "$d/run1"
+  FAKE_ARGS_LOG="$d/args.log" \
+    "$SUPER_BIN" "$d/cmd-binary.txt" 5 "$d/restart.log" >"$d/stdout.log" 2>"$d/stderr.log"
+  rc=$?
+  runs="$(runs_done "$d/args.log")"
+  (( rc == 2 )) || { bad "case26 binary exit=$rc want 2"; return; }
+  (( runs == 0 )) || { bad "case26 binary runs=$runs want 0 (nothing runs)"; return; }
+  grep -qF -e 'use raid-autopilot --forever' "$d/stderr.log" || { bad "case26 binary stderr missing the replacement line"; return; }
+  ok "case26 a Forever command is refused with exit 2 and 'use raid-autopilot --forever'"
+}
+
 case7() {
   local d="$T/c7" rc runs d2="$T/c7b" rc2 runs2
   mkdir -p "$d"
@@ -882,6 +909,7 @@ main() {
   if (( run_all )) || [[ "$only" == *" 23 "* ]]; then case23; fi
   if (( run_all )) || [[ "$only" == *" 24 "* ]]; then case24; fi
   if (( run_all )) || [[ "$only" == *" 25 "* ]]; then case25; fi
+  if (( run_all )) || [[ "$only" == *" 26 "* ]]; then case26; fi
   if (( run_all )); then mutation; mutation2; fi
   printf -- '----\nPASS=%d FAIL=%d\n' "$PASS" "$FAIL"
   (( FAIL == 0 ))

@@ -50,8 +50,10 @@ line saying what changed and when.
   `generated.by` other than `forever-agent docs`, an index entry whose description differs from the page's
   own description, a secret, e-mail address, home path or unknown host name, a registered command that no
   page documents as a command, a daemon method missing from `daemon/method-index.md`, and a method or command
-  in the manual that the code no longer registers. A command or method left out on purpose goes in
-  `docs/manual/.undocumented-commands` or `docs/manual/.undocumented-methods` with a reason.
+  in the manual that the code no longer registers. It also reads every Markdown file under `docs/`: a test-result
+  runner field, or (outside the manual) a private-network address or home path, is a problem. A command or method
+  left out on purpose goes in `docs/manual/.undocumented-commands` or `docs/manual/.undocumented-methods` with a
+  reason.
 - A command is documented as a command: a line in a code block (`forever-agent <word>`, or
   `forever-agent forever <word>` for a subcommand), a heading naming it, or a table row naming it. A bare
   backticked word in prose does not count.

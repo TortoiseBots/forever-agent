@@ -1842,6 +1842,17 @@ func pathEndPoint(points []Vec3, yd float64) Vec3 {
 	return points[0]
 }
 
+// orderDamage orders every damage dealer onto a target: a party's two, or a raid's damage dealers and off-tanks. It
+// reports whether every order was sent; the first failure ends the fight.
+func (p *playRun) orderDamage(ctx context.Context, target wire.GUID) bool {
+	for _, name := range p.damageNames() {
+		if !p.order(ctx, name, target) {
+			return false
+		}
+	}
+	return true
+}
+
 // fight runs one fight: the damage dealers are ordered onto the skull once the pack is on the tank, the agent swings
 // himself 1.5 s later, a dead skull moves to the cross and the cross to the next living unit (with both damage dealers
 // re-ordered), the tank is ordered back onto a skull that took the pack off it, and the fight ends when no living unit
@@ -1849,6 +1860,7 @@ func pathEndPoint(points []Vec3, yd float64) Vec3 {
 func (p *playRun) fight(ctx context.Context) string {
 	p.refreshSelf()
 	p.inFight = true
+	p.raidBossFought = false
 	defer func() { p.inFight = false }()
 	start := p.now()
 	deadline := start.Add(p.lim.Fight)
@@ -1864,7 +1876,7 @@ func (p *playRun) fight(ctx context.Context) string {
 			return ""
 		}
 	}
-	if !p.order(ctx, p.cfg.Bots[2], p.skull) || !p.order(ctx, p.cfg.Bots[3], p.skull) {
+	if !p.orderDamage(ctx, p.skull) {
 		return ""
 	}
 	for {
@@ -1885,6 +1897,7 @@ func (p *playRun) fight(ctx context.Context) string {
 		units := p.ports.World.Units()
 		p.sample(units)
 		p.noteDeaths()
+		p.noteRaidBoss(units)
 		p.latchDeadBosses(units)
 		if p.wiped() {
 			return p.endFight(ctx, adds, units)
@@ -1933,7 +1946,7 @@ func (p *playRun) fight(ctx context.Context) string {
 				}
 				// The tank goes with them: a pack member that never came at the party (behind a pillar) is the one
 				// still up, and no TankBreak order will come for a skull nothing targets.
-				if !p.order(ctx, p.cfg.Bots[0], p.skull) || !p.order(ctx, p.cfg.Bots[2], p.skull) || !p.order(ctx, p.cfg.Bots[3], p.skull) {
+				if !p.order(ctx, p.cfg.Bots[0], p.skull) || !p.orderDamage(ctx, p.skull) {
 					return ""
 				}
 				if swinging {
@@ -1988,8 +2001,18 @@ func (p *playRun) endFight(ctx context.Context, adds int, units []Unit) string {
 	p.noteDeaths()
 	boss := p.bossRun
 	down := p.pullDown(units)
+	// A raid never walks past a boss, and a boss that aggroed by itself is fought through the joined fight like any
+	// hostile on the party: the run stops as soon as that fight ends, not after the walk to the boss's own pull. A
+	// party the boss wiped is not a raid that reached it: the wipe goes through the regroup below and is counted.
+	raidBoss := p.cfg.Raid != nil && p.raidBossFought && !p.wiped()
 	p.bossRun = false
+	p.raidBossFought = false
 	p.skull, p.pullSet, p.pullGone = wire.GUID{}, p.pullSet[:0], p.pullGone[:0]
+	if raidBoss {
+		p.rec.Event(p.now(), "raid_boss_reached", map[string]any{"leg": p.legName(), "after_fight": true})
+		p.stop("raid-boss-reached")
+		return ""
+	}
 	// Nobody walks on while a member is down (§3.10): the whole party is the budget's wipe, the character's own death
 	// takes the resurrect wait, and a bot's corpse alone is a regroup that costs no wipe.
 	switch {
@@ -2004,7 +2027,7 @@ func (p *playRun) endFight(ctx context.Context, adds int, units []Unit) string {
 		p.pack = -1
 		return StateWipe
 	}
-	for _, name := range p.cfg.Bots {
+	for _, name := range p.members() {
 		if _, err := p.follow(ctx, name); p.fatal(err) {
 			return ""
 		}
@@ -2452,6 +2475,13 @@ func (p *playRun) withGateBars(d map[string]any) map[string]any {
 // boss is the leg's boss: the run walks to it (the plan's approach points first), waits for a patrolling boss that the
 // plan says waits, and pulls it. A boss the view never shows is not dead, so the run stops (bosses-alive).
 func (p *playRun) boss(ctx context.Context) string {
+	// A player-led raid stops at the boss (SPEC #108 R4b): boss behaviour belongs to the server module's raid watch,
+	// never to the player's group. Onyxia's tunnel leg has no boss, so a run whose last leg is the tunnel ends at DONE.
+	if p.cfg.Raid != nil {
+		p.rec.Event(p.now(), "raid_boss_reached", map[string]any{"leg": p.legName()})
+		p.stop("raid-boss-reached")
+		return ""
+	}
 	leg := p.leg()
 	if leg == nil || leg.Boss == nil {
 		return StateLegWalk
@@ -2621,6 +2651,38 @@ func (p *playRun) nextSkull(units []Unit) (Unit, Unit) {
 func (p *playRun) skullGone(units []Unit) bool {
 	u, ok := unitByGUID(units, p.skull)
 	return !ok || u.Dead
+}
+
+// noteRaidBoss records a leg's boss among the fight's units: one that targets a party member, or one this fight
+// killed. A raid run stops when the fight ends (endFight), so a boss that aggroed by itself never leaves the party
+// fighting alone past it.
+func (p *playRun) noteRaidBoss(units []Unit) {
+	if p.cfg.Raid == nil || p.raidBossFought {
+		return
+	}
+	for _, leg := range p.route.Legs {
+		if leg.Boss == nil {
+			continue
+		}
+		for _, u := range units {
+			if u.Entry != leg.Boss.Entry {
+				continue
+			}
+			// A corpse counts only when the fight itself pulled it (the joined fight's set, or the boss's own pull):
+			// a boss that was dead before this fight is ground the run already passed.
+			if u.Dead {
+				if slices.Contains(p.pullSet, u.GUID) {
+					p.raidBossFought = true
+					return
+				}
+				continue
+			}
+			if p.partyMember(u.Target) {
+				p.raidBossFought = true
+				return
+			}
+		}
+	}
 }
 
 // engaged counts the fight's living units that target a party member, and how many of them the pull did not bring (the

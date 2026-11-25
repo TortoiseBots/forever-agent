@@ -412,7 +412,7 @@ func (p *playRun) resumed() string {
 func (p *playRun) regroupFar() []string {
 	roster := p.roster()
 	var out []string
-	for _, name := range p.cfg.Bots {
+	for _, name := range p.members() {
 		m, ok := findMember(roster, name)
 		if !ok || !m.Online || m.Dead || m.Ghost || m.Map != p.selfMap {
 			continue

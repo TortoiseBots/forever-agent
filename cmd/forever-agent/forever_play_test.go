@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -301,5 +302,71 @@ func TestPlayCmdLastLegDry(t *testing.T) {
 	}
 	if n := strings.Count(stdout, " BOSS "); n != 1 {
 		t.Fatalf("the run entered %d boss states; want one (the cut leg's)\n%s", n, stdout)
+	}
+}
+
+// raidSuitePlan is a twenty-member raid plan the player route takes: every leg of Timbermaw Hold is a pack and a boss, with
+// no timed stand pull, hold or ambush (the Zul'Gurub plan's stand pulls are refused by the player route).
+func raidSuitePlan() string { return filepath.Join("..", "..", "dungeons", "timbermaw_hold.json") }
+
+// raidFlags are a twenty-member raid group's flags: two tanks, three healers and fourteen damage dealers. Every name is
+// letters only, as the server's name rule wants.
+func raidFlags() []string {
+	names := func(prefix string, n int) string {
+		var out []string
+		for i := range n {
+			out = append(out, fmt.Sprintf("%s%c", prefix, 'a'+i))
+		}
+		return strings.Join(out, ",")
+	}
+	return []string{"--tanks", names("Raidtank", 2), "--healers", names("Raidheal", 3), "--dps", names("Raiddps", 14)}
+}
+
+// TestDungeonPlayRaidFlags: the raid flags exclude --bots and each other, and a dry run of a twenty-member raid plan
+// with a twenty-member group stops at its first boss and passes the raid's verdict.
+func TestDungeonPlayRaidFlags(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"bots and the raid flags", append([]string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--bots", playBotsArg}, raidFlags()...), "exclude each other"},
+		{"layout alone", []string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--layout", filepath.Join(t.TempDir(), "layout.txt")}, "names --tanks, --healers and --dps"},
+		{"one damage dealer", []string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--tanks", "Raidtanka,Raidtankb", "--healers", "Raidheala", "--dps", "Raiddpsa"}, "at least 2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			code, _, stderr := runPlayCmd(t, c.args...)
+			if code != exitUsage {
+				t.Fatalf("exit %d stderr %q; want a usage error", code, stderr)
+			}
+			if !strings.Contains(stderr, c.want) {
+				t.Fatalf("stderr = %q; want it to say %q", stderr, c.want)
+			}
+		})
+	}
+	// A layout that names a bot the group does not hold is a usage error before any session.
+	layout := filepath.Join(t.TempDir(), "layout.txt")
+	if err := os.WriteFile(layout, []byte("Notabot 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := append([]string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--layout", layout}, raidFlags()...)
+	if code, _, stderr := runPlayCmd(t, args...); code != exitUsage || !strings.Contains(stderr, "is not in the raid group") {
+		t.Fatalf("an unknown layout name: exit %d stderr %q; want a usage error naming it", code, stderr)
+	}
+	// A raid plan through --bots is the five-bot route's refusal, before anything is sent.
+	if code, _, stderr := runPlayCmd(t, "--dry", "--plan", raidSuitePlan(), "--bots", playBotsArg, "--character", "Hero"); code != driver.ExitPlanRefused {
+		t.Fatalf("exit %d stderr %q; want the plan refused", code, stderr)
+	}
+	// The dry raid: the whole machine over the scripted world, stopping where the raid's own watch takes over. --out
+	// writes the run's record, and the raid's verdict reads it.
+	args = append([]string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--out", t.TempDir()}, raidFlags()...)
+	code, stdout, stderr := runPlayCmd(t, args...)
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	for _, want := range []string{"play: stop raid-boss-reached", "clear=false", "gm_lines=0", "verdict: PASS"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("output has no %q:\n%s", want, stdout)
+		}
 	}
 }

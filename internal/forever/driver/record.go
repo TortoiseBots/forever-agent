@@ -93,6 +93,9 @@ type RunSummary struct {
 	// Decisions is the module's decision rows a run pulled at its end (--decisions-pull): the rows written to
 	// <run_id>.decisions.jsonl, or why the pull wrote none. A run that did not ask for the pull leaves it nil.
 	Decisions *RunDecisions `json:"decisions,omitempty"`
+	// Notes are a player run's own notes, the same lines its trace writes as `note` events: a plan field the run
+	// does not act on, and a raid group's split when it differs from the plan's. Other modes leave it empty.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // PlayRecord is a player run's own counters (#88). Minutes is the run's length on its clock, MaxMinutes and MaxWipes

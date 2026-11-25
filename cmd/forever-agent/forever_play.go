@@ -31,7 +31,7 @@ import (
 const playMilestoneWipes = 2
 
 func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever dungeon-play --plan FILE --bots TANK,HEALER,DPS,DPS [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--max-minutes N] [--max-wipes N] [--last-leg NAME] [--disband] [--out DIR] [--map] [--min-active SEC] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
+	const usage = "usage: forever-agent forever dungeon-play --plan FILE (--bots TANK,HEALER,DPS,DPS | --tanks NAMES --healers NAMES --dps NAMES [--layout FILE]) [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME [--max-minutes N] [--max-wipes N] [--last-leg NAME] [--disband] [--out DIR] [--map] [--min-active SEC] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]"
 	fs := flag.NewFlagSet("forever dungeon-play", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -40,6 +40,10 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 	pf.register(fs, true)
 	plan := fs.String("plan", "", "dungeon plan file (version 1)")
 	bots := fs.String("bots", "", "the four bots the account owns: the tank, the healer and two damage dealers, in that order; the healer must use mana, because the pre-boss rest gate reads its mana pool (a healer without mana stops the run boss-not-ready)")
+	tanks := fs.String("tanks", "", "a player-led raid's tanks, comma separated (the first is the pull tank): with --healers, --dps and --layout this runs the raid plan as a raid group instead of --bots")
+	healers := fs.String("healers", "", "a player-led raid's healers, comma separated (any of them may raise; the first is the rest gate's healer)")
+	dps := fs.String("dps", "", "a player-led raid's damage dealers, comma separated (at least two); the off-tanks fight with them")
+	layoutPath := fs.String("layout", "", "a player-led raid's layout file: one bot per line, its name and the subgroup 1-8 it is moved to before the run")
 	maxMinutes := fs.Int("max-minutes", 0, "the run's budget in minutes; 0 takes the plan's (Ragefire Chasm 90, Wailing Caverns 150, else 120)")
 	maxWipes := fs.Int("max-wipes", playMilestoneWipes, "the run's wipe budget: the (n+1)th wipe ends it; -1 is no budget, 1-20 otherwise")
 	lastLeg := fs.String("last-leg", "", "end the run after this leg's boss: plans are walked whole, and a run cut by hand counted later legs' units as strangers (the route keeps every leg)")
@@ -56,15 +60,42 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
-	if *plan == "" || *bots == "" || common.character == "" {
-		fmt.Fprintln(stderr, "forever dungeon-play: --plan, --bots and --character are required")
+	// The raid flags and --bots exclude each other: they name the same group, one as four slots and one by role.
+	raidRun := *tanks != "" || *healers != "" || *dps != "" || *layoutPath != ""
+	if *bots != "" && raidRun {
+		fmt.Fprintln(stderr, "forever dungeon-play: --bots and the raid flags (--tanks, --healers, --dps, --layout) exclude each other")
 		fmt.Fprintln(stderr, usage)
 		return exitUsage
 	}
-	names, err := splitBots(*bots)
-	if err != nil {
-		fmt.Fprintf(stderr, "forever dungeon-play: %v\n", err)
+	if *plan == "" || (*bots == "" && !raidRun) || common.character == "" {
+		fmt.Fprintln(stderr, "forever dungeon-play: --plan, --character and --bots (or --tanks, --healers and --dps) are required")
+		fmt.Fprintln(stderr, usage)
 		return exitUsage
+	}
+	var names [4]string
+	var raid *driver.PlayRaid
+	if raidRun {
+		if *tanks == "" || *healers == "" || *dps == "" {
+			fmt.Fprintln(stderr, "forever dungeon-play: a raid group names --tanks, --healers and --dps (--layout alone is no group)")
+			fmt.Fprintln(stderr, usage)
+			return exitUsage
+		}
+		raid = &driver.PlayRaid{Tanks: splitList(*tanks), Healers: splitList(*healers), DPS: splitList(*dps)}
+		if *layoutPath != "" {
+			layout, lerr := driver.LoadRaidLayout(*layoutPath)
+			if lerr != nil {
+				fmt.Fprintf(stderr, "forever dungeon-play: --layout: %v\n", lerr)
+				return exitUsage
+			}
+			raid.Layout = layout
+		}
+	} else {
+		parsed, err := splitBots(*bots)
+		if err != nil {
+			fmt.Fprintf(stderr, "forever dungeon-play: %v\n", err)
+			return exitUsage
+		}
+		names = parsed
 	}
 	if *maxMinutes < 0 || *maxMinutes > 24*60 || (*maxWipes != -1 && (*maxWipes < 1 || *maxWipes > 20)) || *minActive < 0 {
 		fmt.Fprintln(stderr, "forever dungeon-play: --max-minutes is 0-1440, --max-wipes -1 (no budget) or 1-20 and --min-active 0 or more")
@@ -77,11 +108,30 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 	if !pf.check("forever dungeon-play", *dry, stderr) {
 		return exitUsage
 	}
-	// The plan is checked before any login: a plan the player route refuses must not cost a session.
-	route, err := driver.LoadPlayRoute(*plan)
+	// The plan is checked before any login: a plan the player route refuses must not cost a session. A raid group
+	// loads the raid plan through the player-led raid's own route, and its group is validated before anything is sent.
+	load := driver.LoadPlayRoute
+	if raidRun {
+		load = driver.LoadPlayRaidRoute
+	}
+	route, err := load(*plan)
 	if err != nil {
 		fmt.Fprintf(stderr, "forever dungeon-play: the plan is refused: %v\n", err)
 		return driver.ExitPlanRefused
+	}
+	if raidRun {
+		if err := driver.ValidatePlayRaid(raid, route.Raid); err != nil {
+			fmt.Fprintf(stderr, "forever dungeon-play: the raid group is refused: %v\n", err)
+			return exitUsage
+		}
+		// The layout is checked against the group before a session is spent: a name the group does not hold, a member
+		// named for two subgroups or a subgroup named more than five times cannot be satisfied by any move.
+		if err := driver.ValidateRaidLayout(raid.Layout, raid, common.character); err != nil {
+			fmt.Fprintf(stderr, "forever dungeon-play: --layout is refused: %v\n", err)
+			return exitUsage
+		}
+		// Every order that names a Bots slot reads the first tank, the first healer and the first two damage dealers.
+		names = [4]string{raid.Tanks[0], raid.Healers[0], raid.DPS[0], raid.DPS[1]}
 	}
 	// A leg name is checked before anything is sent: a run with an unknown one would walk nowhere.
 	if *lastLeg != "" {
@@ -95,6 +145,7 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 		runID = trace.NewRunID(time.Now())
 	}
 	cfg := playConfig(route.Name, names, *maxMinutes, *maxWipes, *lastLeg, *disband, *out, runID)
+	cfg.Raid = raid
 
 	var res *driver.Result
 	if *dry {
@@ -109,7 +160,7 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 			fmt.Fprintln(stderr, err)
 			return exitUsage
 		}
-		if stop, code := runPreflight(ctx, "forever dungeon-play", fpreflight.KindPlay, &pf, fpreflight.PlanLoader(driver.LoadPlayRoute, *plan), common.character, names[:], stdout, stderr); stop {
+		if stop, code := runPreflight(ctx, "forever dungeon-play", fpreflight.KindPlay, &pf, fpreflight.PlanLoader(load, *plan), common.character, playBotNames(cfg), stdout, stderr); stop {
 			return code
 		}
 		budget := *maxMinutes
@@ -155,6 +206,10 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 	findings, jerr := playJudge(res.Trace, *minActive, judged)
 	printPlayJudge(stdout, findings, jerr, judged)
 	pass, reasons := playVerdict(res.Summary, findings, judged && jerr == nil, route.MaxMinutes)
+	if raidRun {
+		// A player-led raid's rule: it stops at a boss or clears, its wipes are inside the budget and it left no GM line.
+		pass, reasons = playRaidVerdict(res.Summary)
+	}
 	if jerr != nil {
 		pass, reasons = false, append(reasons, "judge: "+jerr.Error())
 	}
@@ -208,16 +263,44 @@ func splitBots(s string) ([4]string, error) {
 	return out, nil
 }
 
+// playBotNames are the bots the run forms, in FORM's order: a party's four or a raid's group (its tanks, then its
+// healers, then its damage dealers).
+func playBotNames(cfg driver.PlayConfig) []string {
+	if cfg.Raid == nil {
+		return cfg.Bots[:]
+	}
+	out := append(append([]string{}, cfg.Raid.Tanks...), cfg.Raid.Healers...)
+	return append(out, cfg.Raid.DPS...)
+}
+
 // playDry plays the whole machine over the scripted world built from the plan: the module is the golden fake, every
 // pack and boss of the plan is in the view and the bots cast, so the spell judge has rows to read.
 func playDry(ctx context.Context, route *driver.Route, cfg driver.PlayConfig, character string) *driver.Result {
 	clock := driver.NewVClock(time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC))
-	fake := driver.NewPlayFake(route, clock, character, cfg.Bots[:]...)
-	// The configured healer is a mana user: the pre-boss gate reads its pool (the fake's unscripted bots are rage).
-	fake.SetBotPower(cfg.Bots[1], 0, 1000, 1000)
-	// One class per slot, so the judge has a tank, a healer and two damage dealers to read.
-	for i, class := range [4]string{"Warrior", "Priest", "Rogue", "Mage"} {
-		fake.SetBotClass(cfg.Bots[i], class)
+	fake := driver.NewPlayFake(route, clock, character, playBotNames(cfg)...)
+	if cfg.Raid == nil {
+		// The configured healer is a mana user: the pre-boss gate reads its pool (the fake's unscripted bots are rage).
+		fake.SetBotPower(cfg.Bots[1], 0, 1000, 1000)
+		// One class per slot, so the judge has a tank, a healer and two damage dealers to read.
+		for i, class := range [4]string{"Warrior", "Priest", "Rogue", "Mage"} {
+			fake.SetBotClass(cfg.Bots[i], class)
+		}
+	} else {
+		// A raid's healers are its mana users; each role gets a class, so the judge has one of each to read.
+		for _, name := range cfg.Raid.Healers {
+			fake.SetBotPower(name, 0, 1000, 1000)
+			fake.SetBotClass(name, "Priest")
+		}
+		for _, name := range cfg.Raid.Tanks {
+			fake.SetBotClass(name, "Warrior")
+		}
+		for i, name := range cfg.Raid.DPS {
+			class := "Rogue"
+			if i%2 == 1 {
+				class = "Mage"
+			}
+			fake.SetBotClass(name, class)
+		}
 	}
 	fake.EmitCasts = true
 	fake.SpawnPacks()
@@ -225,6 +308,25 @@ func playDry(ctx context.Context, route *driver.Route, cfg driver.PlayConfig, ch
 	ports := driver.PlayPorts{Owner: fake.Module, Group: fake, Player: fake, World: fake, Walker: fake, Clock: clock,
 		Combat: fake}
 	return driver.Play(ctx, route, ports, cfg)
+}
+
+// playRaidVerdict is a player-led raid's rule (#108 R4b): the run stops at a boss (raid-boss-reached) or clears — the
+// boss fight itself belongs to the module's raid watch — its wipes are inside the milestone's budget and it left no GM
+// line.
+func playRaidVerdict(sum driver.RunSummary) (bool, []string) {
+	var why []string
+	if sum.StopReason != "raid-boss-reached" && !sum.Clear {
+		why = append(why, "not at a boss (stop "+sum.StopReason+")")
+	}
+	if sum.Wipes > playMilestoneWipes {
+		why = append(why, fmt.Sprintf("wipes %d > %d", sum.Wipes, playMilestoneWipes))
+	}
+	if sum.Play == nil {
+		why = append(why, "no-play-record")
+	} else if sum.Play.GMLines != 0 {
+		why = append(why, fmt.Sprintf("gm-lines %d", sum.Play.GMLines))
+	}
+	return len(why) == 0, why
 }
 
 // printPlayResult prints the run's counters; no line names a character or a server.

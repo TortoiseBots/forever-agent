@@ -63,6 +63,9 @@ type PartyMember struct {
 	MaxPower  int
 	Pos       Vec3
 	Map       uint32
+	// Subgroup is the raid frame's subgroup, 1-8, or 0 when the group is a party (or the port cannot say): the
+	// layout reads it to move a member into a subgroup that still has room.
+	Subgroup int
 }
 
 // MemberFacts is one party member as the two sources read it: the roster's last member-stats push, and the client's

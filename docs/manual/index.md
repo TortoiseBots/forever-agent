@@ -59,6 +59,7 @@ When you want to drive a character from a script, read the daemon area; for a du
 * [Run an add-on headless](bots-and-raids/addon-host.md) - Run a real add-on's Lua on a forever serve daemon with addon_start, read what it did with addon_state, tick a manual clock with addon_tick, and stop it with addon_stop.
 * [forever raid-watch](bots-and-raids/raid-watch.md) - Watch a raid the server's own bot module leads, from outside, with budgets and a raid summary at the end.
 * [forever raid-autopilot](bots-and-raids/raid-autopilot.md) - Keep the Forever raids of a walk folder running and restarting without a person watching each one.
+* [raid-suite --forever](bots-and-raids/raid-suite.md) - Walk a suite of Forever raid plans with forever raid-watch, each on its own leased slot, and judge each walk against its history.
 * [Battlegrounds](bots-and-raids/battlegrounds.md) - Queue a character for Warsong Gulch or Arathi Basin with the scripted act steps, or watch a whole match and read its report card.
 * [fleet](bots-and-raids/fleet.md) - Keep several Forever daemons online at once, one per account, from a single supervisor.
 * [Watch the agent in 3D](bots-and-raids/3d-view.md) - Open the dashboard's 3D view, follow a running serve or replay a recorded run, understand the markers and the camera, and know what stage 1 does not draw yet.

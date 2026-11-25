@@ -8,6 +8,9 @@
 #   (see tests/raid-zg-walk23/cmd-*.txt). Its --out DIR names the first run's folder.
 #   Read as words, never eval'd: plain words and "double-quoted" words only. $, backticks, backslashes, ;, &, |,
 #   <, >, parentheses, quotes other than double, globs, ~, # and a second line are refused (exit 2, nothing runs).
+#   This supervisor is Turtle-only: a command that starts with `forever` (or with the binary and then `forever`) is
+#   refused with exit 2 and "use raid-autopilot --forever" — a Forever walk has no restart, the autopilot is its
+#   supervisor.
 # Runs the command, waits for it, reads its exit code. The run's own stdout+stderr pass through to ours (so the
 # operator sees the refusal) via a pipe to `tee`; the backgrounded pipeline's exit-status file reports the walk's
 # own code (`wait` on a background pipeline only reports tee's, so PIPESTATUS is unavailable there).
@@ -151,6 +154,15 @@ read_cmd() {
   [[ "$text" != *$'\n'* ]] || refuse_cmd "more than one line"
   parse_cmd_words "$text"
   (( ${#CMD_ARGV[@]} > 0 )) || { echo "walk-super: empty command in $cmdfile" >&2; exit 2; }
+  # A Forever walk is the autopilot's (SPEC #108 R4b): a `forever raid-watch` has no placement and no --from, so the
+  # restart this supervisor rebuilds would be a different run. The first two words are read, so both `forever ...`
+  # and `<binary> forever ...` are refused, at startup and on every re-read.
+  local w
+  for w in "${CMD_ARGV[@]:0:2}"; do
+    if [[ "$w" == "forever" ]]; then
+      refuse_cmd "a Forever walk is not this supervisor's: use raid-autopilot --forever"
+    fi
+  done
   ARGS=("${CMD_ARGV[@]}")
 }
 read_cmd

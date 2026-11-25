@@ -117,14 +117,15 @@ func (p *playRun) deadWait(ctx context.Context) string {
 	}
 }
 
-// healerCanRez says whether the party's healer (the second bot) stands alive and no ghost: the member a dead character
-// and a regroup wait for.
+// healerCanRez says whether a healer stands alive and no ghost: the member a dead character and a regroup wait for. A
+// five-bot party's healer is its second bot; a raid's is any of its healers.
 func (p *playRun) healerCanRez() bool {
-	if len(p.cfg.Bots) < 2 {
-		return false
+	for _, name := range p.healerNames() {
+		if m, ok := p.member(name); ok && m.Online && !m.Dead && !m.Ghost {
+			return true
+		}
 	}
-	m, ok := p.member(p.cfg.Bots[1])
-	return ok && m.Online && !m.Dead && !m.Ghost
+	return false
 }
 
 // afterDeath is where the run goes once the character is up: back into the fight it died in while that fight is still
@@ -455,7 +456,7 @@ func (p *playRun) playerErr(err error, reason string) {
 // finish while it waits for a rez, and it may stand up again before wipe() reads the roster, so the observation is kept
 // until wipe() spends it (D-14's budget must not miss it).
 func (p *playRun) latchWipe() {
-	if p.wiped() || (p.ports.Player.Phase() != PhaseAlive && len(p.downBots()) == len(p.cfg.Bots)) {
+	if p.wiped() || (p.ports.Player.Phase() != PhaseAlive && len(p.downBots()) == len(p.members())) {
 		p.wipeLatched = true
 	}
 }
@@ -478,7 +479,7 @@ func (p *playRun) wiped() bool {
 func (p *playRun) downBots() []string {
 	roster := p.roster()
 	var out []string
-	for _, name := range p.cfg.Bots {
+	for _, name := range p.members() {
 		if m, ok := findMember(roster, name); !ok || m.Dead || m.Ghost {
 			out = append(out, name)
 		}
@@ -505,7 +506,7 @@ func (p *playRun) recoverPending() []recoverWait {
 		out = append(out, recoverWait{why: "the agent is " + string(phase)})
 	}
 	roster := p.roster()
-	for _, name := range p.cfg.Bots {
+	for _, name := range p.members() {
 		m, ok := findMember(roster, name)
 		switch {
 		case !ok:

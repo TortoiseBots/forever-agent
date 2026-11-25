@@ -258,6 +258,9 @@ type PlayConfig struct {
 	Plan string
 	// Bots are the four bots: the tank, the healer and two damage dealers, in that order (D-2).
 	Bots [4]string
+	// Raid is the raid group when the run leads one instead of the four bots: the command fills Bots from it (the first
+	// tank, the first healer and the first two damage dealers), so every order that names a Bots slot keeps working.
+	Raid *PlayRaid
 	// MaxMinutes overrides the plan's budget; 0 takes the route's (playMinutes).
 	MaxMinutes int
 	// MaxWipes is the wipe budget (D-14): 0 takes 2, a negative value is no budget.
@@ -359,6 +362,9 @@ type playRun struct {
 	pack     int
 	bossRun  bool
 	bossGUID wire.GUID
+	// raidBossFought says a raid's fight has run into a leg's boss (one that aggroed by itself, or the joined fight's
+	// set): the fight's end stops the run raid-boss-reached.
+	raidBossFought bool
 	// pullWalk says the walk in progress is a pull's own approach (to the plan's stand, or a retry's step): the walk
 	// skips a pack in the way and the patrol hold, so a pull never starts a nested one.
 	pullWalk bool
@@ -472,6 +478,11 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 		}
 	}
 	p.notes = append(p.notes, route.Notes...)
+	// A player-led raid's split is the owner's, never the plan's placeholder: a group that differs is one note (a
+	// trace event, and a line in the summary), not a refusal.
+	if note := raidSplitNote(cfg.Raid, route.Raid); note != "" {
+		p.notes = append(p.notes, note)
+	}
 	p.rec = p.openRecorder()
 	for _, note := range p.notes {
 		p.rec.Event(p.start, "note", map[string]any{"text": note})
@@ -548,9 +559,11 @@ func (p *playRun) openRecorder() *Recorder {
 	if runID == "" {
 		runID = "play"
 	}
-	party := make([]trace.Member, 0, len(p.cfg.Bots))
-	for i := range p.cfg.Bots {
-		party = append(party, trace.Member{Name: playSlot(i), Role: traceRole(i)})
+	names := p.members()
+	party := make([]trace.Member, 0, len(names))
+	for _, name := range names {
+		slot, role := p.slotOf(name)
+		party = append(party, trace.Member{Name: slot, Role: role})
 	}
 	rec, err := NewPlayRecorder(p.cfg.Out, runID, p.cfg.Plan, p.route.Map, 0, p.start, party)
 	if err != nil {
@@ -606,6 +619,7 @@ func (p *playRun) finish() {
 	p.rec.sum.Bosses = p.bosses
 	p.rec.sum.Wipes = p.wipes
 	p.rec.sum.Deaths = p.deaths
+	p.rec.sum.Notes = append([]string(nil), p.notes...)
 	p.drainCombat()
 	p.rec.PullAbort(p.now(), "stop") // a stop inside a pull leaves no pull_start without its pull_end
 	p.rec.sum.Play = p.playRecord(p.now())
@@ -691,10 +705,12 @@ func (p *playRun) groupShape() string {
 	return ""
 }
 
-// form adds the owner's four bots in order, sets the loot method and reads the tank's health. A refusal stops the run
-// by its code: a run that formed half a group would fight with half a group.
+// form adds the owner's bots in order, sets the loot method and reads the tank's health. A refusal stops the run by
+// its code: a run that formed half a group would fight with half a group. A raid is converted once its first bot stands
+// online — the core refuses a sixth member of a party — and its layout is applied after the last add.
 func (p *playRun) form(ctx context.Context) string {
-	for _, name := range p.cfg.Bots {
+	converted := p.cfg.Raid == nil
+	for i, name := range p.members() {
 		rep, err := p.add(ctx, name)
 		switch {
 		case err == nil:
@@ -723,6 +739,15 @@ func (p *playRun) form(ctx context.Context) string {
 			p.stop("form")
 			return ""
 		}
+		if !converted && i == 0 {
+			if !p.convertRaid(ctx) {
+				return ""
+			}
+			converted = true
+		}
+	}
+	if p.cfg.Raid != nil && !p.applyRaidLayout(ctx) {
+		return ""
 	}
 	if err := p.ports.Group.LootMethod(PlayLootMethod, PlayLootThreshold); err != nil {
 		switch {
@@ -1337,7 +1362,7 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 			return true
 		}
 		// A bot that came back starts its timers afresh the next time it falls behind.
-		for _, name := range p.cfg.Bots {
+		for _, name := range p.members() {
 			if !slices.Contains(far, name) {
 				delete(p.farSince, name)
 				delete(p.farStopAt, name)
@@ -1653,7 +1678,7 @@ func (p *playRun) leave(ctx context.Context) string {
 		}
 		p.rec.Event(p.now(), "disband", nil)
 	}
-	for _, name := range p.cfg.Bots {
+	for _, name := range p.members() {
 		if _, err := p.logout(ctx, name); p.fatal(err) {
 			return ""
 		}
@@ -1830,9 +1855,9 @@ func (p *playRun) member(name string) (PartyMember, bool) {
 	return PartyMember{}, false
 }
 
-// isBot says whether the name is one of the run's four bots.
+// isBot says whether the name is one of the run's bots (a party's four or the raid's group).
 func (p *playRun) isBot(name string) bool {
-	for _, b := range p.cfg.Bots {
+	for _, b := range p.members() {
 		if strings.EqualFold(b, name) {
 			return true
 		}
@@ -1844,7 +1869,7 @@ func (p *playRun) isBot(name string) bool {
 func (p *playRun) farBots(yd float64) []string {
 	roster := p.roster()
 	var out []string
-	for _, name := range p.cfg.Bots {
+	for _, name := range p.members() {
 		m, ok := findMember(roster, name)
 		if !ok || m.Map != p.selfMap || dist3(m.Pos, p.self) > yd {
 			out = append(out, name)
@@ -1857,7 +1882,7 @@ func (p *playRun) farBots(yd float64) []string {
 func (p *playRun) missingBots(mapID uint32) []string {
 	roster := p.roster()
 	var out []string
-	for _, name := range p.cfg.Bots {
+	for _, name := range p.members() {
 		if m, ok := findMember(roster, name); !ok || m.Map != mapID {
 			out = append(out, name)
 		}

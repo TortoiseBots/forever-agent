@@ -42,15 +42,12 @@ func playSlot(i int) string {
 	return "dps2"
 }
 
-// slot is the trace's name for a character of the run: a bot's slot (tank, heal, dps1, dps2), or "agent" for anything
-// else (the player's own character). The record never carries a character's name.
+// slot is the trace's name for a character of the run: a bot's slot (tank, heal, dps1, dps2, or a raid's tank1,
+// heal1, dps1 and so on), or "agent" for anything else (the player's own character). The record never carries a
+// character's name.
 func (p *playRun) slot(name string) string {
-	for i, b := range p.cfg.Bots {
-		if strings.EqualFold(b, name) {
-			return playSlot(i)
-		}
-	}
-	return "agent"
+	slot, _ := p.slotOf(name)
+	return slot
 }
 
 // slots is slot over a list.
@@ -132,13 +129,12 @@ func (p *playRun) sample(units []Unit) {
 	p.refreshSelf()
 	var bots []PlayFrameBot
 	for _, m := range p.roster() {
-		for i, name := range p.cfg.Bots {
-			if !strings.EqualFold(m.Name, name) {
-				continue
-			}
-			w := p.who[strings.ToLower(name)]
-			bots = append(bots, PlayFrameBot{Member: m, Name: playSlot(i), Role: traceRole(i), Class: w.class, Level: w.level, Combat: p.inFight || attacked[m.GUID]})
+		if !p.isBot(m.Name) {
+			continue
 		}
+		slot, role := p.slotOf(m.Name)
+		w := p.who[strings.ToLower(m.Name)]
+		bots = append(bots, PlayFrameBot{Member: m, Name: slot, Role: role, Class: w.class, Level: w.level, Combat: p.inFight || attacked[m.GUID]})
 	}
 	self := PlaySelf{GUID: p.ports.Group.Leader().String(), Pos: p.self, Map: p.selfMap, Alive: p.ports.Player.Phase() == PhaseAlive}
 	if p.rec.PlayFrame(p.now(), self, bots, units) {
@@ -191,8 +187,8 @@ func (p *playRun) drainCombat() {
 // copied only when it carries a name.
 func (p *playRun) redactRows(rows []json.RawMessage) []json.RawMessage {
 	names := map[string]string{}
-	for i, b := range p.cfg.Bots {
-		names[b] = playSlot(i)
+	for _, b := range p.members() {
+		names[b] = p.slot(b)
 	}
 	for _, m := range p.roster() {
 		if p.slot(m.Name) == "agent" {
