@@ -262,6 +262,9 @@ type Fake struct {
 	DecisionsRunID       string
 	// DecisionsSkipped is how many rows the fake module's answer counted but left out (a control byte in a text).
 	DecisionsSkipped int
+	// DecisionsBlock makes every decisions read wait this long for an answer it never sends, until the call's own
+	// context ends: a slow module read, as StatusBlock is for the status read.
+	DecisionsBlock time.Duration
 	// RunIDValue is the module's run id the started run's record prints (run=); empty is "1001".
 	RunIDValue string
 	// OutOfView is the watch's usual observer: neither in the party nor in view of it, so PlayerGUID answers no
@@ -1287,6 +1290,15 @@ func (f *Fake) RunDecisions(ctx context.Context, since int, hasSince bool) (tbcm
 	f.decisionCalls++
 	if err := ctxErr(ctx); err != nil {
 		return tbcmd.DecisionsPull{}, err
+	}
+	if f.DecisionsBlock > 0 {
+		t := time.NewTimer(f.DecisionsBlock)
+		defer t.Stop()
+		select {
+		case <-ctx.Done():
+			return tbcmd.DecisionsPull{}, ctx.Err()
+		case <-t.C:
+		}
 	}
 	if f.CallDelay > 0 {
 		f.Clock.Advance(f.CallDelay)

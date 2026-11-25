@@ -102,7 +102,7 @@ func TestPullDecisionsPages(t *testing.T) {
 	if len(pull.Rows) != 3 || pull.Rows[0].Seq != 1 || pull.Rows[2].Seq != 3 {
 		t.Fatalf("rows: %+v", pull.Rows)
 	}
-	if pull.Pages != 2 || pull.Truncated || pull.Run != "r-20261124T190001-a1b2" || pull.Capture != "cap-7" {
+	if pull.Pages != 2 || pull.PageBound || pull.Run != "r-20261124T190001-a1b2" || pull.Capture != "cap-7" {
 		t.Fatalf("pull: %+v", pull)
 	}
 }
@@ -123,8 +123,8 @@ func TestPullDecisionsBound(t *testing.T) {
 	if calls != decisionsMaxPages {
 		t.Fatalf("%d call(s), want the bound %d", calls, decisionsMaxPages)
 	}
-	if len(pull.Rows) != decisionsMaxPages || !pull.Truncated || pull.Note == "" {
-		t.Fatalf("pull: %d row(s), truncated=%v, note=%q", len(pull.Rows), pull.Truncated, pull.Note)
+	if len(pull.Rows) != decisionsMaxPages || !pull.PageBound || pull.Note == "" {
+		t.Fatalf("pull: %d row(s), page_bound=%v, note=%q", len(pull.Rows), pull.PageBound, pull.Note)
 	}
 }
 

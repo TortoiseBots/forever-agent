@@ -135,7 +135,7 @@ func decisionsPullModule(ctx context.Context, o decisionsPullOptions, stdout, st
 		} else {
 			fmt.Fprintf(stdout, "decisions: pulled %d row(s) in %d page(s) (%d bytes) into %s\n", d.Rows, d.Pages, d.Bytes, report.DecisionsFile)
 		}
-		if d.Truncated && d.Note != "" {
+		if d.PageBound && d.Note != "" {
 			fmt.Fprintf(stderr, "decisions: %s\n", d.Note)
 		}
 		return exitOK

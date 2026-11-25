@@ -144,8 +144,9 @@ type DecisionsPull struct {
 	Next int
 	// Skipped counts the rows the pull could not decode (an escaped control byte in a free text) and left out.
 	Skipped int
-	// Truncated says the pull stopped at its own page bound while the module still held newer rows.
-	Truncated bool
+	// PageBound says the pull stopped at its own page bound while the module still held newer rows. Nothing is lost:
+	// the next read continues above the cursor.
+	PageBound bool
 	// Note says why the pull stopped early (a page with no row, or the page bound); empty when it read to the end.
 	Note string
 }
@@ -183,7 +184,7 @@ func (c *Client) RunDecisions(ctx context.Context, target string, since int, has
 // PullDecisions reads a run's decision rows to the module's end, one page at a time. limit is the page size it asks
 // for (0 takes the default page, the command's largest); since/hasSince start it above an earlier cursor. The pull
 // follows next=, asks never more than the command allows and stops on more=no, on a page that brought no row, or at
-// decisionsMaxPages (Truncated then says so).
+// decisionsMaxPages (PageBound then says so).
 //
 // Every page must agree with the protocol, or the pull is refused rather than written: a page asked for rows above a
 // cursor repeats that cursor, next= is the newest row read (and the cursor asked for when no row came back), a later
@@ -281,7 +282,7 @@ func (c *Client) PullDecisions(ctx context.Context, target string, since int, ha
 		}
 		cursor, hasCursor = rep.Header.Next, true
 	}
-	pull.Truncated = true
+	pull.PageBound = true
 	pull.Note = fmt.Sprintf("the pull stopped at its own bound of %d pages", decisionsMaxPages)
 	return pull, nil
 }

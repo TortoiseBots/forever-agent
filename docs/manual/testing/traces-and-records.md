@@ -118,10 +118,15 @@ A watch can read the decision rows the bot module records for its run: `forever 
 `--decisions-pull` (off by default, needs `--out`). Only the watch pulls; a player-led run has no capture to read.
 The module keeps a run's capture only while the run is there and erases it when the run ends, so the rows go beside
 the record as `<run_id>.decisions.jsonl`, one JSON object per line and oldest first, the same one-object-per-line form
-the combat log uses, written while the run lives: the watch reads the new rows on a stated interval and once more just
-before it stops the run. A run that was not watched by this watch cannot be read afterwards; its rows are in the
-module's own folder. The summary's `decisions` block counts them (`rows`, `pages`, `bytes`, `skipped`) or says why none
-came (`note`), and says `truncated` when the module's window had already dropped older rows.
+the combat log uses, written while the run lives: the watch reads the new rows after every status poll, at least 2 s
+apart, and once more just before it stops the run. A run that was not watched by this watch cannot be read afterwards;
+its rows are in the module's own folder. A run that ends by itself is one poll ahead of the last read, and the module
+erases the capture with the end: the rows after the last one read are gone, so at most one poll's rows are missing,
+and the summary's `note` says so and names the last `seq` that was read, or says that no row was read. The summary's
+`decisions` block counts them (`rows`, `pages`, `bytes`, `skipped`) or says why none came (`note`), and says
+`page_bound` when one read stopped at its own 25-page bound: the next read continues above the cursor then, so nothing
+is lost. A gap that the module's own window made (a watch that attaches to a run already past its 512 rows) is not
+detected, and `rows` counts only what the file holds.
 
 | Key | Type | Meaning |
 |---|---|---|
@@ -145,10 +150,12 @@ The read is bounded and paged, and every page fits the shared 64 KiB reply bound
 a sequence 25 at a time by default and follows the module's own next cursor; a page the collector refuses for its
 length is asked again with half the rows, down to one, so a run whose notes are unusually long still reads whole. It
 stops on the module's "no more" answer, when a page brings no row, or at its own bound of 25 pages (the block says
-`truncated` then). A failed read never fails the run: the block's note names the reason (`not supported by this
-module build`, a refusal such as `capture-off`, `no-capture` or `no-run`, the unconfirmed command permission, or a
-lost link), and the run's own stop reason and exit code stand. A newer run of the same leader answering in the
-watched run's place is refused: the watch stops reading rather than write another run's rows under this run's file.
+`page_bound` then, and the next read goes on above the last row). A failed read never fails the run: the block's note
+names the reason (`not supported by this module build`, a refusal such as `capture-off`, `no-capture` or `no-run`, the
+unconfirmed command permission, or a lost link), and the run's own stop reason and exit code stand; a later read that
+answers clears that note, so a run whose reads recovered carries no failure note. A newer run of the same leader
+answering in the watched run's place is refused: the watch stops reading rather than write another run's rows under
+this run's file.
 
 The read is also a command of its own, for a live run:
 

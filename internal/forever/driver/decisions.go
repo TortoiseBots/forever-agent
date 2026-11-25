@@ -3,9 +3,10 @@ package driver
 // The decisions pull: a watch whose command turned it on (--decisions-pull, off by default) reads the module's
 // decision rows of the live run while it is still there and appends them beside the record as
 // <run_id>.decisions.jsonl, one JSON object per line, the form the combat log uses. The module erases a run's capture
-// when the run ends, so a read after the end answers no-capture: the watch reads incrementally during the run, reads
-// once more just before it stops the run, and never reads after. A failed read is a warning in the summary and one
-// log line; it never fails the run and never changes its exit code.
+// when the run ends, so a read after the end answers no-capture: the watch reads after every status poll while the run
+// lives, reads once more just before it stops the run, and never reads after. A run that ends by itself is one poll
+// ahead of the last read, so the rows after it are gone: the summary says so and names the last sequence read. A
+// failed read is a warning in the summary and one log line; it never fails the run and never changes its exit code.
 
 import (
 	"context"
@@ -13,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
@@ -22,14 +24,20 @@ import (
 // DecisionsSuffix names the run's decision rows file beside the trace and the summary.
 const DecisionsSuffix = ".decisions.jsonl"
 
-// decisionsPullTimeout bounds one decisions read: the typed layer pages it, and a read that has not finished by then
-// (a lost link, a stuck command) is a warning and the watch goes on.
+// decisionsPullTimeout bounds one decisions read of the watch's poll: the typed layer pages it, and a read that has not
+// finished by then (a lost link, a stuck command) is a warning and the watch goes on. The read before the stop has its
+// own decisionsFinalTimeout.
 const decisionsPullTimeout = 30 * time.Second
 
-// decisionsReadEvery is how often the watch reads the rows a live run added above its cursor. The module's capture
-// keeps the newest 512 rows, and a run adds them at a fraction of this rate, so a read this often never outruns it;
-// the interval is also far above the command's own rate limit, so an incremental read never floods the channel.
-const decisionsReadEvery = 15 * time.Second
+// decisionsReadGap is the shortest space between two decisions reads. The watch asks for a read on every status poll,
+// so the gap between the last read and a run that ends by itself is at most one poll; this floor keeps a fast poll
+// from hammering the module, which has no rate limit on this read (the access check is its whole guard).
+const decisionsReadGap = 2 * time.Second
+
+// decisionsFinalTimeout bounds the watch's last decisions read, the one just before the stop: the rows that arrived
+// since the last poll are only readable while the run lives, and a slow read must not eat into the stop's own budget,
+// so it has this short bound of its own and the stop goes out when it ends.
+const decisionsFinalTimeout = 10 * time.Second
 
 // ErrDecisionsNoPermission says the command channel did not confirm this account's command permission, so the read
 // never went out. A player account sees it: every `.tb` line needs that permission, and a player run never asks for
@@ -40,11 +48,13 @@ var ErrDecisionsNoPermission = errors.New("driver: the command permission is not
 // something out, why. It carries no character name: the note is one of this file's own words, never the module's
 // error text (which may name a leader).
 type RunDecisions struct {
-	Rows      int    `json:"rows"`
-	Pages     int    `json:"pages,omitempty"`
-	Bytes     int64  `json:"bytes,omitempty"`
-	Skipped   int    `json:"skipped,omitempty"`
-	Truncated bool   `json:"truncated,omitempty"`
+	Rows    int   `json:"rows"`
+	Pages   int   `json:"pages,omitempty"`
+	Bytes   int64 `json:"bytes,omitempty"`
+	Skipped int   `json:"skipped,omitempty"`
+	// PageBound says a read stopped at its own page bound while the module still held newer rows. The next read
+	// continues above the cursor, so nothing is lost; it never means the module's window dropped rows.
+	PageBound bool   `json:"page_bound,omitempty"`
 	Note      string `json:"note,omitempty"`
 }
 
@@ -166,17 +176,39 @@ func decisionsWarning(err error) (note, log string) {
 	return "the pull failed", err.Error()
 }
 
-// watchPullDecisions reads the decision rows above the watch's cursor and appends them to the run's file. It is
-// called on the watch's interval and once more just before the stop: the module erases a run's capture when it ends,
-// so a run that has already reached done or stopped has nothing newer to read, and a read that fails is one warning
-// that never ends the watch.
-func (r *Run) watchPullDecisions(ctx context.Context, w *watchRun) {
-	if !r.cfg.PullDecisions || r.cmd == nil || w.decisionsOff || !w.have {
+// decisionsSelfEndNote words the summary's note for a run that ended without this watch stopping it: the module erased
+// the capture with the end, so the rows after the last read are gone. seq/has name the last sequence the watch read.
+func decisionsSelfEndNote(seq int, has bool) string {
+	if !has {
+		return "the run ended by itself before any row was read (the module erased its capture with the run)"
+	}
+	return fmt.Sprintf("the run ended by itself, so rows after seq %d may be missing (the module erased its capture with the run)", seq)
+}
+
+// decisionsRunEnded notes the rows a run that ended without this watch stopping it leaves unread: the module erased
+// its capture with the end, so the rows after the last read are gone. The note stands in the summary beside the
+// counts, once however often the end is seen, and follows any standing note the reads left (a replaced run): a read
+// that failed does not replace it either, its words come after it.
+func (r *Run) decisionsRunEnded(w *watchRun) {
+	if !r.cfg.PullDecisions || r.rec == nil || w.decisionsEnded {
 		return
 	}
-	if w.state == "done" || w.state == "stopped" {
-		// The run ended by itself (or was stopped elsewhere): its capture went with the end, and nothing newer can
-		// be read. The reads made while it lived are the record of what it did.
+	w.decisionsEnded = true
+	note := decisionsSelfEndNote(w.decisionsSeq, w.decisionsHas)
+	if w.decisionsNote != "" {
+		w.decisionsNote += "; " + note
+		return
+	}
+	w.decisionsNote = note
+}
+
+// watchPullDecisions reads the decision rows above the watch's cursor and appends them to the run's file. The watch
+// calls it after every status poll, at least decisionsReadGap apart, and once more just before the stop (with
+// decisionsFinalTimeout): the module erases a run's capture when it ends, so a run that reached done or stopped by
+// itself is one poll ahead of the reads and the summary names the last sequence read. A read that fails is one warning
+// that never ends the watch, and the next good read clears it.
+func (r *Run) watchPullDecisions(ctx context.Context, w *watchRun, bound time.Duration) {
+	if !r.cfg.PullDecisions || r.cmd == nil || w.decisionsOff || !w.have {
 		return
 	}
 	if r.rec == nil {
@@ -186,8 +218,14 @@ func (r *Run) watchPullDecisions(ctx context.Context, w *watchRun) {
 		}
 		return
 	}
+	if w.state == "done" || w.state == "stopped" {
+		// The run ended by itself (or was stopped elsewhere): its capture went with the end, and nothing newer can
+		// be read. The reads made while it lived are the record of what it did; the summary says which was the last.
+		r.decisionsRunEnded(w)
+		return
+	}
 	// The read runs after the caller's context ended too: an interrupt must not lose the rows that are still there.
-	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), decisionsPullTimeout)
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), bound)
 	defer cancel()
 	pull, err := r.cmd.RunDecisions(pctx, w.decisionsSeq, w.decisionsHas)
 	if err != nil {
@@ -196,12 +234,13 @@ func (r *Run) watchPullDecisions(ctx context.Context, w *watchRun) {
 			w.decisionsBlind = true
 			r.logf("decisions: %s", log)
 		}
-		if errors.Is(err, ErrLinkLost) {
-			// Nothing is sent after a lost link, so no later read goes out either.
+		// The note of the last failed read: a later good read clears it, so a summary with rows does not keep saying
+		// the pull failed.
+		w.decisionsFail = note
+		if errors.Is(err, ErrLinkLost) || errors.Is(err, tbcmd.ErrNotSupported) {
+			// Nothing is sent after a lost link, and a module build does not gain the command mid-run: no later read
+			// goes out either.
 			w.decisionsOff = true
-		}
-		if w.decisionsRows == 0 {
-			w.decisionsNote = note
 		}
 		return
 	}
@@ -209,6 +248,7 @@ func (r *Run) watchPullDecisions(ctx context.Context, w *watchRun) {
 		w.decisionsBlind = false
 		r.logf("decisions: the reads answer again")
 	}
+	w.decisionsFail = ""
 	if pull.Run != "" {
 		if w.runID == "" {
 			w.runID = pull.Run
@@ -224,8 +264,10 @@ func (r *Run) watchPullDecisions(ctx context.Context, w *watchRun) {
 	if len(pull.Rows) > 0 {
 		n, err := AppendRunDecisions(r.rec.dir, r.rec.runID, pull.Rows)
 		if err != nil {
-			w.decisionsNote = "the decisions file was not written: " + err.Error()
-			r.logf("decisions: %s", w.decisionsNote)
+			// The cursor does not move past a page that was not written, so the next read asks for it again: this
+			// note is cleared by the read that gets it in.
+			w.decisionsFail = "the decisions file was not written: " + err.Error()
+			r.logf("decisions: %s", w.decisionsFail)
 			return
 		}
 		w.decisionsRows += len(pull.Rows)
@@ -234,8 +276,8 @@ func (r *Run) watchPullDecisions(ctx context.Context, w *watchRun) {
 	w.decisionsReads++
 	w.decisionsPages += pull.Pages
 	w.decisionsSkipped += pull.Skipped
-	if pull.Truncated {
-		w.decisionsTrunc = true
+	if pull.PageBound {
+		w.decisionsPageBound = true
 	}
 	if pull.Note != "" {
 		w.decisionsPull = pull.Note
@@ -251,23 +293,33 @@ func (r *Run) watchDecisionsSummary(w *watchRun) {
 	if !r.cfg.PullDecisions || r.rec == nil {
 		return
 	}
-	if w.decisionsReads == 0 && w.decisionsNote == "" && w.decisionsSkipped == 0 && !w.decisionsTrunc {
+	if w.decisionsReads == 0 && w.decisionsNote == "" && w.decisionsFail == "" && w.decisionsSkipped == 0 && !w.decisionsPageBound {
 		return
 	}
 	block := RunDecisions{
 		Rows: w.decisionsRows, Pages: w.decisionsPages, Bytes: w.decisionsBytes,
-		Skipped: w.decisionsSkipped, Truncated: w.decisionsTrunc,
+		Skipped: w.decisionsSkipped, PageBound: w.decisionsPageBound,
 	}
-	switch {
-	case w.decisionsNote != "":
-		block.Note = w.decisionsNote
-	case w.decisionsPull != "":
-		block.Note = w.decisionsPull
+	// The standing note (a self-ended run, a replaced run) comes first: it says what the file is missing, which a
+	// failure of one read cannot. A pull's own note only speaks when neither does.
+	notes := make([]string, 0, 2)
+	if w.decisionsNote != "" {
+		notes = append(notes, w.decisionsNote)
 	}
+	if w.decisionsFail != "" {
+		notes = append(notes, w.decisionsFail)
+	}
+	if len(notes) == 0 && w.decisionsPull != "" {
+		notes = append(notes, w.decisionsPull)
+	}
+	block.Note = strings.Join(notes, "; ")
 	r.rec.sum.Decisions = &block
 	r.logf("decisions: %d row(s) in %d page(s), %d bytes", block.Rows, block.Pages, block.Bytes)
 	if block.Skipped > 0 {
 		r.logf("decisions: %d row(s) were left out: a note or say text carries a tab or a newline", block.Skipped)
+	}
+	if block.PageBound {
+		r.logf("decisions: a read stopped at its own page bound; the next one continued above it")
 	}
 	if block.Note != "" {
 		r.logf("decisions: %s", block.Note)

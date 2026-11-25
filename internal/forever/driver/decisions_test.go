@@ -64,12 +64,17 @@ func TestWatchPullsDecisionsAtEnd(t *testing.T) {
 	if res.Stop != "done" || !res.Clear {
 		t.Fatalf("stop %q clear %v, want done", res.Stop, res.Clear)
 	}
-	if got := f.DecisionsCalls(); got < 1 {
-		t.Fatalf("%d decisions read(s), want at least the first", got)
+	// One read per status poll: a 30 s run at a 2 s poll is about 15, and the gap floor never leaves it at an
+	// interval of many polls.
+	if got := f.DecisionsCalls(); got < 5 {
+		t.Fatalf("%d decisions read(s) over a 30 s run, want one per poll", got)
 	}
 	block := res.Summary.Decisions
-	if block == nil || block.Rows != 2 || block.Pages < 1 || block.Note != "" || block.Bytes == 0 {
+	if block == nil || block.Rows != 2 || block.Pages < 1 || block.Bytes == 0 {
 		t.Fatalf("summary decisions %+v", block)
+	}
+	if !strings.Contains(block.Note, "ended by itself") || !strings.Contains(block.Note, "seq 2") {
+		t.Fatalf("summary note %q, want the self-end note naming seq 2", block.Note)
 	}
 	b, err := os.ReadFile(DecisionsPath(run.cfg.Out, "r-watch"))
 	if err != nil {
@@ -114,8 +119,9 @@ func TestWatchDecisionsOffByDefault(t *testing.T) {
 	}
 }
 
-// TestWatchDecisionsFailureIsAWarning: a module without the command, a refusal and a lost link each leave the run's
-// own end untouched, put their words in the summary and write no file.
+// TestWatchDecisionsFailureIsAWarning: a module without the command, a refusal, a lost link and a plain failed read
+// each leave the run's own end untouched, put their words in the summary and write no file. The run ends by itself
+// in all four, so the summary says that too, and that no row was read.
 func TestWatchDecisionsFailureIsAWarning(t *testing.T) {
 	cases := []struct {
 		name string
@@ -127,6 +133,7 @@ func TestWatchDecisionsFailureIsAWarning(t *testing.T) {
 			f.DecisionsErr = &tbcmd.DecisionsRefusal{Code: "no-capture", Msg: "player-led run"}
 		}, "no capture for this run"},
 		{"link", func(f *Fake) { f.DecisionsErr = ErrLinkLost }, "the link is lost"},
+		{"failed", func(f *Fake) { f.DecisionsErr = errors.New("the module did not answer") }, "the pull failed"},
 	}
 	for _, c := range cases {
 		run, f := watchWithRecord(t, "r-watch")
@@ -140,6 +147,9 @@ func TestWatchDecisionsFailureIsAWarning(t *testing.T) {
 		block := res.Summary.Decisions
 		if block == nil || block.Rows != 0 || !strings.Contains(block.Note, c.want) {
 			t.Fatalf("%s: summary decisions %+v, want a note with %q", c.name, block, c.want)
+		}
+		if !strings.Contains(block.Note, "ended by itself") || !strings.Contains(block.Note, "before any row was read") {
+			t.Fatalf("%s: summary note %q, want the self-end note for the unread rows", c.name, block.Note)
 		}
 		if _, err := os.Stat(DecisionsPath(run.cfg.Out, "r-watch")); !os.IsNotExist(err) {
 			t.Fatalf("%s: a decisions file after a failed read: %v", c.name, err)
@@ -192,6 +202,9 @@ func TestWatchDecisionsRefusesAnotherRun(t *testing.T) {
 	if block == nil || block.Rows != 0 || !strings.Contains(block.Note, "another run") {
 		t.Fatalf("summary decisions %+v, want a note about another run", block)
 	}
+	if !strings.Contains(block.Note, "ended by itself") {
+		t.Fatalf("summary note %q, want the self-end note beside the replaced run's", block.Note)
+	}
 	if _, err := os.Stat(DecisionsPath(run.cfg.Out, "r-watch")); !os.IsNotExist(err) {
 		t.Fatalf("a decisions file for another run: %v", err)
 	}
@@ -210,8 +223,124 @@ func TestWatchDecisionsSkippedRowsAreCounted(t *testing.T) {
 		t.Fatalf("stop %q, want done", res.Stop)
 	}
 	block := res.Summary.Decisions
-	if block == nil || block.Rows != 2 || block.Skipped != 2 || block.Note != "" {
-		t.Fatalf("summary decisions %+v, want 2 rows and 2 skipped", block)
+	if block == nil || block.Rows != 2 || block.Skipped != 2 || !strings.Contains(block.Note, "ended by itself") {
+		t.Fatalf("summary decisions %+v, want 2 rows, 2 skipped and the self-end note", block)
+	}
+}
+
+// TestWatchDecisionsSelfEndNote: a run that reaches done by itself erases its capture with the end, so the rows that
+// arrived after the last read are gone. The row that arrives with the run's own end is never read, and the summary
+// says so, naming the last sequence read.
+func TestWatchDecisionsSelfEndNote(t *testing.T) {
+	run, f := watchWithRecord(t, "r-watch")
+	run.cfg.PullDecisions = true
+	f.Decisions = scriptedDecisions()[:1]
+	f.ScriptRun(FakeRunScript{Steps: 100, Pulls: 3, ProgressEvery: 5 * time.Second, DoneAt: 40 * time.Second})
+	// The second row is there once the run has ended, and no read goes out after the end: the poll that sees done
+	// reads no row, and the final read sees the same state.
+	f.OnStatus = func(f *Fake, n int) {
+		if st := f.RunRecord(); st != nil && st.State == "done" && len(f.Decisions) == 1 {
+			f.Decisions = scriptedDecisions()
+		}
+	}
+	res := run.Watch(context.Background())
+	if res.Stop != "done" || !res.Clear {
+		t.Fatalf("stop %q clear %v, want done", res.Stop, res.Clear)
+	}
+	block := res.Summary.Decisions
+	if block == nil || block.Rows != 1 {
+		t.Fatalf("summary decisions %+v, want the one row read before the end", block)
+	}
+	if !strings.Contains(block.Note, "ended by itself") || !strings.Contains(block.Note, "seq 1") {
+		t.Fatalf("summary note %q, want the self-end note naming seq 1", block.Note)
+	}
+	b, err := os.ReadFile(DecisionsPath(run.cfg.Out, "r-watch"))
+	if err != nil {
+		t.Fatalf("decisions file: %v", err)
+	}
+	if n := strings.Count(string(b), "\n"); n != 1 {
+		t.Fatalf("%d line(s) in the decisions file, want only the row read while it lived", n)
+	}
+}
+
+// TestWatchDecisionsRecoversFromAFailedRead: a read that fails leaves its note, and a later good read clears it and
+// goes on above the cursor: the rows of the failed reads are neither written twice nor lost, and the summary of a
+// watch with rows does not still say the pull failed.
+func TestWatchDecisionsRecoversFromAFailedRead(t *testing.T) {
+	run, f := watchWithRecord(t, "r-watch")
+	run.cfg.PullDecisions = true
+	f.Decisions = scriptedDecisions()[:1]
+	f.ScriptRun(FakeRunScript{Steps: 100, Pulls: 3, ProgressEvery: 5 * time.Second, DoneAt: 40 * time.Second})
+	// The reads fail in the middle of the run, then answer again with the second row added; the run's own clock
+	// places both, so the order does not depend on the watch's phases.
+	f.OnStatus = func(f *Fake, n int) {
+		st := f.RunRecord()
+		if st == nil {
+			return
+		}
+		switch {
+		case st.Elapsed >= 20 && st.Elapsed < 30:
+			f.DecisionsErr = errors.New("the module did not answer")
+		case st.Elapsed >= 30:
+			f.DecisionsErr = nil
+			f.Decisions = scriptedDecisions()
+		}
+	}
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done", res.Stop)
+	}
+	block := res.Summary.Decisions
+	if block == nil || block.Rows != 2 {
+		t.Fatalf("summary decisions %+v, want the two rows of the run", block)
+	}
+	if strings.Contains(block.Note, "pull failed") {
+		t.Fatalf("summary note %q keeps the early failure after good reads", block.Note)
+	}
+	if !strings.Contains(block.Note, "ended by itself") {
+		t.Fatalf("summary note %q, want the self-end note", block.Note)
+	}
+	b, err := os.ReadFile(DecisionsPath(run.cfg.Out, "r-watch"))
+	if err != nil {
+		t.Fatalf("decisions file: %v", err)
+	}
+	var seqs []int
+	sc := bufio.NewScanner(strings.NewReader(string(b)))
+	for sc.Scan() {
+		var row struct {
+			Seq int `json:"seq"`
+		}
+		if err := json.Unmarshal(sc.Bytes(), &row); err != nil {
+			t.Fatalf("a row is not JSON: %v", err)
+		}
+		seqs = append(seqs, row.Seq)
+	}
+	if len(seqs) != 2 || seqs[0] != 1 || seqs[1] != 2 {
+		t.Fatalf("decisions file seqs %v, want 1 then 2 with no repeat", seqs)
+	}
+}
+
+// TestWatchDecisionsFinalReadKeepsTheStopBudget: the final decisions read has its own short bound and runs before the
+// stop's budget begins, so a slow read cannot leave the stop unsent. The scripted module blocks that read for longer
+// than the whole stop budget.
+func TestWatchDecisionsFinalReadKeepsTheStopBudget(t *testing.T) {
+	run, f := watchWithRecordCfg(t, "r-watch", func(c *Config) {
+		c.Limits.MaxMinutes = 1
+		c.Limits.WatchStop = time.Second
+	})
+	run.cfg.PullDecisions = true
+	f.ScriptRun(FakeRunScript{Steps: 100, Pulls: 3, ProgressEvery: 5 * time.Second})
+	// Only the last read, after the minute budget ended the watch, is slow: the polls before it answer at once.
+	f.Clock.After(59*time.Second, func() { f.DecisionsBlock = 3 * time.Second })
+	res := run.Watch(context.Background())
+	if res.Stop != "budget" {
+		t.Fatalf("stop %q, want budget", res.Stop)
+	}
+	if res.StopUnconfirmed {
+		t.Fatal("the slow final read spent the stop budget: the stop was not confirmed")
+	}
+	if n := countActions(f, "run stop"); n != 1 {
+		t.Fatalf("%d stop(s), want the one that follows the final read", n)
 	}
 }
 

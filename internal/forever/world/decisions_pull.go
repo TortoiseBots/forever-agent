@@ -71,7 +71,7 @@ func (s *session) pullDecisions(ctx context.Context, o *DecisionsPullOptions) er
 		return err
 	}
 	summary := driver.RunDecisions{Rows: len(pull.Rows), Pages: pull.Pages, Bytes: written, Skipped: pull.Skipped,
-		Truncated: pull.Truncated, Note: pull.Note}
+		PageBound: pull.PageBound, Note: pull.Note}
 	s.report.Decisions = &summary
 	if written > 0 {
 		s.report.DecisionsFile = driver.DecisionsPath(o.Out, stem)

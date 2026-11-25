@@ -66,7 +66,8 @@ func TestForeverWatchArguments(t *testing.T) {
 }
 
 // TestForeverWatchDecisionsPull: with the flag and a folder the dry watch pulls the scripted module's decisions (none
-// scripted: the block counts zero), and the run ends as it did; without a folder the flag is a usage error.
+// scripted: the block counts zero and says the self-ended run's rows went with its capture), and the run ends as it
+// did; without a folder the flag is a usage error.
 func TestForeverWatchDecisionsPull(t *testing.T) {
 	out := t.TempDir()
 	code, stdout, stderr := runWatchCmd(t, "--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead",
@@ -86,8 +87,8 @@ func TestForeverWatchDecisionsPull(t *testing.T) {
 	if err := json.Unmarshal(raw, &sum); err != nil {
 		t.Fatal(err)
 	}
-	if sum.Decisions == nil || sum.Decisions.Rows != 0 || sum.Decisions.Note != "" {
-		t.Fatalf("summary decisions %+v", sum.Decisions)
+	if sum.Decisions == nil || sum.Decisions.Rows != 0 || !strings.Contains(sum.Decisions.Note, "ended by itself") {
+		t.Fatalf("summary decisions %+v, want no rows and the self-end note", sum.Decisions)
 	}
 	if !sum.Clear && sum.StopReason != "done" {
 		t.Fatalf("the flag changed the run: %+v", sum)

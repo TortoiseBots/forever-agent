@@ -100,22 +100,27 @@ type watchRun struct {
 	eventsBlind watchBlind
 
 	// The decisions read: the module's run id (the record's run=, and the header's check), the cursor of the last
-	// page read, the next incremental read's time, and what the writes added up to. decisionsOff ends the reads (the
-	// module's run changed, or the capture is off); decisionsBlind keeps a failing read to one line until it answers.
-	runID            string
-	decisionsSeq     int
-	decisionsHas     bool
-	decisionsAt      time.Time
-	decisionsRows    int
-	decisionsPages   int
-	decisionsReads   int
-	decisionsBytes   int64
-	decisionsSkipped int
-	decisionsNote    string
-	decisionsPull    string
-	decisionsTrunc   bool
-	decisionsOff     bool
-	decisionsBlind   bool
+	// page read, the next read's earliest time, and what the writes added up to. decisionsOff ends the reads (the
+	// module's run changed, the build has no command, or the link is lost); decisionsBlind keeps a failing read to one
+	// line until it answers. decisionsNote is a standing note (the run ended by itself, another run replaced this one),
+	// decisionsEnded says that note already carries the self-end loss, and decisionsFail is the last read's failure,
+	// which the next good read clears.
+	runID              string
+	decisionsSeq       int
+	decisionsHas       bool
+	decisionsAt        time.Time
+	decisionsRows      int
+	decisionsPages     int
+	decisionsReads     int
+	decisionsBytes     int64
+	decisionsSkipped   int
+	decisionsNote      string
+	decisionsEnded     bool
+	decisionsFail      string
+	decisionsPull      string
+	decisionsPageBound bool
+	decisionsOff       bool
+	decisionsBlind     bool
 
 	// The report card's evidence: the module's own event times grouped by leg and step, the deaths, the rescues and
 	// the party slot each unit id is. Units holds role words, never character names.
@@ -440,9 +445,11 @@ func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
 		if !r.watchPollStatus(ctx, w) {
 			return
 		}
+		// The read follows every status poll, so a run that ends by itself leaves at most one poll's rows behind;
+		// decisionsReadGap keeps a fast poll from hammering the module.
 		if !r.now().Before(w.decisionsAt) {
-			r.watchPullDecisions(ctx, w)
-			w.decisionsAt = r.now().Add(decisionsReadEvery)
+			r.watchPullDecisions(ctx, w, decisionsPullTimeout)
+			w.decisionsAt = r.now().Add(decisionsReadGap)
 		}
 		if !r.watchPollEvents(ctx, w) {
 			return
@@ -452,12 +459,16 @@ func (r *Run) watchLoop(ctx context.Context, w *watchRun) {
 		}
 		switch w.state {
 		case "done":
+			// The run ended without this watch stopping it: whatever the reads wrote, the rows after the last one
+			// went with its capture, and the summary says so.
+			r.decisionsRunEnded(w)
 			r.deathRecapFlush(ctx, w)
 			r.logf("watch: run done plan=%s elapsed=%ds pulls=%d deaths=%d wipes=%d pauses=%d",
 				w.record.Plan, w.record.Elapsed, w.record.Pull, w.record.Deaths, w.record.Wipes, w.record.Pauses)
 			r.stop("done")
 			return
 		case "stopped":
+			r.decisionsRunEnded(w)
 			r.deathRecapFlush(ctx, w)
 			r.logf("watch: run stopped by the module why=%s", w.record.Why)
 			r.stop("stopped")
@@ -1369,7 +1380,8 @@ const InterruptedStopBudget = 60 * time.Second
 // context ended it. When the run has not reached stopped by either bound the result says the stop was not confirmed
 // (Result.StopUnconfirmed); a lost link ends it at once as before. The final instance read after the wait is bounded
 // by FinishCallTimeout on its own, detached context: the confirmation may have spent the whole budget, and the read
-// still has to reach the server for the summary to record the state the run ended with.
+// still has to reach the server for the summary to record the state the run ended with. The decisions read before the
+// stop is the same: its own decisionsFinalTimeout, taken before the stop's budget is created.
 func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 	if r.lost {
 		r.watchSummary(w)
@@ -1388,6 +1400,12 @@ func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 		// for the whole WatchStop waiting for the confirmation.
 		budget = InterruptedStopBudget
 	}
+	if !r.lost {
+		// The module erases a run's capture when the run ends, so the rows that arrived since the last poll are read
+		// here, before the stop (or the wait for a self-ended run) goes any further. The read has its own short bound
+		// and runs before the stop's budget starts: a slow read must not leave the stop no time.
+		r.watchPullDecisions(ctx, w, decisionsFinalTimeout)
+	}
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), budget)
 	defer cancel()
 	wallDeadline := time.Now().Add(budget)
@@ -1397,11 +1415,6 @@ func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 		cctx, ccancel := context.WithTimeout(fctx, FinishCallTimeout)
 		r.stopCombatlogWatch(cctx)
 		ccancel()
-	}
-	if !r.lost {
-		// The module erases a run's capture when the run ends, so the rows that arrived since the last incremental
-		// read are read here, before the stop (or the wait for a self-ended run) goes any further.
-		r.watchPullDecisions(ctx, w)
 	}
 	if w.have && (w.state == "running" || w.state == "paused" || w.state == "") {
 		reason := r.stopReason
@@ -1422,6 +1435,10 @@ func (r *Run) watchFinish(ctx context.Context, w *watchRun) {
 		case "error":
 			if rep.Code != "not-running" {
 				r.logf("watch: stop refused code=%s", rep.Code)
+			} else if w.state == "running" || w.state == "paused" {
+				// The run ended between the final read and this stop: its rows after that read went with the
+				// capture, as they do on a run that ends by itself.
+				r.decisionsRunEnded(w)
 			}
 			// A refused stop is still the end of the watch: report and record.
 		}
