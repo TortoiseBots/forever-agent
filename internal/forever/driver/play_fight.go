@@ -647,13 +647,14 @@ func (p *playRun) tankSightPick(members []Unit, budget *sightBudget) (skull, cro
 
 // tankSightStand puts the tank in the server's own sight of u before the pull is ordered (#262 step 4). The search
 // walks the navmesh path the tank would take toward u: its samples are asked through the server's spot query (the eye
-// at PlayLosEyeYd), never nearer than PlaySightTouchYd to the unit to pull from and never more than
-// PlayAgentApproachPastYd past the plan's stand (a pack pull only); the agent walks to the first sample the server
-// clears, then steps PlayAgentLeadYd along the path until the TANK itself sees the unit, so the follow advances with
-// it. Bounded by PlayTankSightTries and the shared sightBudget (PlayTankSightSpots queries and PlayTankSightTime from
-// the pull's first look, the pick included). seen is whether the tank sees the unit at the end; known is false when the
-// module stopped answering (a rate refusal, an error) or the budget is spent, and the caller then keeps its older flow.
-// A stop of the run's own is the run's.
+// at PlayLosEyeYd), never nearer than PlaySightTouchYd to the unit to pull from, never more than PlaySightPastStandYd
+// past the pull's stand and never into another pack's clearance (tankSightSamples); the agent walks to the first
+// sample the server clears, then steps forward along the path — from the sample nearest its own stand, never back
+// toward the tank — until the TANK itself sees the unit, so the follow advances with it. Bounded by
+// PlayTankSightTries and the pull's one sightBudget (PlayTankSightSpots queries and PlayTankSightTime from the pull's
+// first look, the pick and the refusals included). seen is whether the tank sees the unit at the end; known is false
+// when the module stopped answering (a rate refusal, an error) or the budget is spent, and the caller then keeps its
+// older flow. A stop of the run's own is the run's.
 func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget *sightBudget) (seen, known bool) {
 	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 {
 		return false, false

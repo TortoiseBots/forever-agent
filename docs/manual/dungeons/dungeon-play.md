@@ -176,22 +176,30 @@ the module's read-only `.tb los` query — the one line of the player run's comm
   distance. A unit the module cannot find (it left the view) is a NO the pick **skips**: the next member is asked.
   A malformed line, another query's answer and an access refusal are unknown and keep the older flow.
 - A tank that **sees none** is walked into sight of the first: the navmesh path from the tank toward the unit is
-  sampled every 2 yd (`PlaySrvSightStepYd`), never nearer than 5 yd to the unit, never more than 30 yd past the plan's
-  stand (`PlayAgentApproachPastYd`), each sample asked as a spot on the ground with the eye at 2 yd above it
-  (`PlayLosEyeYd`); the agent walks to the first sample the server clears and then steps 2 yd at a time
-  (`PlayAgentLeadYd`) until the tank itself sees the unit. At most 8 tries (`PlayTankSightTries`), 24 queries
-  (`PlayTankSightSpots`) and 60 s (`PlayTankSightTime`) cover the skull pick and the search together, then the pull
-  goes on as it stands and the module is the judge.
-- The search is recorded as `pull_tank_sight` (`group`, `target`, `seen`, `yd`) for the pick and `pull_sight_stand`
-  (`group`, `target`, `seen`, `known`, `tries`, `x`, `y`, `z`) for the walk.
+  sampled every 2 yd (`PlaySrvSightStepYd`), never nearer than 5 yd to the unit, never more than 30 yd past the pull's
+  stand (`PlaySightPastStandYd` — the plan's for a pack, where the party gathered for a boss and a stranger), and cut
+  where the path first enters **another pack's clearance** (`PlayAgentApproachPackYd`, the fallback approach's own
+  rule: the pull's own units, the party's pets and critters are not counted; the blocker is recorded, see below). Each
+  sample is asked as a spot on the ground with the eye at 2 yd above it (`PlayLosEyeYd`); the agent walks to the first
+  sample the server clears and then steps **forward** along the path from the sample nearest its own stand
+  (`PlayAgentLeadYd` a step, the path's last sample ahead when less is left) until the tank itself sees the unit — the
+  step never goes back toward the tank, which is what run 4 did for every try.
+- **One sight budget a pull**: at most 24 queries (`PlayTankSightSpots`) and 60 s (`PlayTankSightTime`) from the
+  first look cover the skull pick, the stand walk and the search after **every** tank refusal together, and the
+  refusal path's own 90 s (`PlayRefuseTime` from the first refusal) caps what is left. Spent, the pull goes on as it
+  stands and the module is the judge. The lead steps are bounded by 8 tries (`PlayTankSightTries`).
+- The search is recorded as `pull_tank_sight` (`group`, `target`, `seen`, `yd`) for the pick, `pull_sight_stand`
+  (`group`, `target`, `seen`, `known`, `tries`, `x`, `y`, `z`) for the walk, and `pull_sight_cut` (`group`, `target`,
+  `blocker` with its `guid`, `entry` and `yd` from the unit) when another pack's clearance ended it.
 
 When it whispers that it cannot see the marked skull anyway, the same search runs again from the refusal (never the
-older step, which was measured from the tank and so never moved it: run 4's tank stood at one point for the whole 60 s).
-The refusal's own bounds stay 4 steps (`PlayRefuseTries`) and 90 s from the first refusal (`PlayRefuseTime`); a skull
-the server sees from no point of the path takes the fallback pull at once. An answer the module cannot give — an older
-module without the command, a rate refusal, an error — keeps the older flow exactly: the navmesh close-in before the
-order, and after a refusal a 5 yd step along the path from the tank toward the skull with a 15 s wait for the tank
-beside it.
+older step, which was measured from the tank and so never moved it: run 4's tank stood at one point for the whole 60 s),
+spending the same one budget. The refusal's own bounds stay 4 steps (`PlayRefuseTries`) and 90 s from the first
+refusal (`PlayRefuseTime`); a skull the server sees from no point of the path takes the fallback pull at once. An
+answer the module cannot give — a rate refusal, an error, or a module without the command — keeps the older flow
+exactly: the navmesh close-in before the order, and after a refusal a 5 yd step along the path from the tank toward the
+skull with a 15 s wait for the tank beside it. A module that answers once that it has no sight command is asked no more
+for the rest of the run.
 
 When those retries are spent — or the skull already stands inside the character's own 5 yd reach, where another step
 would add no sight — the leading player pulls the mob itself:

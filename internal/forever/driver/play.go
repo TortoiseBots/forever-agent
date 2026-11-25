@@ -1068,7 +1068,11 @@ func (p *playRun) walkTo(ctx context.Context, to Vec3, exact, direct bool) {
 	if !p.walkToWithin(ctx, to, arrive, direct) {
 		return
 	}
-	p.checkExact(to, exact)
+	if !direct {
+		// A direct via is a line the plan says to take (the map data has no link for it): it has no navmesh arrival to
+		// judge, exactly as before.
+		p.checkExact(to, exact)
+	}
 }
 
 // walkToWithin is walkTo's walk with the caller's own arrival tolerance: a point nearer than PlayArriveYd from where
