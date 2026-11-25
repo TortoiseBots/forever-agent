@@ -324,8 +324,11 @@ type playRun struct {
 	lost       bool
 	// stall is the state the run visits next whatever the state that set it returned: a walk or a wait that finds a
 	// member down hands the run to its own regroup (#256), so a death outside a fight is revived and counted instead of
-	// being walked past.
-	stall string
+	// being walked past. resume is what the run goes back to when the regroup's rest is over: the state the death
+	// interrupted (TRAVEL outside the instance, the leg walk inside it, which re-enters the pull or the boss it was
+	// gathering for), never a state the run was not in.
+	stall  string
+	resume string
 	// regroupSince is when the party gate last found a living member left behind: one episode's attempts are spent once,
 	// and the walk's own straggler ladder carries the episode after them (#256).
 	regroupSince time.Time
@@ -1273,11 +1276,15 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 		}
 		// #256 (ii)/(iii): a death while the walk waits is counted here (the waits are where a fight is not, and the
 		// run's deaths were only counted in one), and a member down hands the run to its own regroup instead of the
-		// wait's stop.
+		// wait's stop. The run comes back to what the wait interrupted: outside the instance that is TRAVEL (ENTER has
+		// not run yet), inside it the leg walk, which re-enters the pull or the boss it was gathering for.
 		p.noteDeaths()
 		if down := p.downBots(); len(down) > 0 {
 			p.rec.Event(p.now(), "regroup_down", map[string]any{"why": "wait", "down": p.slots(down)})
-			p.stall = StateWipe
+			p.stall, p.resume = StateWipe, StateLegWalk
+			if p.selfMap != p.route.Map {
+				p.resume = StateTravel
+			}
 			return false
 		}
 		far := p.farBots(yd)

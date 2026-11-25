@@ -1955,7 +1955,7 @@ func (p *playRun) rest(ctx context.Context) string {
 	for {
 		if p.ready() {
 			p.rec.Event(p.now(), "rest_end", map[string]any{"seconds": p.now().Sub(started).Seconds()})
-			return StateLegWalk
+			return p.resumed()
 		}
 		if p.timeUp() {
 			p.stop("time")
@@ -1963,7 +1963,7 @@ func (p *playRun) rest(ctx context.Context) string {
 		}
 		if !p.now().Before(deadline) {
 			p.rec.Event(p.now(), "rest_timeout", map[string]any{"seconds": p.now().Sub(started).Seconds()})
-			return StateLegWalk
+			return p.resumed()
 		}
 		if !p.sleep(ctx, p.lim.Poll) {
 			return ""

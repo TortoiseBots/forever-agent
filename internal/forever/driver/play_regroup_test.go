@@ -315,3 +315,94 @@ func TestPlayRegroupNormalRunUnchanged(t *testing.T) {
 		t.Fatalf("deaths = %d; want none", res.Summary.Deaths)
 	}
 }
+
+// TestPlayRegroupDeathAtThePortalResumesTravel: a member dead when the party waits at the portal is brought back there,
+// and the run goes on with TRAVEL and then ENTER: the regroup never drops the run into the leg walk on the outer map,
+// where the plan's points are not.
+func TestPlayRegroupDeathAtThePortalResumesTravel(t *testing.T) {
+	rig := regroupRig(t, func(f *PlayFake) {
+		f.GoldenOwner.Bots[3].Dead = true
+		f.Clock.After(10*time.Second, func() { f.GoldenOwner.Bots[3].Dead = false })
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+	}
+	if res.Summary.Deaths != 1 {
+		t.Fatalf("deaths = %d; want 1", res.Summary.Deaths)
+	}
+	states := strings.Join(res.States, " ")
+	wipe := slicesIndex(res.States, StateWipe)
+	lastTravel := slicesLastIndex(res.States, StateTravel)
+	enter := slicesIndex(res.States, StateEnter)
+	if wipe < 0 || lastTravel < 0 || enter < 0 {
+		t.Fatalf("states = %q; want TRAVEL, %s and ENTER", states, StateWipe)
+	}
+	if lastTravel < wipe {
+		t.Fatalf("states = %q; want TRAVEL again after the regroup (%s at %d, last TRAVEL at %d)", states, StateWipe, wipe, lastTravel)
+	}
+	if enter < lastTravel {
+		t.Fatalf("states = %q; want ENTER after the resumed TRAVEL", states)
+	}
+	tf := regroupTrace(t, res)
+	if _, ok := firstEvent(tf, "regroup_down"); !ok {
+		t.Fatal("the death at the portal is not in the record")
+	}
+	if _, ok := firstEvent(tf, "death"); !ok {
+		t.Fatal("the death was not counted in the record")
+	}
+}
+
+// TestPlayRegroupDeathDuringTheGateWait: a member that falls while the gate is waiting for the party is the regroup's
+// business at once: the wait does not read a party that lost a member as a party that came back.
+func TestPlayRegroupDeathDuringTheGateWait(t *testing.T) {
+	rig := regroupRig(t, func(f *PlayFake) {
+		leavePartyAt(f, nil)
+		// The party comes back by itself fifteen seconds in, and the mage falls ten seconds in, while the gate waits.
+		f.Clock.After(15*time.Second, func() {
+			for _, name := range playBots {
+				f.Moved[strings.ToLower(name)] = true
+			}
+		})
+		f.Clock.After(10*time.Second, func() { f.GoldenOwner.Bots[3].Dead = true })
+		f.Clock.After(30*time.Second, func() { f.GoldenOwner.Bots[3].Dead = false })
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+	}
+	if res.Summary.Deaths != 1 {
+		t.Fatalf("deaths = %d; want 1", res.Summary.Deaths)
+	}
+	if !strings.Contains(strings.Join(res.States, " "), StateWipe) {
+		t.Fatalf("states = %v; want the run's own regroup before it walked on", res.States)
+	}
+	tf := regroupTrace(t, res)
+	down, ok := firstEvent(tf, "regroup_down")
+	if !ok {
+		t.Fatal("no regroup_down event")
+	}
+	if why, _ := down.D["why"].(string); why != "wait" {
+		t.Fatalf("regroup_down why = %q; want the gate's own wait", why)
+	}
+}
+
+// slicesIndex is the first index of v in s, -1 when it is absent.
+func slicesIndex(s []string, v string) int {
+	for i := range s {
+		if s[i] == v {
+			return i
+		}
+	}
+	return -1
+}
+
+// slicesLastIndex is the last index of v in s, -1 when it is absent.
+func slicesLastIndex(s []string, v string) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == v {
+			return i
+		}
+	}
+	return -1
+}

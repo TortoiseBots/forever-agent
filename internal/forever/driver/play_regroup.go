@@ -54,7 +54,7 @@ func (p *playRun) holdParty(ctx context.Context, why string) bool {
 		// #256 (ii): a member down is brought back before the walk goes on, through the run's own revive path (the
 		// healer's raise out of combat, then the corpse-run whispers), and the death is in the count above.
 		p.rec.Event(p.now(), "regroup_down", map[string]any{"why": why, "down": p.slots(down)})
-		p.stall = StateWipe
+		p.stall, p.resume = StateWipe, StateLegWalk
 		return false
 	}
 	far := p.regroupFar()
@@ -74,6 +74,9 @@ func (p *playRun) holdParty(ctx context.Context, why string) bool {
 		p.rec.Event(p.now(), "regroup_join", map[string]any{"why": why})
 		return true
 	}
+	if p.stall != "" {
+		return false // a member fell during the wait: the regroup is next, not a follow order
+	}
 	// One follow order for the ones still behind, and one more bounded wait.
 	far = p.regroupFar()
 	for _, name := range far {
@@ -86,6 +89,9 @@ func (p *playRun) holdParty(ctx context.Context, why string) bool {
 		p.regroupSince = time.Time{}
 		p.rec.Event(p.now(), "regroup_join", map[string]any{"why": why})
 		return true
+	}
+	if p.stall != "" {
+		return false
 	}
 	until := p.now().Add(PlayRegroupBackTime)
 	for try := 0; try < PlayRegroupTries && p.now().Before(until); try++ {
@@ -112,6 +118,9 @@ func (p *playRun) holdParty(ctx context.Context, why string) bool {
 			p.rec.Event(p.now(), "regroup_join", map[string]any{"why": why})
 			return true
 		}
+		if p.stall != "" {
+			return false
+		}
 	}
 	if far = p.regroupFar(); len(far) == 0 {
 		p.regroupSince = time.Time{}
@@ -121,6 +130,17 @@ func (p *playRun) holdParty(ctx context.Context, why string) bool {
 	// was behind and how far (stopStraggler).
 	p.rec.Event(p.now(), "regroup_giveup", map[string]any{"why": why, "bots": p.slots(far), "yd": p.regroupYds(far)})
 	return true
+}
+
+// resumed is the state the run goes back to after a regroup's rest: the one a death interrupted (TRAVEL outside the
+// instance), else the leg walk the run resumes at (#256).
+func (p *playRun) resumed() string {
+	if p.resume != "" {
+		st := p.resume
+		p.resume = ""
+		return st
+	}
+	return StateLegWalk
 }
 
 // regroupFar is the living members of the party left further than PlayRegroupYd behind the leader on its map: a member
@@ -152,10 +172,18 @@ func (p *playRun) regroupYds(names []string) []int {
 	return out
 }
 
-// regroupWait waits up to d for the party to come back, reporting whether it did. A stop of the run's ends it.
+// regroupWait waits up to d for the party to come back, reporting whether it did. A member that falls during the wait
+// is not a party that came back: the run's regroup is next (p.stall, p.resume) and the wait reports false, so the gate
+// does not send its follow or walk on past the corpse. A stop of the run's ends it too.
 func (p *playRun) regroupWait(ctx context.Context, d time.Duration) bool {
 	until := p.now().Add(d)
 	for {
+		p.noteDeaths()
+		if down := p.downBots(); len(down) > 0 {
+			p.rec.Event(p.now(), "regroup_down", map[string]any{"why": "wait", "down": p.slots(down)})
+			p.stall, p.resume = StateWipe, StateLegWalk
+			return false
+		}
 		if len(p.regroupFar()) == 0 {
 			return true
 		}
