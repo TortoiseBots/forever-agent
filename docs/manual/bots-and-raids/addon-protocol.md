@@ -211,8 +211,9 @@ forever-agent forever addon-check [--rest host:port] [--rpc host:port] [--ca FIL
 | `--capture-dir DIR` | none | Write every packet the handlers see into a new run directory. Keep it outside the repository. |
 
 The server's limits are checked before anything is sent (prefix, text, channel and whisper name), so a bad one is
-a usage error and never a login. Output is identifier-free counts and the messages' prefixes and senders. Exit `0`
-when the run completes; `2` a usage error; `5` the world server refused the session or the character.
+a usage error and never a login. The output is identifier-free: the registered prefixes, the message count per
+channel, and the delivered, unregistered-prefix, dropped and refused counts. Exit `0` when the run completes; `2` a
+usage error; `5` the world server refused the session or the character.
 
 # Common problems
 

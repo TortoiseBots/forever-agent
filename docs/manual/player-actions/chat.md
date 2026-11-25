@@ -124,7 +124,7 @@ forever-agent forever rpc ./slots/ACCOUNT chat_log '{"since": 0, "wait_ms": 2000
 # A live check: forever chat-check
 
 One-shot live check of the chat path, no daemon: it logs in like `forever world-check`, enters the world, sends
-what you asked for, prints every line it hears for `--listen` and logs out.
+what you asked for, counts the lines it hears for `--listen` (by type) and logs out.
 
 ```bash
 forever-agent forever chat-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
