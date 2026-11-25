@@ -39,23 +39,39 @@ serve has no equipment read and this repository carries no item stats). Per item
   strongest evidence, so a hybrid's shared pieces (enhancement mail, protection plate) are fine
   without reading a stat family.
 - **FINE** when the item is outside that data and one of its families is among the families the
-  spec's own players wear in its slot. That acceptable set is the data's: the union of the families
-  of the items the spec's tables list in the slot at or above `GearFamilyShare` (both populations),
-  cached per repeat. An item's families are its own primary stats when the record carries them;
-  otherwise they are the families of the specs that commonly wear it (`GearMismatchSpecs` specs at
-  or above `GearFamilyShare`, each spec's set from its top `PriorityStats` stats).
+  spec's own players wear in its slot. That acceptable set is the data's, summed by wear share (not
+  a union): every row of the spec's tables in the slot adds its share to each family the item's
+  wearers name, and a family is acceptable when its summed share is at least `familyShareFloor`
+  (0.20) of the slot's summed family share, or when it is the single largest family. All
+  populations and shares count, cached per repeat. An item's families are its own primary stats
+  when the record carries them; otherwise they are the share-weighted families of the specs that
+  commonly wear it (`GearMismatchSpecs` specs at or above `GearFamilyShare`, each spec's set from
+  its top `PriorityStats` stats, weighted by its wear share). The item reading is weighted too,
+  because a hybrid wearer else adds its caster family to every plate piece it shares.
 - **MISMATCH** (the rule FAILs) when the item's family is known and none of its families is one the
-  spec's own players wear in that slot — the reading that catches a caster in strength plate and a
-  warrior in a caster's shoulders.
-- **UNPROVEN** otherwise: an item whose family is unknown (no item stats and no common wearers), a
-  slot whose own items name no family, or an item with no table entry. The rule is INCONCLUSIVE and
-  names the item, so a missing item table or item stats is never a pass.
+  spec's own players wear in that slot — the reading that catches a caster in strength plate, a
+  warrior in a caster's shoulders, a hunter in strength plate and a rogue in cloth.
+- **UNPROVEN** otherwise: an item whose family is unknown (no item stats and no common wearers, or
+  no family above the share floor), a slot whose own items name no family, or an item with no table
+  entry. The rule is INCONCLUSIVE and names the item, so a missing item table or item stats is
+  never a pass.
 
 Stamina, crit and hit have no stat family: every priority lists stamina for survivability, so it
 cannot make an item contrary (a feral's Agility is second, an enhancement shaman's Intellect
 second). A spec's family set is every family among its top `PriorityStats` stats, not only the
 first one, so a mixed spec is never reduced to a pure caster or a pure physical spec. The stat
 priority remains in the evidence line as the tie-break; the verdict's families come from the data.
+
+Known limits (the tables carry no item stats or armour type, only wearer choices):
+
+- a feral druid in plate is FINE: the feral's own data names agility and strength, so a strength
+  plate piece shares a family with the feral's own leather. An outfit in the wrong armour class but
+  the right stat family passes.
+- an enhancement shaman in hunter-only agility mail FAILs in Wrist, Hands, Waist and Feet, where
+  the shaman's own slot data names only a caster family at the floor; the agility mail its own
+  players wear is FINE by the own-data rule.
+
+Both need the item read-out of #20 (item stats), not a threshold change.
 
 Item level is never a reason. A record with no item data, a bot below level 60 (the gear data is
 level 60 only) or an unknown spec is INCONCLUSIVE with the reason.

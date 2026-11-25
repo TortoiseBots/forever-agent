@@ -16,7 +16,16 @@ import (
 // The rule is data-driven: an item any row of the spec's own gear tables names (any population, any
 // share, any slot) is fine. An item outside that data is contrary only when its family is known and
 // none of the families the spec's own players wear in that slot is its own; no family data is
-// INCONCLUSIVE, never a FAIL.
+// INCONCLUSIVE, never a FAIL. Both the slot's acceptable families and an item's own families are
+// share-weighted (familyShareFloor), not unions: a shared item one hybrid wearer names does not
+// make that family acceptable for every slot.
+//
+// Known limits: the tables carry no item stats or armour type, only wearer choices, so a plate item
+// whose wearers name the agility and strength families is FINE for a feral druid (the feral's own
+// data is agility and strength too): an outfit in the wrong armour class but the right stat family
+// passes. And an enhancement shaman's own slot data names a caster family for Wrist, Hands, Waist
+// and Feet, so hunter-only agility mail there is contrary even though the spec's own agility mail
+// (rule (a)) is fine. Both need the item read-out of #20 (item stats), not a threshold change.
 func gearRow(rec Record, in Inputs) Row {
 	row := Row{ID: RuleGear, Verdict: VerdictInconclusive}
 	class, spec := strings.ToLower(strings.TrimSpace(rec.Class)), SpecName(rec.Spec)
@@ -185,6 +194,60 @@ func intersects(a, b map[string]bool) bool {
 	return false
 }
 
+// familyShareFloor is the share of a slot's (or an item's) summed family weight a family needs to
+// be acceptable: 20%. Below the floor a family names too little of what the spec's players (or the
+// item's wearers) want to excuse an item; the single largest family is accepted regardless.
+const familyShareFloor = 0.20
+
+// familyShare is one weighted contribution to a family set: a row's share, or a wearer spec's
+// share, and the families it names. label is the wearer's evidence text (empty for a gear row).
+type familyShare struct {
+	share    float64
+	families map[string]bool
+	label    string
+}
+
+// weightedFamilies resolves family evidence by share instead of by union: every contribution adds
+// its share to each family it names, and a family is accepted when its summed share is at least
+// familyShareFloor of the total summed share, or when it is the single largest family. The total is
+// the sum of the family sums, so a hybrid item's share counts once per family it names and cannot
+// make a family that only a few wearers want look dominant. A tie at the top accepts only the
+// families that also clear the floor. A set with no contribution is empty; the caller reports that
+// as INCONCLUSIVE, never a pass.
+func weightedFamilies(contribs []familyShare) map[string]bool {
+	sums := map[string]float64{}
+	var total float64
+	for _, c := range contribs {
+		for family := range c.families {
+			sums[family] += c.share
+			total += c.share
+		}
+	}
+	out := map[string]bool{}
+	if len(sums) == 0 {
+		return out
+	}
+	max := 0.0
+	for _, share := range sums {
+		if share > max {
+			max = share
+		}
+	}
+	atMax := 0
+	for _, share := range sums {
+		if max-share < 1e-9 {
+			atMax++
+		}
+	}
+	floor := familyShareFloor * total
+	for family, share := range sums {
+		if share >= floor-1e-9 || (atMax == 1 && max-share < 1e-9) {
+			out[family] = true
+		}
+	}
+	return out
+}
+
 // familyReader reads the gear rule's family data from the tables once per repeat: a spec's own
 // families (the families of the top PriorityStats stats of each spec that wears an item), the
 // families its players wear in one slot, and an item's readable families.
@@ -211,32 +274,43 @@ func (r *familyReader) specFamilies(class, spec string) map[string]bool {
 	return families
 }
 
-// acceptable is the set of families the spec's own players wear in one slot: the union of the
-// families of every item its gear tables list there at or above GearFamilyShare (any population, so
-// the reading covers the whole population and the best-geared one). It is cached per slot.
+// acceptable is the share-weighted set of families the spec's own players wear in one slot: each
+// row of its gear tables in that slot adds the row's share (percent) to every family the item's
+// wearers name, and weightedFamilies keeps the families above familyShareFloor or the single
+// largest. All populations and all shares count (any row is rule (a)'s own data), and a row whose
+// wearers name no family adds nothing. It is cached per slot.
 func (r *familyReader) acceptable(class, spec, slot string) map[string]bool {
 	k := class + "|" + spec + "|" + strings.ToLower(slot)
 	if families, ok := r.slots[k]; ok {
 		return families
 	}
-	families := map[string]bool{}
+	var contribs []familyShare
 	for _, g := range r.t.GearRows(class, spec) {
-		if g.SetSlot() || g.ID <= 0 || !strings.EqualFold(g.Slot, slot) || g.Pct < GearFamilyShare {
+		if g.SetSlot() || g.ID <= 0 || !strings.EqualFold(g.Slot, slot) {
 			continue
 		}
-		items, _ := r.wearers(Item{Entry: g.ID, Name: g.Name, Slot: g.Slot})
-		for family := range items {
-			families[family] = true
+		if families := r.slotFamilies(Item{Entry: g.ID, Name: g.Name, Slot: g.Slot}); len(families) > 0 {
+			contribs = append(contribs, familyShare{share: g.Pct, families: families})
 		}
 	}
+	families := weightedFamilies(contribs)
 	r.slots[k] = families
 	return families
 }
 
+// slotFamilies is the share-weighted family reading of one item in its slot: the families of the
+// specs that wear it there at or above GearFamilyShare, each weighted by that spec's best share.
+// Unlike itemReading it needs no minimum number of wearers: it answers what a row of a spec's own
+// table says its players want, and that row's own spec is enough.
+func (r *familyReader) slotFamilies(item Item) map[string]bool {
+	return weightedFamilies(r.wearerShares(item))
+}
+
 // itemReading names an item's stat families and where the reading came from. Item stats in the
 // record win; otherwise the specs that commonly wear the item at or above GearFamilyShare in its
-// slot do, and at least GearMismatchSpecs of them must (one spec's piece may be shared). known is
-// false when neither source names a family, which the rule reports as INCONCLUSIVE, never a FAIL.
+// slot do, and at least GearMismatchSpecs of them must (one spec's piece may be shared), weighted by
+// their wear share (weightedFamilies). known is false when neither source names a family above the
+// floor, which the rule reports as INCONCLUSIVE, never a FAIL.
 func (r *familyReader) itemReading(item Item) (families map[string]bool, why string, known bool) {
 	if len(item.Stats) > 0 {
 		families = map[string]bool{}
@@ -254,19 +328,31 @@ func (r *familyReader) itemReading(item Item) (families map[string]bool, why str
 	if len(wearers) < GearMismatchSpecs {
 		return nil, "the record carries no item stats and no common wearers name its stat family", false
 	}
+	joined := strings.Join(wearers, ", ")
 	if len(families) == 0 {
-		return nil, fmt.Sprintf("commonly worn by %s, none of whom names a stat family", strings.Join(wearers, ", ")), false
+		return nil, fmt.Sprintf("commonly worn by %s, none of whom names a stat family at the %.0f%% share floor", joined, familyShareFloor*100), false
 	}
-	return families, fmt.Sprintf("commonly worn by %s", strings.Join(wearers, ", ")), true
+	return families, fmt.Sprintf("commonly worn by %s", joined), true
 }
 
-// wearers is the union of the families of the specs that wear the item at or above
+// wearers is the share-weighted family reading of the specs that wear the item at or above
 // GearFamilyShare in its slot, with each such spec's best share stated for the evidence line.
 func (r *familyReader) wearers(item Item) (map[string]bool, []string) {
-	families := map[string]bool{}
+	contribs := r.wearerShares(item)
+	labels := make([]string, 0, len(contribs))
+	for _, c := range contribs {
+		labels = append(labels, c.label)
+	}
+	sort.Strings(labels)
+	return weightedFamilies(contribs), labels
+}
+
+// wearerShares is one contribution per spec that wears the item in its slot at or above
+// GearFamilyShare: the spec's best share (the two populations deduplicated) and its family set.
+func (r *familyReader) wearerShares(item Item) []familyShare {
 	info, ok := r.t.Item(item.Entry)
 	if !ok {
-		return families, nil
+		return nil
 	}
 	perSpec := map[string]float64{}
 	for _, w := range info.Wearers {
@@ -278,17 +364,22 @@ func (r *familyReader) wearers(item Item) (map[string]bool, []string) {
 			perSpec[k] = w.Pct
 		}
 	}
-	wearers := make([]string, 0, len(perSpec))
-	for k, pct := range perSpec {
-		wearers = append(wearers, fmt.Sprintf("%s %.1f%%", k, pct))
+	keys := make([]string, 0, len(perSpec))
+	for k := range perSpec {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]familyShare, 0, len(keys))
+	for _, k := range keys {
 		parts := strings.SplitN(k, "/", 2)
 		if len(parts) != 2 {
 			continue
 		}
-		for family := range r.specFamilies(parts[0], parts[1]) {
-			families[family] = true
-		}
+		out = append(out, familyShare{
+			share:    perSpec[k],
+			families: r.specFamilies(parts[0], parts[1]),
+			label:    fmt.Sprintf("%s %.1f%%", k, perSpec[k]),
+		})
 	}
-	sort.Strings(wearers)
-	return families, wearers
+	return out
 }

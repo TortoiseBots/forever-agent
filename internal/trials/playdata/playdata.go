@@ -5,10 +5,11 @@
 // Rule "gear fits the spec" (AOTC-GEAR-FITS-SPEC): an equipped item is FINE when any row of the
 // spec's own level 60 gear tables names it (any population, any share, any slot). An item outside
 // that data is contrary only when its stat family is known and none of the families the spec's own
-// players wear in that slot is its own; the acceptable families come from the data (the items its
-// players wear at or above GearFamilyShare), never from a single priority stat, so a hybrid spec
-// (enhancement, protection paladin) is not read as a pure caster. An item whose family is unknown is
-// INCONCLUSIVE, never a FAIL; stamina, crit and hit name no family, so they never make an item
+// players wear in that slot is its own; the acceptable families are summed by share from the data
+// (familyShareFloor, not a union), never taken from a single priority stat, so a hybrid spec
+// (enhancement, protection paladin) is not read as a pure caster and a shared item one hybrid
+// wearer names does not make its family acceptable for every slot. An item whose family is unknown
+// is INCONCLUSIVE, never a FAIL; stamina, crit and hit name no family, so they never make an item
 // contrary. Item level is never a reason. A record with no item data is INCONCLUSIVE, never a pass.
 //
 // Rule "talents imply spells" (AOTC-TALENTS-IMPLY-SPELLS): for the bot's level group, the talents most
@@ -48,8 +49,8 @@ const (
 	// judged on it.
 	GearLevel = 60
 	// GearFamilyShare is the share of a spec's characters that makes it a common wearer of an
-	// item, and the share at which one of the spec's own worn items contributes its family to the
-	// families that spec's players wear in a slot.
+	// item: the wearers that name an item's family, and whose sums the gear rule weights by that
+	// share.
 	GearFamilyShare = 5.0
 	// GearMismatchSpecs is how many specs must commonly wear an item before its wearers name its
 	// stat family (one spec's piece may be a shared item).

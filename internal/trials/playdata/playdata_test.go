@@ -387,6 +387,138 @@ func TestGearFitsSpecForeignItemsFail(t *testing.T) {
 	}
 }
 
+// TestGearFitsSpecOutfits pins the outfits the share-weighted rule is meant to catch and the ones
+// it must not, with real item ids from the shipped tables, one per armour slot the data has rows
+// for. The slot's acceptable families are share-weighted (familyShareFloor), so a caster family one
+// shared item names does not make spirit cloth fine for a warrior.
+//
+// The must-catch outfits fail in every armour slot of the outfit, which is the "at least 8" the rule
+// needs. The feral in plate case is a known limit, not a pass: the feral's own data names agility and
+// strength, and the tables carry no armour type, so a strength plate piece shares a family with the
+// feral's own pieces (see gear.go). It pins today's FINE so the limit shows when item stats arrive.
+// The must-not-fail outfits are the gear the spec's own players wear (rule (a)): agility mail and the
+// caster-hybrid pieces for enhancement, protection paladin's own data, and agility leather for feral.
+func TestGearFitsSpecOutfits(t *testing.T) {
+	tables := aotc.Default()
+	in := Inputs{Tables: tables}
+	type outfitItem struct {
+		slot  string
+		entry int64
+	}
+	cases := []struct {
+		name        string
+		class, spec string
+		want        string
+		items       []outfitItem
+	}{
+		{
+			// Cloth caster pieces (mage/priest/warlock) a warrior does not wear.
+			name: "warrior in spirit cloth", class: "warrior", spec: "fury", want: VerdictFail,
+			items: []outfitItem{
+				{"Head", 22267}, {"Shoulders", 22405}, {"Chest", 13346}, {"Wrist", 226929},
+				{"Hands", 226930}, {"Waist", 226934}, {"Legs", 13170}, {"Feet", 11822},
+			},
+		},
+		{
+			name: "rogue in cloth caster gear", class: "rogue", spec: "combat", want: VerdictFail,
+			items: []outfitItem{
+				{"Head", 22267}, {"Shoulders", 22405}, {"Chest", 13346}, {"Wrist", 226929},
+				{"Hands", 226930}, {"Waist", 226934}, {"Legs", 13170}, {"Feet", 11822},
+			},
+		},
+		{
+			// Lightforge/Soulforge plate: a paladin's caster-and-strength pieces.
+			name: "hunter in strength plate", class: "hunter", spec: "marksmanship", want: VerdictFail,
+			items: []outfitItem{
+				{"Head", 18718}, {"Shoulders", 16729}, {"Chest", 16726}, {"Wrist", 226970},
+				{"Hands", 226975}, {"Waist", 16723}, {"Legs", 16728}, {"Feet", 16725},
+			},
+		},
+		{
+			// Valor/Heroism plate: warrior tank pieces, no caster family.
+			name: "mage in strength plate", class: "mage", spec: "fire", want: VerdictFail,
+			items: []outfitItem{
+				{"Head", 20521}, {"Shoulders", 20517}, {"Chest", 16730}, {"Wrist", 226865},
+				{"Hands", 226870}, {"Waist", 16736}, {"Legs", 16732}, {"Feet", 16734},
+			},
+		},
+		{
+			// Known limit: strength is one of the feral's own families, so the plate is FINE.
+			name: "feral in plate (known limit: strength is a feral family)", class: "druid", spec: "feral", want: VerdictPass,
+			items: []outfitItem{
+				{"Head", 20521}, {"Shoulders", 20517}, {"Chest", 16730}, {"Wrist", 226865},
+				{"Hands", 226870}, {"Waist", 16736}, {"Legs", 16732}, {"Feet", 16734},
+			},
+		},
+		{
+			// The data has no own agility item for Waist and Legs (the shaman's own rows there are
+			// caster), so those two are the own caster pieces; the rest are its own agility mail.
+			name: "enhancement in agility mail its own players wear", class: "shaman", spec: "enhancement", want: VerdictPass,
+			items: []outfitItem{
+				{"Head", 12587}, {"Shoulders", 14503}, {"Chest", 13944}, {"Wrist", 13211},
+				{"Hands", 15063}, {"Waist", 22242}, {"Legs", 252486}, {"Feet", 13967},
+			},
+		},
+		{
+			name: "enhancement in its caster-hybrid pieces", class: "shaman", spec: "enhancement", want: VerdictPass,
+			items: []outfitItem{
+				{"Head", 20134}, {"Shoulders", 16669}, {"Chest", 16666}, {"Wrist", 227017},
+				{"Hands", 227022}, {"Waist", 227018}, {"Legs", 14612}, {"Feet", 14616},
+			},
+		},
+		{
+			name: "protection paladin in its own data's gear", class: "paladin", spec: "protection", want: VerdictPass,
+			items: []outfitItem{
+				{"Head", 18718}, {"Shoulders", 16729}, {"Chest", 16726}, {"Wrist", 226985},
+				{"Hands", 226990}, {"Waist", 16723}, {"Legs", 16728}, {"Feet", 16725},
+			},
+		},
+		{
+			// Rogue agility leather: the families the feral's own agility leather shares (some of these
+			// pieces are also in the feral's own data, which rule (a) settles).
+			name: "feral in agility leather", class: "druid", spec: "feral", want: VerdictPass,
+			items: []outfitItem{
+				{"Head", 19984}, {"Shoulders", 226826}, {"Chest", 16721}, {"Wrist", 226830},
+				{"Hands", 226828}, {"Waist", 272395}, {"Legs", 226827}, {"Feet", 226831},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var equipped []Item
+			fails := 0
+			for _, it := range tc.items {
+				if _, ok := tables.Item(it.entry); !ok {
+					t.Fatalf("item %d is not in the item tables", it.entry)
+				}
+				item := Item{Entry: it.entry, Slot: it.slot}
+				row := gearRow(Record{Class: tc.class, Spec: tc.spec, Level: GearLevel, EquippedKnown: true,
+					Equipped: []Item{item}}, in)
+				if row.Verdict != tc.want {
+					t.Errorf("%s item %d is %s, want %s: %s\n%s", it.slot, it.entry, row.Verdict, tc.want,
+						row.Reason, strings.Join(row.Evidence, "\n"))
+				}
+				if row.Verdict == VerdictFail {
+					fails++
+				}
+				equipped = append(equipped, item)
+			}
+			if tc.want == VerdictFail && fails < 8 {
+				t.Errorf("%d of %d armour slots fail, want at least 8", fails, len(tc.items))
+			}
+			if tc.want == VerdictPass && fails != 0 {
+				t.Errorf("%d of %d armour slots fail, want none", fails, len(tc.items))
+			}
+			row := gearRow(Record{Class: tc.class, Spec: tc.spec, Level: GearLevel, EquippedKnown: true,
+				Equipped: equipped}, in)
+			if row.Verdict != tc.want {
+				t.Errorf("the outfit is %s, want %s: %s\n%s", row.Verdict, tc.want, row.Reason,
+					strings.Join(row.Evidence, "\n"))
+			}
+		})
+	}
+}
+
 func TestTalentsImplySpells(t *testing.T) {
 	tables := fixture()
 	in := testInputs(t, tables)
@@ -601,6 +733,63 @@ func TestSpecNameAndFamily(t *testing.T) {
 		{Stat: "Stamina"}, {Stat: "Agility"}, {Stat: "Strength"}, {Stat: "Attack Power"}, {Stat: "Crit"}, {Stat: "Intellect"},
 	}); families[FamilyCaster] {
 		t.Errorf("priority families %v, want no %q from beyond the top %d", families, FamilyCaster, PriorityStats)
+	}
+}
+
+// TestWeightedFamilies pins the share weighting that replaced the acceptable-set union: a family
+// below familyShareFloor of the summed weight is dropped unless it is the single largest, and the
+// total is the sum of the family sums, so a hybrid contribution counts once per family it names.
+func TestWeightedFamilies(t *testing.T) {
+	set := func(names ...string) map[string]bool {
+		out := map[string]bool{}
+		for _, name := range names {
+			out[name] = true
+		}
+		return out
+	}
+	cases := []struct {
+		name     string
+		contribs []familyShare
+		want     []string
+	}{
+		{
+			name:     "a family at the floor is acceptable",
+			contribs: []familyShare{{share: 80, families: set("strength")}, {share: 20, families: set("caster")}},
+			want:     []string{"caster", "strength"},
+		},
+		{
+			name:     "a family below the floor is not",
+			contribs: []familyShare{{share: 90, families: set("strength")}, {share: 10, families: set("caster")}},
+			want:     []string{"strength"},
+		},
+		{
+			name:     "the single largest family is acceptable below the floor",
+			contribs: []familyShare{{share: 12, families: set("strength")}, {share: 8, families: set("a")}, {share: 8, families: set("b")}, {share: 8, families: set("c")}, {share: 8, families: set("d")}},
+			want:     []string{"strength"},
+		},
+		{
+			name:     "a tie at the top accepts nothing below the floor",
+			contribs: []familyShare{{share: 10, families: set("a")}, {share: 10, families: set("b")}, {share: 10, families: set("c")}, {share: 10, families: set("d")}, {share: 10, families: set("e")}, {share: 10, families: set("f")}},
+			want:     nil,
+		},
+		{
+			name:     "one hybrid contribution names both of its families",
+			contribs: []familyShare{{share: 20, families: set("strength", "agility")}},
+			want:     []string{"agility", "strength"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := weightedFamilies(tc.contribs)
+			if len(got) != len(tc.want) {
+				t.Fatalf("families %v, want %v", got, tc.want)
+			}
+			for _, family := range tc.want {
+				if !got[family] {
+					t.Fatalf("families %v, want %v", got, tc.want)
+				}
+			}
+		})
 	}
 }
 
