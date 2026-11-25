@@ -119,9 +119,10 @@ const (
 	// PlayAgentLeadYd is how far the agent steps ahead of the tank on one try (2 yd): the tank's follow trails a body
 	// behind, so the agent's own stand alone brings the tank no sight.
 	//
-	// PlayTankSightTries and PlayTankSightTime bound the search: at most 8 tries and 60 s from the first look, then the
-	// pull goes on as it stands and the module is the judge. PlayTankSightSpots bounds the spot queries one search makes
-	// while it looks for a stand along the path (24: at the module's rate under a quarter of PlayTankSightTime).
+	// PlayTankSightTries bounds the search's lead steps (8). PlayTankSightSpots and PlayTankSightTime bound one
+	// search's whole budget: 24 queries and 60 s from the pull's first look, the skull pick and the stand walk on the
+	// path together, then the pull goes on as it stands and the module is the judge. At the module's 250 ms rate the
+	// query budget is spent well inside the time one.
 	PlaySrvSightStepYd = 2.0
 	PlayLosEyeYd       = 2.0
 	PlayAgentLeadYd    = 2.0

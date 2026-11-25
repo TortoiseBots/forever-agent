@@ -223,6 +223,9 @@ func TestPlaySessionLinkAdmitsOnlyBotLines(t *testing.T) {
 		// The one read-only sight query of the player run's channel, in exactly the shapes sightcmd's builder writes:
 		// a bot's name or a ground spot, then the target's bare lower-case guid.
 		".tb los Bottwo " + sightGuid:                     true,
+		".tb los Bottwo " + sightGuid + " #t123abc":       true,
+		".tb los Bottwo " + sightGuid + " #":              false,
+		".tb los Bottwo " + sightGuid + " #bad token":     false,
 		".tb los -285.52,-20.88,-60.41 " + sightGuid:      true,
 		".tb los 1,2,3 " + sightGuid:                      true,
 		".tb los 0,0,0 " + sightGuid:                      true,
@@ -295,6 +298,14 @@ func losAnswer(sent, line string) string {
 	return line
 }
 
+// losSent is a sight line without the per-call token the command layer appends.
+func losSent(text string) string {
+	if i := strings.LastIndex(text, " #"); i >= 0 {
+		return text[:i]
+	}
+	return text
+}
+
 // losGUID is a guid as sightcmd's builder writes it: 32 lower-case hex digits, no 0x.
 func losGUID(g wire.GUID) string { return strings.ToLower(strings.TrimPrefix(g.String(), "0x")) }
 
@@ -327,7 +338,7 @@ func TestPlayServerSightReadsTheModulesRealAnswers(t *testing.T) {
 	if in, dist, known := st.TankSees("bottwo", target); !in || !known || dist != 17.4 {
 		t.Fatalf("TankSees = (%v, %v, %v); want seen at 17.4 yd through an echoed name", in, dist, known)
 	}
-	if len(asks) != 1 || asks[0] != ".tb los Bottwo "+losGUID(target) {
+	if len(asks) != 1 || losSent(asks[0]) != ".tb los Bottwo "+losGUID(target) {
 		t.Fatalf("sent %v; want the one tank sight line", asks)
 	}
 
@@ -339,7 +350,7 @@ func TestPlayServerSightReadsTheModulesRealAnswers(t *testing.T) {
 	if in, dist, known := st.PointSees(driver.Vec3{456.929, -12.347, 3.5}, target); !in || !known || dist != 8.2 {
 		t.Fatalf("PointSees = (%v, %v, %v); want seen through the two-decimal echo", in, dist, known)
 	}
-	if len(asks) != 1 || asks[0] != ".tb los 456.929,-12.347,3.5 "+losGUID(target) {
+	if len(asks) != 1 || losSent(asks[0]) != ".tb los 456.929,-12.347,3.5 "+losGUID(target) {
 		t.Fatalf("sent %v; want the point sight line", asks)
 	}
 
@@ -428,7 +439,7 @@ func TestPlayServerSightSpacesItsQueriesAndRetriesARateRefusalOnce(t *testing.T)
 	var lines []string
 	sc.onSay = func(text string) {
 		asks = append(asks, text)
-		times = append(times, sc.Now())
+		times = append(times, time.Now())
 		if len(lines) > 0 {
 			line := lines[0]
 			lines = lines[1:]

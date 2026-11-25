@@ -235,27 +235,35 @@ type playLink struct {
 	cmdLink
 }
 
-// playSightQuery admits a `.tb los` line only as the one shape the pull builds: a bot's name or a spot on the
-// ground, then the target's guid as sightcmd's own builder writes it. A second builder would drift from the reader.
+// playSightQuery admits the pull's read-only sight query, and only as the line sightcmd's own builder writes: two
+// sides (a bot's name or a spot on the ground, then the target's guid) and a trailing per-call #token once the command
+// layer has appended it. The words are read from their positions and the rebuilt line must equal the sent one, so the
+// command's own name is never written here and nothing but the builder's shape gets through.
 func playSightQuery(text string) bool {
-	rest, ok := strings.CutPrefix(text, ".tb los ")
-	if !ok {
+	body := text
+	if i := strings.LastIndex(text, " #"); i >= 0 {
+		if !command.ValidToken(text[i+2:]) {
+			return false
+		}
+		body = text[:i]
+	}
+	if strings.ContainsRune(body, '#') {
 		return false
 	}
-	parts := strings.Split(rest, " ")
-	if len(parts) != 2 {
+	words := strings.Fields(body)
+	if len(words) != 4 {
 		return false
 	}
-	a, err := sightcmd.ParseSide("a", parts[0])
+	a, err := sightcmd.ParseSide("a", words[2])
 	if err != nil || (a.Kind != sightcmd.Name && a.Kind != sightcmd.Position) {
 		return false
 	}
-	b, err := sightcmd.ParseSide("b", parts[1])
+	b, err := sightcmd.ParseSide("b", words[3])
 	if err != nil || b.Kind != sightcmd.Guid {
 		return false
 	}
 	line, err := sightcmd.BuildLine(a, b, nil)
-	return err == nil && line == text
+	return err == nil && line == body
 }
 
 // playLineAllowed is the closed vocabulary of the player run's command channel, held to the contract's whole grammar

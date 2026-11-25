@@ -93,7 +93,7 @@ func (s *sightPort) PointSees(Vec3, wire.GUID) (bool, float64, bool)  { s.calls+
 func TestPlayTankSightPickSharesTheSearchBudget(t *testing.T) {
 	port := &sightPort{answer: func() (bool, float64, bool) { return false, 0, true }}
 	p := &playRun{
-		cfg:   PlayConfig{Bots: []string{"Botone"}},
+		cfg:   PlayConfig{Bots: [4]string{"Botone"}},
 		route: &Route{},
 		ports: PlayPorts{ServerSight: port, Clock: NewVClock(time.Unix(0, 0))},
 	}
