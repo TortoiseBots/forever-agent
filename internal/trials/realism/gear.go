@@ -30,12 +30,13 @@ type gearBand struct {
 }
 
 // GearAllowance is the item level a bot may wear above its own level, by level band. These are
-// STARTING VALUES to tune, not facts about players: each is the 95th percentile of (item level minus
-// required level) over the game's own item table, counted at the band's levels. Through level 59 an
+// STARTING VALUES to tune, not facts about players: each was taken as the 95th percentile of (item
+// level minus required level) over the game's own item table, counted at the band's levels. That item
+// table, the query and its version are NOT in this repository (data/aotc has no item level or
+// required level), so the values cannot be reproduced from it; the manual says so. Through level 59 an
 // item sits about five item levels above the level its required level names; at 60 the raid tier
-// reaches item levels 88-92 on required-level-60 items, so the high percentile is 30. The manual
-// states the derivation and that a real batch may move it. Raid gear on a pool bot is the `source`
-// part's business, not this one's.
+// reaches item levels 88-92 on required-level-60 items, so the high percentile is 30. A real batch may
+// move them. Raid gear on a pool bot is the `source` part's business, not this one's.
 var GearAllowance = []gearBand{
 	{MaxLevel: 19, Allowance: 5},
 	{MaxLevel: 29, Allowance: 5},
@@ -129,7 +130,7 @@ func gearCheck(b Bot, _ Tables) Check {
 			Reason: "no worn item carries an item level (the item read-out is missing)"})
 	case len(levels) < len(b.Items):
 		// An unread item could be the one far above the allowance: the part judges what it saw and
-		// says how many slots it could not, never a PASS over a partial set (H4's contract).
+		// says how many slots it could not, never a PASS over a partial set.
 		parts = append(parts, Part{Name: "item_level", Verdict: VerdictInconclusive, Decisive: true,
 			Reason: fmt.Sprintf("%d of %d worn item(s) carry no item level, so an over-allowance one cannot be ruled out",
 				len(b.Items)-len(levels), len(b.Items))})

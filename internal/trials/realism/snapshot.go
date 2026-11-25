@@ -198,8 +198,11 @@ func (s Snapshot) ValidateTables(t Tables) error {
 		if len(b.Talents) == 0 {
 			continue
 		}
+		// The same class and spec words the talent check looks up with: a spec alias ("bm",
+		// "resto") must meet the rank cap too.
+		class, spec := botSpec(*b)
 		maxRank := map[int64]int64{}
-		for _, row := range t.CommonTalents(b.Class, b.Spec, "all", 0) {
+		for _, row := range t.CommonTalents(class, spec, "all", 0) {
 			maxRank[row.SpellID] = row.MaxRank
 		}
 		total := 0

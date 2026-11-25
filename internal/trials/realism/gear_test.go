@@ -1,6 +1,7 @@
 package realism
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -220,5 +221,59 @@ func TestGearCheckIsNeverAFailOnMissingData(t *testing.T) {
 		if c.Verdict == VerdictFail {
 			t.Fatalf("%s failed on an empty snapshot: %s", c.ID, c.Reason)
 		}
+	}
+}
+
+// TestGearEverySourceWordIsJudged walks every source word the format allows: raid, PvP and reputation
+// each fail the source part (and the check) beside permitted items, every other word passes. Mutation:
+// dropping one of the three from the forbidden list leaves its case passing.
+func TestGearEverySourceWordIsJudged(t *testing.T) {
+	for _, source := range itemSources {
+		forbidden := source == "raid" || source == "pvp" || source == "reputation"
+		t.Run(source, func(t *testing.T) {
+			b := bot("bot1", 60)
+			b.Items = []Item{item("head", 1, 60), item("chest", 2, 60), item("legs", 3, 60)}
+			b.Items[1].Source = source
+			c := checkOfID(t, Judge(b, Default()), RuleGear)
+			part := partOf(t, c, "source")
+			if forbidden {
+				if part.Verdict != VerdictFail || part.Value != 1 || c.Verdict != VerdictFail || len(part.Lines) != 1 {
+					t.Fatalf("a %s item must fail the source part and the check: %+v (%s %s)", source, part, c.Verdict, c.Reason)
+				}
+				return
+			}
+			if part.Verdict != VerdictPass || c.Verdict != VerdictPass {
+				t.Fatalf("a %s item is allowed: %+v (%s %s)", source, part, c.Verdict, c.Reason)
+			}
+		})
+	}
+}
+
+// TestSpecMeanIgnoresAUnjudgedItemLevelCount pins the gear mean's label: its number is the share of
+// item levels above the allowance and nothing else. Items with a required level above the bot's but no
+// item level fail the required-level part (a COUNT), and that count must not show under the "above"
+// share label: the spec cell says how many bots failed and no mean.
+func TestSpecMeanIgnoresAUnjudgedItemLevelCount(t *testing.T) {
+	s := Snapshot{Format: Format}
+	for i := range MinSpecBotsForMean {
+		b := bot(fmt.Sprintf("bot%d", i+1), 30)
+		b.Items = []Item{{Slot: "head", ItemID: 1, RequiredLevel: 40, Source: "dungeon"}}
+		s.Bots = append(s.Bots, b)
+	}
+	r := JudgeReading(s, Default())
+	var gear CheckCount
+	for _, c := range r.Specs[0].Checks {
+		if c.ID == RuleGear {
+			gear = c
+		}
+	}
+	if gear.Fail != MinSpecBotsForMean {
+		t.Fatalf("the required level must fail every bot: %+v", gear)
+	}
+	if gear.Judged != 0 || gear.Mean != 0 {
+		t.Fatalf("no item level was read, so no above-share mean: %+v", gear)
+	}
+	if cell := countCell(gear); strings.Contains(cell, "above") || strings.Contains(cell, "n=") {
+		t.Fatalf("the cell must not show a count under the share label: %q", cell)
 	}
 }

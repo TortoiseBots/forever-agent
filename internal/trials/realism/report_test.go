@@ -2,6 +2,7 @@ package realism
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -213,6 +214,15 @@ func TestCompareOnlyBeforeAndOnlyAfter(t *testing.T) {
 			t.Fatalf("an only-after key is not compared: %+v", c)
 		}
 	}
+	// No key is in both snapshots, so the headline has nothing to compare: never better or worse.
+	for _, c := range d.Checks {
+		if c.Change != "not comparable" {
+			t.Fatalf("a headline with no shared key must read not comparable: %+v", c)
+		}
+	}
+	if d.ComparedBefore != 0 || d.ComparedAfter != 0 || d.OnlyBeforeBots != 1 || d.OnlyAfterBots != 1 {
+		t.Fatalf("bots per side: %+v", d)
+	}
 	var w bytes.Buffer
 	if err := d.WriteText(&w); err != nil {
 		t.Fatal(err)
@@ -222,19 +232,108 @@ func TestCompareOnlyBeforeAndOnlyAfter(t *testing.T) {
 	}
 }
 
-// TestCompareSameReadingIsNoChange pins that two identical snapshots diff to `same` everywhere.
+// tenSixtyBots is ten level 60 bots of which `failing` use a raid-sourced item (a GEAR FAIL).
+func tenSixtyBots(failing int) []Bot {
+	var bots []Bot
+	for i := range 10 {
+		b := goodSixty()
+		b.ID = fmt.Sprintf("bot%02d", i+1)
+		if i < failing {
+			b.Items[0].Source = "raid"
+		}
+		bots = append(bots, b)
+	}
+	return bots
+}
+
+// TestCompareHeadlineIgnoresBandsInOneSnapshotOnly pins the headline: the same ten level 60 bots
+// (five GEAR FAILs) plus ten new INCONCLUSIVE level 45 bots is no change. Counting whole snapshots
+// the fail share dropped from 0.5 to 0.25 and the headline read "better". The new bots are listed as
+// only after and enter no verdict.
+func TestCompareHeadlineIgnoresBandsInOneSnapshotOnly(t *testing.T) {
+	before := tenSixtyBots(5)
+	after := tenSixtyBots(5)
+	for i := range 10 {
+		b := goodSixty()
+		b.ID = fmt.Sprintf("new%02d", i+1)
+		b.Level = 45
+		b.TalentsKnown, b.TalentsComplete, b.Talents = false, false, nil
+		b.ItemsKnown, b.Items = false, nil
+		after = append(after, b)
+	}
+	d := Compare(
+		JudgeReading(Snapshot{Format: Format, Source: "before", Bots: before}, Default()),
+		JudgeReading(Snapshot{Format: Format, Source: "after", Bots: after}, Default()),
+	)
+	for _, c := range d.Checks {
+		if c.Change != "unchanged" {
+			t.Fatalf("%s: ten new bots in a band of their own changed nothing, got %q (%+v -> %+v)", c.ID, c.Change, c.Before, c.After)
+		}
+	}
+	if gear := checkDiffOf(t, d, RuleGear); gear.Before.Fail != 5 || gear.After.Fail != 5 || gear.After.total() != 10 {
+		t.Fatalf("the headline counts the shared band only: %+v", gear)
+	}
+	if d.OnlyAfterBots != 10 || d.OnlyBeforeBots != 0 || d.ComparedBefore != 10 || d.ComparedAfter != 10 {
+		t.Fatalf("bots per side: %+v", d)
+	}
+	var w bytes.Buffer
+	if err := d.WriteText(&w); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(w.String(), "10 bot(s) only after") {
+		t.Fatalf("the text must list the 10 bots as only after:\n%s", w.String())
+	}
+}
+
+// TestCompareHeadlineAndRowsShareOneVerdict pins that the headline and the rows read the same
+// verdict when they cover the same keys: one shared band, half the bots failing before, none after.
+func TestCompareHeadlineAndRowsShareOneVerdict(t *testing.T) {
+	d := Compare(
+		JudgeReading(Snapshot{Format: Format, Source: "before", Bots: tenSixtyBots(5)}, Default()),
+		JudgeReading(Snapshot{Format: Format, Source: "after", Bots: tenSixtyBots(0)}, Default()),
+	)
+	head := checkDiffOf(t, d, RuleGear)
+	row := specDiffOf(t, d, "druid", "balance", "60")
+	for _, c := range row.Checks {
+		if c.ID == RuleGear && (c.Change != head.Change || head.Change != "better") {
+			t.Fatalf("headline %q and row %q must agree and read better", head.Change, c.Change)
+		}
+	}
+}
+
+// TestChangeWordLostReadoutAndShares pins the verdict words on counts alone.
+func TestChangeWordLostReadoutAndShares(t *testing.T) {
+	cases := []struct {
+		name          string
+		before, after CheckCount
+		want          string
+	}{
+		{"fail to inconclusive", CheckCount{Fail: 5, Pass: 5}, CheckCount{Pass: 5, Inconclusive: 5}, "no longer judged"},
+		{"fewer fails", CheckCount{Fail: 5, Pass: 5}, CheckCount{Fail: 2, Pass: 8}, "better"},
+		{"more fails", CheckCount{Fail: 2, Pass: 8}, CheckCount{Fail: 5, Pass: 5}, "worse"},
+		{"same share, more bots", CheckCount{Fail: 1, Pass: 1}, CheckCount{Fail: 5, Pass: 5}, "unchanged"},
+		{"an empty side", CheckCount{}, CheckCount{Fail: 1}, "not comparable"},
+	}
+	for _, tc := range cases {
+		if got := changeWord(tc.before, tc.after); got != tc.want {
+			t.Fatalf("%s: %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestCompareSameReadingIsNoChange pins that two identical snapshots diff to `unchanged` everywhere.
 func TestCompareSameReadingIsNoChange(t *testing.T) {
 	a := JudgeReading(Snapshot{Format: Format, Source: "a", Bots: []Bot{goodSixty()}}, Default())
 	b := JudgeReading(Snapshot{Format: Format, Source: "b", Bots: []Bot{goodSixty()}}, Default())
 	d := Compare(a, b)
 	for _, c := range d.Checks {
-		if c.Change != "same" {
+		if c.Change != "unchanged" {
 			t.Fatalf("%s changed between identical snapshots: %+v", c.ID, c)
 		}
 	}
 	for _, sd := range d.Specs {
 		for _, c := range sd.Checks {
-			if c.Change != "same" {
+			if c.Change != "unchanged" {
 				t.Fatalf("%s/%s changed between identical snapshots: %+v", sd.Spec, c.ID, c)
 			}
 		}

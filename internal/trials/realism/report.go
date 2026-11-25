@@ -10,7 +10,7 @@ package realism
 // spec. The before/after compares the two readings per spec AND level band, on shares rather than
 // counts (the bot sets may differ), with only the intersection compared: a spec or band in one
 // snapshot only is listed as such, and a verdict that became INCONCLUSIVE is "no longer judged",
-// never "better". Bot ids are not identities (assigned by name order per snapshot), so no bot is
+// never "better". The headline table counts the same keys as the rows, never the whole snapshots. Bot ids are not identities (assigned by name order per snapshot), so no bot is
 // paired across the two readings.
 
 import (
@@ -154,8 +154,8 @@ func JudgeReading(s Snapshot, t Tables) Reading {
 				default:
 					count.Inconclusive++
 				}
-				if c.Verdict != VerdictInconclusive && c.Measure != "" {
-					values = append(values, c.Value)
+				if v, ok := meanValue(id, c); ok {
+					values = append(values, v)
 				}
 			}
 			count.Judged = len(values)
@@ -281,6 +281,33 @@ func countCell(c CheckCount) string {
 	return cell
 }
 
+// meanValue is the number a check contributes to its spec cell's mean, and whether it has one. It is
+// the value of the part the mean's label names (point_share for talents, item_level for gear, fits for
+// stats), never another part's number: the gear check's first judged part can be the required-level
+// count, which is no share of item levels above the allowance.
+func meanValue(id string, c Check) (float64, bool) {
+	name := ""
+	switch id {
+	case RuleTalents:
+		name = "point_share"
+	case RuleGear:
+		name = "item_level"
+	case RuleStats:
+		name = "fits"
+	default:
+		if c.Verdict != VerdictInconclusive && c.Measure != "" {
+			return c.Value, true
+		}
+		return 0, false
+	}
+	for _, p := range c.Parts {
+		if p.Name == name && p.Verdict != VerdictInconclusive && p.Measure != "" {
+			return p.Value, true
+		}
+	}
+	return 0, false
+}
+
 // meanWord names the number a check's mean is: what the cell's number measures. The talents and gear
 // means are shares (of the points the common picks account for; of the item levels read), the stats
 // mean is the gear rule's fit share, and the enchant mean is a count of bad slots.
@@ -336,25 +363,31 @@ type SpecDiff struct {
 // Diff is the before/after report: the per-check counts and the per-spec-and-band counts. It never
 // pairs bots: a botN id is assigned by name order in each snapshot, so before.bot3 and after.bot3
 // can be different characters.
+//
+// Checks is the headline and counts only the spec and level-band keys present in BOTH snapshots (the
+// same keys the per-spec rows compare): ComparedBefore and ComparedAfter are the bots those keys hold
+// on each side, and OnlyBeforeBots and OnlyAfterBots are the bots in keys of one snapshot only, which
+// enter no better or worse verdict.
 type Diff struct {
-	Format string      `json:"format"`
-	Before string      `json:"before,omitempty"`
-	After  string      `json:"after,omitempty"`
-	Checks []CheckDiff `json:"checks"`
-	Specs  []SpecDiff  `json:"specs"`
+	Format         string      `json:"format"`
+	Before         string      `json:"before,omitempty"`
+	After          string      `json:"after,omitempty"`
+	ComparedBefore int         `json:"compared_before_bots"`
+	ComparedAfter  int         `json:"compared_after_bots"`
+	OnlyBeforeBots int         `json:"only_before_bots"`
+	OnlyAfterBots  int         `json:"only_after_bots"`
+	Checks         []CheckDiff `json:"checks"`
+	Specs          []SpecDiff  `json:"specs"`
 }
 
 // specKey is one class, spec and level band.
 type specKey struct{ Class, Spec, Band string }
 
-// Compare diffs two readings: after is the newer snapshot. Only keys in both readings are compared
-// (on shares over each side's bots); a key in one reading only is listed with its Presence.
+// Compare diffs two readings: after is the newer snapshot. Only keys in both readings are compared,
+// the headline included (on shares over each side's bots in those keys); a key in one reading only
+// is listed with its Presence and counted in OnlyBeforeBots or OnlyAfterBots.
 func Compare(before, after Reading) Diff {
 	d := Diff{Format: DiffFormat, Before: before.Source, After: after.Source}
-	for _, id := range checkIDs {
-		b, a := countOf(before.Checks, id), countOf(after.Checks, id)
-		d.Checks = append(d.Checks, CheckDiff{ID: id, Before: b, After: a, Change: changeWord(b, a, before.Judged(), after.Judged())})
-	}
 	beforeSpecs := specMap(before.Specs)
 	afterSpecs := specMap(after.Specs)
 	keys := map[specKey]bool{}
@@ -378,6 +411,8 @@ func Compare(before, after Reading) Diff {
 		}
 		return a.Band < b.Band
 	})
+	headBefore := map[string]CheckCount{}
+	headAfter := map[string]CheckCount{}
 	for _, k := range ordered {
 		bs, bOK := beforeSpecs[k]
 		as, aOK := afterSpecs[k]
@@ -385,26 +420,47 @@ func Compare(before, after Reading) Diff {
 		switch {
 		case bOK && aOK:
 			sd.Bots = as.Bots
+			d.ComparedBefore += bs.Bots
+			d.ComparedAfter += as.Bots
 			for _, id := range checkIDs {
 				bc, ac := countOf(bs.Checks, id), countOf(as.Checks, id)
-				sd.Checks = append(sd.Checks, CheckDiff{ID: id, Before: bc, After: ac,
-					Change: changeWord(bc, ac, bs.Bots, as.Bots)})
+				sd.Checks = append(sd.Checks, CheckDiff{ID: id, Before: bc, After: ac, Change: changeWord(bc, ac)})
+				headBefore[id] = addCounts(headBefore[id], bc)
+				headAfter[id] = addCounts(headAfter[id], ac)
 			}
 		case bOK:
 			sd.Bots, sd.Presence = bs.Bots, "only before"
+			d.OnlyBeforeBots += bs.Bots
 			for _, id := range checkIDs {
 				sd.Checks = append(sd.Checks, CheckDiff{ID: id, Before: countOf(bs.Checks, id), Change: sd.Presence})
 			}
 		default:
 			sd.Bots, sd.Presence = as.Bots, "only after"
+			d.OnlyAfterBots += as.Bots
 			for _, id := range checkIDs {
 				sd.Checks = append(sd.Checks, CheckDiff{ID: id, After: countOf(as.Checks, id), Change: sd.Presence})
 			}
 		}
 		d.Specs = append(d.Specs, sd)
 	}
+	// The headline is the same verdict function over the compared keys' summed counts: bots in a key
+	// of one snapshot only never reach it.
+	for _, id := range checkIDs {
+		b, a := headBefore[id], headAfter[id]
+		b.ID, a.ID = id, id
+		d.Checks = append(d.Checks, CheckDiff{ID: id, Before: b, After: a, Change: changeWord(b, a)})
+	}
 	return d
 }
+
+// addCounts sums two checks' verdict counts (the ID and the mean are not carried: a mean does not add).
+func addCounts(x, y CheckCount) CheckCount {
+	return CheckCount{ID: x.ID, Pass: x.Pass + y.Pass, Fail: x.Fail + y.Fail, Inconclusive: x.Inconclusive + y.Inconclusive,
+		Judged: x.Judged + y.Judged}
+}
+
+// total is the bots a count covers.
+func (c CheckCount) total() int { return c.Pass + c.Fail + c.Inconclusive }
 
 // specMap indexes per-spec-and-band rows by their key.
 func specMap(specs []SpecSummary) map[specKey]SpecSummary {
@@ -425,13 +481,15 @@ func countOf(counts []CheckCount, id string) CheckCount {
 	return CheckCount{ID: id}
 }
 
-// changeWord says whether one check's per-spec-and-band counts improved, on SHARES of each side's
-// bots (the two readings' bot sets may differ). More FAILs is worse, fewer better; with FAILs equal,
-// more PASSes is better. A verdict that turned INCONCLUSIVE while nothing started passing is "no
-// longer judged" — a lost read-out is not an improvement.
-func changeWord(before, after CheckCount, beforeN, afterN int) string {
+// changeWord is the ONE verdict function of the before/after report, used by the headline and by every
+// per-spec row: better, worse, unchanged, no longer judged, or not comparable. It reads SHARES of each
+// side's bots (the two readings' bot sets differ in size). More FAILs is worse, fewer better; with FAILs
+// equal, more PASSes is better. A verdict that turned INCONCLUSIVE while nothing started passing is "no
+// longer judged": a lost read-out is not an improvement. A side with no bots gives "not comparable".
+func changeWord(before, after CheckCount) string {
+	beforeN, afterN := before.total(), after.total()
 	if beforeN <= 0 || afterN <= 0 {
-		return "same"
+		return "not comparable"
 	}
 	switch {
 	case shareMore(after.Inconclusive, afterN, before.Inconclusive, beforeN) &&
@@ -450,7 +508,7 @@ func changeWord(before, after CheckCount, beforeN, afterN int) string {
 	case shareMore(after.Inconclusive, afterN, before.Inconclusive, beforeN):
 		return "no longer judged"
 	}
-	return "same"
+	return "unchanged"
 }
 
 // shareLess reports count1/N1 < count2/N2 without floating point.
@@ -467,6 +525,10 @@ func shareMore(count1, n1, count2, n2 int) bool {
 func (d Diff) WriteText(w io.Writer) error {
 	fmt.Fprintf(w, "before: %s\nafter: %s\n", orDefault(d.Before, "unnamed"), orDefault(d.After, "unnamed"))
 	fmt.Fprintln(w, "\n## Checks")
+	fmt.Fprintf(w, "compared: the spec and level bands in both snapshots (%d bot(s) before, %d after)\n", d.ComparedBefore, d.ComparedAfter)
+	if d.OnlyBeforeBots > 0 || d.OnlyAfterBots > 0 {
+		fmt.Fprintf(w, "not compared: %d bot(s) only before, %d bot(s) only after (bands in one snapshot only)\n", d.OnlyBeforeBots, d.OnlyAfterBots)
+	}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "check\tbefore\tafter\tchange")
 	for _, c := range d.Checks {
@@ -511,24 +573,33 @@ func diffCell(c CheckCount) string {
 	return fmt.Sprintf("%d/%d/%d", c.Pass, c.Fail, c.Inconclusive)
 }
 
-// impact is the count change a spec's cell shows ("+1 pass, -1 fail").
+// impact is the change of the shares a cell shows, in percentage points ("-10 pts fail"): the two
+// sides can hold a different number of bots, so a count difference would mislead.
 func impact(after, before CheckCount) string {
-	pass, fail := after.Pass-before.Pass, after.Fail-before.Fail
-	switch {
-	case pass == 0 && fail == 0:
+	pass := sharePoints(after.Pass, after.total()) - sharePoints(before.Pass, before.total())
+	fail := sharePoints(after.Fail, after.total()) - sharePoints(before.Fail, before.total())
+	if after.total() <= 0 || before.total() <= 0 || (pass == 0 && fail == 0) {
 		return "="
 	}
 	out := ""
 	if pass != 0 {
-		out += fmt.Sprintf("%+d pass", pass)
+		out += fmt.Sprintf("%+d pts pass", pass)
 	}
 	if fail != 0 {
 		if out != "" {
 			out += ", "
 		}
-		out += fmt.Sprintf("%+d fail", fail)
+		out += fmt.Sprintf("%+d pts fail", fail)
 	}
 	return out
+}
+
+// sharePoints is count of n in whole percent, rounded; zero for an empty side.
+func sharePoints(count, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return int((int64(count)*200 + int64(n)) / (2 * int64(n)))
 }
 
 // SortedBotIDs lists a reading's bot ids, for a deterministic listing.

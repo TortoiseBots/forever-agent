@@ -7,9 +7,10 @@ package realism
 //
 //	point_share  the share of the points the level group's common picks account for that the bot
 //	             spends in them. The denominator is capped per tree at what that tree's common picks
-//	             can hold, so a build that takes every common pick cannot score under 100% because
-//	             the file's common picks cannot fill the character's whole point budget. PASS at or
-//	             above TalentPointShareMin.
+//	             hold at the rank the data reports as usual (usual_rank), so a build that takes
+//	             every common pick at its usual rank cannot score under 100% because the file's
+//	             common picks cannot fill the character's whole point budget. PASS at or above
+//	             TalentPointShareMin.
 //	split        level 60 only: the bot's point split (points per tree) against the nearest of the
 //	             spec's 20 most common splits, in points moved between trees. PASS at or below
 //	             SplitPointsMax, and INCONCLUSIVE when a point sits in a talent the tables do not
@@ -146,15 +147,18 @@ func talentCheck(b Bot, t Tables) Check {
 			part("split", VerdictInconclusive, 0, "", reason),
 		}, nil)
 	}
-	// The denominator is what the common picks can account for in the trees this build uses: per
-	// tree, the lesser of the bot's points there and the tree's common picks' maximum ranks. The
-	// file's common picks of a level group often cannot fill the whole point budget (at level 19 a
-	// single talent may be the only common pick); measuring against the bot's full points would fail
-	// a build that took every common pick.
+	// The denominator is what the common picks account for in the trees this build uses: per tree,
+	// the lesser of the bot's points there and the tree's common picks at their usual rank. The file's
+	// common picks of a level group often cannot fill the whole point budget (at level 19 a single
+	// talent may be the only common pick); measuring against the bot's full points would fail a build
+	// that took every common pick. The rank is the usual one, not the maximum: the group's usual rank
+	// is what its players hold (it is pooled over the group's levels, so it can sit under the rank a
+	// level 19 character could afford), and a capacity at the maximum rank made a build at the
+	// players' own usual ranks fail in four spec and level cases of the table test.
 	var capacityPerTab [splitTabs]int
 	for _, row := range common {
 		if row.Tab >= 0 && row.Tab < splitTabs {
-			capacityPerTab[row.Tab] += int(row.MaxRank)
+			capacityPerTab[row.Tab] += usualCapacity(row)
 		}
 	}
 	denominator, uncovered := 0, 0
@@ -180,6 +184,9 @@ func talentCheck(b Bot, t Tables) Check {
 			fmt.Sprintf("the level group's common picks account for only %d of the build's %d point(s) in its trees: too few to judge",
 				denominator, total))}, nil)
 	}
+	// Ranks above the usual one in a common pick still count as in the common picks, but never past
+	// what they account for: the share is at most 1.
+	inCommon = min(inCommon, denominator)
 	share := float64(inCommon) / float64(denominator)
 	parts := []Part{{
 		Name: "point_share", Verdict: verdictAtLeast(share, TalentPointShareMin), Value: share,
@@ -190,10 +197,30 @@ func talentCheck(b Bot, t Tables) Check {
 	}}
 	evidence := []string{fmt.Sprintf("%d point(s), %d in the %d common picks at %s (they can hold %d point(s) in this build's trees)",
 		total, inCommon, len(common), group, denominator)}
+	// Say whether the split was judged: it is not decisive, so a level 60 spec without split rows
+	// passes on the point share alone and the reader must see that.
 	if b.Level == 60 {
-		parts = append(parts, splitPart(b, t, class, spec, group))
+		split := splitPart(b, t, class, spec, group)
+		parts = append(parts, split)
+		if split.Verdict == VerdictInconclusive {
+			evidence = append(evidence, "split not judged: "+split.Reason)
+		} else {
+			evidence = append(evidence, "split judged")
+		}
+	} else {
+		evidence = append(evidence, "split not judged: it is judged at level 60 only")
 	}
 	return checkOf(RuleTalents, parts, evidence)
+}
+
+// usualCapacity is the points one common pick accounts for: the rank the group's players usually
+// hold, never above the talent's own maximum rank.
+func usualCapacity(row aotc.TalentPick) int {
+	usual := row.UsualRank
+	if row.MaxRank > 0 && usual > row.MaxRank {
+		usual = row.MaxRank
+	}
+	return int(max(usual, 0))
 }
 
 // splitPart judges a level-60 bot's point split against the spec's common splits.

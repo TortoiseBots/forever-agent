@@ -85,10 +85,12 @@ func allSpecs(t *testing.T, tables *aotc.Data) [][2]string {
 }
 
 // playerLikeBuild builds a whole talent build from the player data itself: the level group's common
-// picks at their maximum ranks first, then the group's other picks, and at 60 distributed over the
-// trees of the spec's most common split. It is the build a player who follows the data would have,
-// and it must PASS the talent check at every level the ticket names.
-func playerLikeBuild(t *testing.T, tables *aotc.Data, class, spec string, level int) []Talent {
+// picks first, then the group's other picks, then (only if the tree still needs points) the common
+// picks' remaining ranks; at 60 distributed over the trees of the spec's most common split. With
+// usual false the common picks are taken at their maximum rank, with usual true at the rank the
+// group's players report as usual (usual_rank), the other points going to other talents: the build a
+// player who follows the data takes. Both must PASS the talent check at every level the ticket names.
+func playerLikeBuild(t *testing.T, tables *aotc.Data, class, spec string, level int, usual bool) []Talent {
 	t.Helper()
 	group := playdata.LevelGroup(level)
 	if group == "" {
@@ -97,12 +99,13 @@ func playerLikeBuild(t *testing.T, tables *aotc.Data, class, spec string, level 
 	points := TalentPoints(level)
 	all := tables.CommonTalents(class, spec, "all", 0)
 	maxRank := map[int64]int64{}
+	usualRank := map[int64]int64{}
 	commonID := map[int64]bool{}
 	for _, row := range tables.CommonTalents(class, spec, group, TalentPickShare) {
 		commonID[row.SpellID] = true
+		usualRank[row.SpellID] = row.UsualRank
 	}
-	// The common picks first in each tree, then the rest by pick share: a player-like build takes
-	// the common picks before it reaches for the others.
+	// Each tree's rows by pick share: a player-like build takes the likelier talents first.
 	byTab := map[int][]aotc.TalentPick{}
 	for _, row := range all {
 		maxRank[row.SpellID] = row.MaxRank
@@ -110,12 +113,7 @@ func playerLikeBuild(t *testing.T, tables *aotc.Data, class, spec string, level 
 	}
 	for tab := range byTab {
 		rows := byTab[tab]
-		sort.SliceStable(rows, func(i, j int) bool {
-			if commonID[rows[i].SpellID] != commonID[rows[j].SpellID] {
-				return commonID[rows[i].SpellID]
-			}
-			return rows[i].PickPct > rows[j].PickPct
-		})
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].PickPct > rows[j].PickPct })
 	}
 	// The points per tree first.
 	var targets [splitTabs]int
@@ -158,19 +156,41 @@ func playerLikeBuild(t *testing.T, tables *aotc.Data, class, spec string, level 
 	var out []Talent
 	for tab := range splitTabs {
 		need := targets[tab]
-		for _, row := range byTab[tab] {
-			if need <= 0 {
-				break
-			}
-			n := int(min(int64(need), maxRank[row.SpellID]))
+		taken := map[int64]int{}
+		fill := func(row aotc.TalentPick, limit int64) {
+			n := int(min(int64(need), limit-int64(taken[row.SpellID])))
 			if n <= 0 {
-				continue
+				return
 			}
-			out = append(out, Talent{SpellID: row.SpellID, Rank: n, Tab: new(tab)})
+			taken[row.SpellID] += n
 			need -= n
+		}
+		for _, row := range byTab[tab] {
+			if commonID[row.SpellID] {
+				limit := maxRank[row.SpellID]
+				if usual {
+					limit = min(limit, usualRank[row.SpellID])
+				}
+				fill(row, limit)
+			}
+		}
+		for _, row := range byTab[tab] {
+			if !commonID[row.SpellID] {
+				fill(row, maxRank[row.SpellID])
+			}
+		}
+		for _, row := range byTab[tab] {
+			if commonID[row.SpellID] {
+				fill(row, maxRank[row.SpellID])
+			}
 		}
 		if need > 0 {
 			t.Fatalf("%s/%s level %d: tree %d cannot hold its %d points from the table", class, spec, level, tab, targets[tab])
+		}
+		for _, row := range byTab[tab] {
+			if taken[row.SpellID] > 0 {
+				out = append(out, Talent{SpellID: row.SpellID, Rank: taken[row.SpellID], Tab: new(tab)})
+			}
 		}
 	}
 	total := 0
@@ -184,29 +204,38 @@ func playerLikeBuild(t *testing.T, tables *aotc.Data, class, spec string, level 
 }
 
 // TestTalentCheckPlayerLikeBuildsPass is the ticket's table test: a build made from the data itself
-// passes at every level the ticket names, for EVERY spec. Before the denominator was capped at what
-// the common picks account for, 16 of 27 specs failed at level 19, 15 at 29 and 5 at 39 with a
-// player-perfect build.
+// passes at every level the ticket names, for EVERY spec (135 cases), in two variants: the common
+// picks at their maximum rank, and at the rank the data reports as usual. The usual variant is not
+// circular with the capacity: before the capacity used the usual rank it failed in four cases
+// (hunter/beast-mastery at 29 with a 0.70 share; shaman/elemental, warlock/destruction and
+// warrior/fury at 19 with 0.60). Before the denominator was capped at all, 16 of 27 specs failed at
+// level 19, 15 at 29 and 5 at 39 with a player-perfect build.
 func TestTalentCheckPlayerLikeBuildsPass(t *testing.T) {
 	tables := Default().(*aotc.Data)
-	for _, level := range []int{19, 29, 39, 49, 60} {
-		for _, spec := range allSpecs(t, tables) {
-			class, name := spec[0], spec[1]
-			t.Run(fmt.Sprintf("%s/%s/%d", class, name, level), func(t *testing.T) {
-				b := Bot{ID: "bot1", Class: class, Spec: name, Level: level,
-					TalentsKnown: true, TalentsComplete: true}
-				b.Talents = playerLikeBuild(t, tables, class, name, level)
-				if err := snapshotOf(b).ValidateTables(Default()); err != nil {
-					t.Fatalf("the build is not a loadable snapshot: %v", err)
-				}
-				c := checkOfID(t, Judge(b, Default()), RuleTalents)
-				if c.Verdict != VerdictPass {
-					t.Fatalf("a player-like build must pass: %s (%s)", c.Verdict, c.Reason)
-				}
-				if share := partOf(t, c, "point_share"); share.Verdict != VerdictPass {
-					t.Fatalf("point share: %+v", share)
-				}
-			})
+	for _, usual := range []bool{false, true} {
+		variant := "max-rank"
+		if usual {
+			variant = "usual-rank"
+		}
+		for _, level := range []int{19, 29, 39, 49, 60} {
+			for _, spec := range allSpecs(t, tables) {
+				class, name := spec[0], spec[1]
+				t.Run(fmt.Sprintf("%s/%s/%s/%d", variant, class, name, level), func(t *testing.T) {
+					b := Bot{ID: "bot1", Class: class, Spec: name, Level: level,
+						TalentsKnown: true, TalentsComplete: true}
+					b.Talents = playerLikeBuild(t, tables, class, name, level, usual)
+					if err := snapshotOf(b).ValidateTables(Default()); err != nil {
+						t.Fatalf("the build is not a loadable snapshot: %v", err)
+					}
+					c := checkOfID(t, Judge(b, Default()), RuleTalents)
+					if c.Verdict != VerdictPass {
+						t.Fatalf("a player-like build must pass: %s (%s)", c.Verdict, c.Reason)
+					}
+					if share := partOf(t, c, "point_share"); share.Verdict != VerdictPass {
+						t.Fatalf("point share: %+v", share)
+					}
+				})
+			}
 		}
 	}
 }
@@ -257,8 +286,8 @@ func TestTalentCheckFailsAForeignBuild(t *testing.T) {
 }
 
 // TestTalentPointShareThreshold walks the 80% floor on a fake table whose common picks can hold the
-// whole build: 20 of 25 points pass exactly at the floor, 15 of 25 fail. Mutation: changing
-// TalentPointShareMin moves one of the two.
+// whole build: 20 of 25 points pass exactly at the floor, 19 of 25 (0.76, just under it) and 15 of 25
+// fail. Mutation: moving TalentPointShareMin either way moves one of the three.
 func TestTalentPointShareThreshold(t *testing.T) {
 	tables := pointShareTables()
 	pass := Bot{ID: "bot1", Class: "druid", Spec: "balance", Level: 34,
@@ -279,6 +308,110 @@ func TestTalentPointShareThreshold(t *testing.T) {
 	if share := partOf(t, c, "point_share"); share.Verdict != VerdictFail || share.Value != 0.6 {
 		t.Fatalf("0.60 must fail: %+v", share)
 	}
+	// Just under the floor: 19 of 25 = 0.76 fails. A floor moved down to 0.65 would pass it.
+	under := pass
+	under.Talents = []Talent{
+		{SpellID: 1, Rank: 5}, {SpellID: 2, Rank: 5}, {SpellID: 3, Rank: 5}, {SpellID: 4, Rank: 4},
+		{SpellID: 10, Rank: 5}, {SpellID: 11, Rank: 1},
+	}
+	c = checkOfID(t, Judge(under, tables), RuleTalents)
+	if share := partOf(t, c, "point_share"); share.Verdict != VerdictFail || share.Value != 0.76 {
+		t.Fatalf("19 of 25 (0.76) must fail: %+v", share)
+	}
+	if c.Verdict != VerdictFail {
+		t.Fatalf("a share under the floor fails the check: %s (%s)", c.Verdict, c.Reason)
+	}
+}
+
+// usualRankTables is a fake spec whose common pick (id 1) holds 5 ranks and is usually taken at 2,
+// with four other talents in the same tree to take the remaining points of a level 30 build (21).
+func usualRankTables() *fakeTables {
+	f := &fakeTables{specs: map[string]bool{"druid|balance": true}}
+	for _, levels := range []string{"30-39", "all"} {
+		f.picks = append(f.picks,
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: levels, Tab: 0, SpellID: 1, MaxRank: 5, UsualRank: 2, PickPct: 90})
+	}
+	for id := int64(3); id <= 6; id++ {
+		f.picks = append(f.picks,
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: id, MaxRank: 5, UsualRank: 5, PickPct: 5})
+	}
+	return f
+}
+
+// TestTalentUsualRankCapacity pins what the denominator counts: a common pick at its USUAL rank, not
+// its maximum. The pick has a maximum of 5 and a usual rank of 2: a build with 2 points there and the
+// rest elsewhere took the pick as its players do and passes; one with all 5 there passes too (a rank
+// above the usual one is still in the common pick, the share is at most 1); one with 1 point there
+// has half the points the common pick accounts for and fails.
+func TestTalentUsualRankCapacity(t *testing.T) {
+	f := usualRankTables()
+	build := func(common int, rest ...int) Bot {
+		b := Bot{ID: "bot1", Class: "druid", Spec: "balance", Level: 30, TalentsKnown: true, TalentsComplete: true,
+			Talents: []Talent{{SpellID: 1, Rank: common}}}
+		for i, rank := range rest {
+			b.Talents = append(b.Talents, Talent{SpellID: int64(3 + i), Rank: rank})
+		}
+		return b
+	}
+	cases := []struct {
+		name    string
+		bot     Bot
+		verdict string
+		share   float64
+	}{
+		{"usual rank, the rest elsewhere", build(2, 5, 5, 5, 4), VerdictPass, 1},
+		{"maximum rank", build(5, 5, 5, 5, 1), VerdictPass, 1},
+		{"half the usual points", build(1, 5, 5, 5, 5), VerdictFail, 0.5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := checkOfID(t, Judge(tc.bot, f), RuleTalents)
+			share := partOf(t, c, "point_share")
+			if share.Verdict != tc.verdict || share.Value != tc.share {
+				t.Fatalf("point share %+v, want %s at %v (%s)", share, tc.verdict, tc.share, c.Reason)
+			}
+		})
+	}
+}
+
+// TestTalentSplitSaidInEvidence pins that the result says whether the split part was judged: it is
+// not decisive, so a bot can PASS on the point share alone.
+func TestTalentSplitSaidInEvidence(t *testing.T) {
+	evidence := func(c Check) string { return strings.Join(c.Evidence, "\n") }
+	b := bot("bot1", 60)
+	b.Talents = balance60()
+	if got := evidence(checkOfID(t, Judge(b, Default()), RuleTalents)); !strings.Contains(got, "split judged") {
+		t.Fatalf("a judged split must be said:\n%s", got)
+	}
+	low := bot("bot1", 49)
+	low.Talents = append(append([]Talent(nil), balance60()[:14]...), Talent{SpellID: 17063, Rank: 2, Tab: new(2)})
+	if got := evidence(checkOfID(t, Judge(low, Default()), RuleTalents)); !strings.Contains(got, "split not judged: it is judged at level 60 only") {
+		t.Fatalf("below 60 the evidence must say the split is not judged:\n%s", got)
+	}
+	// Level 60 with no split rows for the spec: the point share alone passes, and the evidence says
+	// the split was not judged.
+	f := &fakeTables{specs: map[string]bool{"druid|balance": true}}
+	for _, levels := range []string{"60", "all"} {
+		f.picks = append(f.picks,
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: levels, Tab: 0, SpellID: 1, MaxRank: 5, UsualRank: 5, PickPct: 90})
+		for id := int64(3); id <= 12; id++ {
+			f.picks = append(f.picks,
+				aotc.TalentPick{Class: "druid", Spec: "balance", Levels: levels, Tab: 0, SpellID: id, MaxRank: 5, UsualRank: 5, PickPct: 5})
+		}
+	}
+	nosplit := Bot{ID: "bot1", Class: "druid", Spec: "balance", Level: 60, TalentsKnown: true, TalentsComplete: true,
+		Talents: []Talent{{SpellID: 1, Rank: 5}}}
+	for id := int64(3); id <= 12; id++ {
+		nosplit.Talents = append(nosplit.Talents, Talent{SpellID: id, Rank: 5})
+	}
+	nosplit.Talents[len(nosplit.Talents)-1].Rank = 1 // 5 + 9*5 + 1 = 51 points
+	c := checkOfID(t, Judge(nosplit, f), RuleTalents)
+	if c.Verdict != VerdictPass {
+		t.Fatalf("the point share alone passes: %s (%s)", c.Verdict, c.Reason)
+	}
+	if got := evidence(c); !strings.Contains(got, "split not judged: talent-splits-60.csv names no split") {
+		t.Fatalf("a level 60 bot without split rows must be told the split was not judged:\n%s", got)
+	}
 }
 
 // TestTalentPickShareBoundary pins the 50% pick line: a talent at exactly 50 is a common pick, one at
@@ -288,14 +421,14 @@ func TestTalentPickShareBoundary(t *testing.T) {
 	mk := func(pct float64) *fakeTables {
 		f := &fakeTables{specs: map[string]bool{"druid|balance": true}}
 		f.picks = append(f.picks,
-			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: 1, MaxRank: 5, PickPct: 90},
-			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: 1, MaxRank: 5, PickPct: 90},
-			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: 20, MaxRank: 5, PickPct: pct},
-			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: 20, MaxRank: 5, PickPct: pct})
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: 1, MaxRank: 5, UsualRank: 5, PickPct: 90},
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: 1, MaxRank: 5, UsualRank: 5, PickPct: 90},
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: 20, MaxRank: 5, UsualRank: 5, PickPct: pct},
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: 20, MaxRank: 5, UsualRank: 5, PickPct: pct})
 		for i := int64(10); i <= 14; i++ {
 			f.picks = append(f.picks,
-				aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: i, MaxRank: 5, PickPct: 10},
-				aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: i, MaxRank: 5, PickPct: 10})
+				aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: i, MaxRank: 5, UsualRank: 5, PickPct: 10},
+				aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: i, MaxRank: 5, UsualRank: 5, PickPct: 10})
 		}
 		return f
 	}
@@ -322,13 +455,13 @@ func pointShareTables() *fakeTables {
 	f := &fakeTables{specs: map[string]bool{"druid|balance": true}}
 	for i := int64(1); i <= 5; i++ {
 		f.picks = append(f.picks,
-			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: i, MaxRank: 5, PickPct: 90},
-			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: i, MaxRank: 5, PickPct: 90})
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: i, MaxRank: 5, UsualRank: 5, PickPct: 90},
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: i, MaxRank: 5, UsualRank: 5, PickPct: 90})
 	}
 	for i := int64(10); i <= 14; i++ {
 		f.picks = append(f.picks,
-			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: i, MaxRank: 5, PickPct: 10},
-			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: i, MaxRank: 5, PickPct: 10})
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: i, MaxRank: 5, UsualRank: 5, PickPct: 10},
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: i, MaxRank: 5, UsualRank: 5, PickPct: 10})
 	}
 	return f
 }
@@ -381,12 +514,12 @@ func TestTalentCheckPartialBuildIsInconclusive(t *testing.T) {
 func TestTalentCheckUncoveredTreeIsInconclusive(t *testing.T) {
 	f := &fakeTables{specs: map[string]bool{"druid|balance": true}}
 	f.picks = append(f.picks,
-		aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: 1, MaxRank: 5, PickPct: 90},
-		aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: 1, MaxRank: 5, PickPct: 90})
+		aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 0, SpellID: 1, MaxRank: 5, UsualRank: 5, PickPct: 90},
+		aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 0, SpellID: 1, MaxRank: 5, UsualRank: 5, PickPct: 90})
 	for i := int64(10); i <= 14; i++ {
 		f.picks = append(f.picks,
-			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 1, SpellID: i, MaxRank: 5, PickPct: 10},
-			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 1, SpellID: i, MaxRank: 5, PickPct: 10})
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "30-39", Tab: 1, SpellID: i, MaxRank: 5, UsualRank: 5, PickPct: 10},
+			aotc.TalentPick{Class: "druid", Spec: "balance", Levels: "all", Tab: 1, SpellID: i, MaxRank: 5, UsualRank: 5, PickPct: 10})
 	}
 	b := Bot{ID: "bot1", Class: "druid", Spec: "balance", Level: 30,
 		TalentsKnown: true, TalentsComplete: true, Talents: []Talent{

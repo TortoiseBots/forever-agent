@@ -200,6 +200,10 @@ func TestSnapshotTablesRefusesAMalformedBuild(t *testing.T) {
 		{"rank above the talent's maximum", func(s *Snapshot) {
 			s.Bots[0].Talents[2].Rank = 4 // Moonglow's maximum is 3
 		}, "above its maximum rank"},
+		{"rank above the maximum on a spec alias", func(s *Snapshot) {
+			s.Bots[0].Spec = "boomkin" // the check reads this as balance
+			s.Bots[0].Talents[2].Rank = 4
+		}, "above its maximum rank"},
 		{"more points than the level allows", func(s *Snapshot) {
 			s.Bots[0].Level = 30
 			s.Bots[0].Talents = balance60()[:4] // 12 points, level 30 allows 21: not this; use 25
