@@ -3,16 +3,13 @@ package realism
 // The stat check (REALISM-STATS): does the worn gear follow the spec's stat priority (stat-priority-
 // 60.csv)? A healer in strength plate, a rogue in intellect cloth.
 //
-// It reuses the player-data gear rule rather than restating it: the part `fits` is the same
-// AOTC-GEAR-FITS-SPEC judgment (playdata.JudgeGear over the snapshot's items, its stats included), so
-// the two readings of one outfit can never disagree. The part `priority` is the sharper reading the
-// gear rule leaves to its tie-break: every worn item whose own stats name a family must name one of
-// the families among the spec's top priority stats. Stamina, crit and hit name no family, so an item
-// that carries only those is not judged.
+// It is ONE judgement: the part `fits` is the player-data gear rule itself (playdata.JudgeGear over
+// the snapshot's items, its stats included), not a second, stricter rule beside it. The spec's
+// stat-priority reading is reported as evidence (how many items carry one of the spec's priority
+// families) and never judged: a second verdict could disagree with the gear rule, and the gear rule
+// is the one the bench's other rows read.
 //
-// Both read the level 60 tables (stat-priority-60.csv): a bot of another level is INCONCLUSIVE, and a
-// snapshot whose items carry no stats leaves `priority` INCONCLUSIVE (the item read-out names no
-// stats).
+// It reads the level 60 tables (stat-priority-60.csv): a bot of another level is INCONCLUSIVE.
 
 import (
 	"fmt"
@@ -21,45 +18,48 @@ import (
 	"github.com/pjerra/forever-agent/internal/trials/playdata"
 )
 
-// StatPriorityMatchMin is the share of the stat-reading items that must carry one of the spec's own
-// priority families: all of them. One strength piece on a healer is a real fault, not noise, and the
-// items that carry no family are not counted.
-const StatPriorityMatchMin = 1.0
-
 // statsCheck judges one bot's gear against its spec's stat priority.
 func statsCheck(b Bot, t Tables) Check {
 	class, spec := botSpec(b)
 	if !specKnown(t, class, spec) {
-		return checkOf(RuleStats, []Part{part("fits", VerdictInconclusive, 0, "", specMissingReason(t, class, spec))}, nil)
+		return checkOf(RuleStats, []Part{{Name: "fits", Verdict: VerdictInconclusive, Reason: specMissingReason(t, class, spec), Decisive: true}}, nil)
 	}
 	if b.Level != 60 {
-		return checkOf(RuleStats, []Part{part("fits", VerdictInconclusive, 0, "",
-			fmt.Sprintf("stat-priority-60.csv covers level 60 only (bot level %d)", b.Level))}, nil)
+		return checkOf(RuleStats, []Part{{Name: "fits", Verdict: VerdictInconclusive, Decisive: true,
+			Reason: fmt.Sprintf("stat-priority-60.csv covers level 60 only (bot level %d)", b.Level)}}, nil)
 	}
-	if !b.ItemsKnown || len(b.Items) == 0 {
-		return checkOf(RuleStats, []Part{part("fits", VerdictInconclusive, 0, "",
-			"the snapshot carries no worn items (items_known false): no equipment read for this bot")}, nil)
+	if !b.ItemsKnown {
+		return checkOf(RuleStats, []Part{{Name: "fits", Verdict: VerdictInconclusive, Decisive: true,
+			Reason: "the snapshot carries no worn items (items_known false): no equipment read for this bot"}}, nil)
+	}
+	if len(b.Items) == 0 {
+		return checkOf(RuleStats, []Part{{Name: "fits", Verdict: VerdictInconclusive, Decisive: true,
+			Reason: "the bot wears nothing (items_known true, no items): there is no outfit to judge"}}, nil)
 	}
 	items := playdataItems(b.Items)
 	row := playdata.JudgeGear(class, spec, items, playdata.Inputs{Tables: t})
 
 	parts := []Part{{
 		Name: "fits", Verdict: row.Verdict, Value: ratio(row.K, row.N), Reason: row.Reason,
-		Measure: fmt.Sprintf("%d of %d item(s) fit %s/%s (%s)", row.K, row.N, class, spec, ruleGearFitsSpec),
+		Measure:  fmt.Sprintf("%d of %d item(s) fit %s/%s (%s)", row.K, row.N, class, spec, ruleGearFitsSpec),
+		Decisive: true,
 	}}
-	priority := playdata.PriorityFamilies(t, class, spec)
-	parts = append(parts, priorityPart(b, priority))
-	return checkOf(RuleStats, parts, row.Evidence)
+	evidence := append([]string(nil), row.Evidence...)
+	if line := priorityLine(b, playdata.PriorityFamilies(t, class, spec)); line != "" {
+		evidence = append(evidence, line)
+	}
+	return checkOf(RuleStats, parts, evidence)
 }
 
-// priorityPart judges every item's own stat families against the spec's priority families.
-func priorityPart(b Bot, priority map[string]bool) Part {
+// priorityLine is the report-only stat-priority reading: the share of the items that carry stats which
+// name one of the spec's priority families. It never turns into a verdict (the gear rule is the
+// judgement); "" when neither the spec's rows nor the items name a family.
+func priorityLine(b Bot, priority map[string]bool) string {
 	if len(priority) == 0 {
-		return part("priority", VerdictInconclusive, 0, "",
-			"the spec's priority rows name no stat family (stamina, crit and hit name none)")
+		return ""
 	}
 	var judged, matched int
-	var lines []string
+	var bad []string
 	for _, item := range b.Items {
 		families := map[string]bool{}
 		for _, stat := range item.Stats {
@@ -75,20 +75,18 @@ func priorityPart(b Bot, priority map[string]bool) Part {
 			matched++
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%s: item %d names %s, none of the spec's priority families",
+		bad = append(bad, fmt.Sprintf("%s: item %d names %s, none of the spec's priority families",
 			item.Slot, item.ItemID, familySetText(families)))
 	}
 	if judged == 0 {
-		return part("priority", VerdictInconclusive, 0, "",
-			"no worn item carries stats (the item read-out names none), so no stat family can be read")
+		return ""
 	}
-	share := float64(matched) / float64(judged)
-	return Part{
-		Name: "priority", Verdict: verdictAtLeast(share, StatPriorityMatchMin), Value: share,
-		Measure: fmt.Sprintf("%d of %d item(s) carry one of the spec's priority families (%s)",
-			matched, judged, familySetText(priority)),
-		Lines: lines,
+	line := fmt.Sprintf("stat priority (report only): %d of %d stat-reading item(s) carry one of the spec's priority families (%s)",
+		matched, judged, familySetText(priority))
+	if len(bad) > 0 {
+		line += "; " + strings.Join(bad, "; ")
 	}
+	return line
 }
 
 // playdataItems turns a snapshot's items into the player-data rule's item shape: the table's slot

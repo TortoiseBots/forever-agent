@@ -1,13 +1,17 @@
 package realism
 
-// The report: one snapshot judged, per bot and per spec, and — with a baseline — the before/after
-// difference per check. `trials realism --snapshot FILE [--baseline FILE]` prints the text form and
-// `--json` prints the machine-readable one, for posting.
+// The report: one snapshot judged, per bot and per spec AND level band, and — with a baseline — the
+// before/after difference per check. `trials realism --snapshot FILE [--baseline FILE]` prints the
+// text form and `--json` prints the machine-readable one, for posting.
 //
 // The per-spec line sums its bots per check with the three verdict counts and the mean of the
 // numbers the bots' judged parts gave, so a spec's row says both "how many passed" and "how far from
-// the players' own numbers". The before/after compares the two readings' counts and means per check
-// (a spec that went from FAIL to PASS is `better`), and names every bot whose verdict changed.
+// the players' own numbers"; a mean needs MinSpecBotsForMean judged bots, because one bot is not a
+// spec. The before/after compares the two readings per spec AND level band, on shares rather than
+// counts (the bot sets may differ), with only the intersection compared: a spec or band in one
+// snapshot only is listed as such, and a verdict that became INCONCLUSIVE is "no longer judged",
+// never "better". Bot ids are not identities (assigned by name order per snapshot), so no bot is
+// paired across the two readings.
 
 import (
 	"fmt"
@@ -28,6 +32,10 @@ const (
 
 // checkIDs is the report's column order.
 var checkIDs = []string{RuleTalents, RuleGear, RuleStats, RuleEnchants}
+
+// MinSpecBotsForMean is the fewest judged bots a per-spec mean is shown over: below it one bot's
+// number would read as the spec's. Starting value to tune.
+const MinSpecBotsForMean = 5
 
 // BotReading is one bot's checks.
 type BotReading struct {
@@ -59,10 +67,13 @@ type CheckCount struct {
 	Mean         float64 `json:"mean,omitempty"`
 }
 
-// SpecSummary is one class and spec's row: its bots and the counts per check.
+// SpecSummary is one class, spec and level band's row: its bots and the counts per check. A level
+// band is a talent group (10-19 … 60, and 1-9 below level 10): mixing a level 60 bot with a level 40
+// one would hide which band moved.
 type SpecSummary struct {
 	Class  string       `json:"class"`
 	Spec   string       `json:"spec"`
+	Band   string       `json:"band"`
 	Bots   int          `json:"bots"`
 	IDs    []string     `json:"bot_ids"`
 	Checks []CheckCount `json:"checks"`
@@ -129,7 +140,7 @@ func JudgeReading(s Snapshot, t Tables) Reading {
 		bots[bot.ID] = br
 	}
 	for _, group := range SpecBots(s) {
-		sum := SpecSummary{Class: group.Class, Spec: group.Spec, Bots: len(group.Bots), IDs: append([]string(nil), group.Bots...)}
+		sum := SpecSummary{Class: group.Class, Spec: group.Spec, Band: group.Band, Bots: len(group.Bots), IDs: append([]string(nil), group.Bots...)}
 		for _, id := range checkIDs {
 			count := CheckCount{ID: id}
 			var values []float64
@@ -148,7 +159,9 @@ func JudgeReading(s Snapshot, t Tables) Reading {
 				}
 			}
 			count.Judged = len(values)
-			count.Mean = meanFloats(values)
+			if len(values) >= MinSpecBotsForMean {
+				count.Mean = meanFloats(values)
+			}
 			sum.Checks = append(sum.Checks, count)
 		}
 		r.Specs = append(r.Specs, sum)
@@ -192,13 +205,13 @@ func (r Reading) WriteText(w io.Writer) error {
 
 	fmt.Fprintln(w, "\n## Per spec")
 	tw = tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "class/spec\tbots")
+	fmt.Fprintf(tw, "class/spec\tband\tbots")
 	for _, id := range checkIDs {
 		fmt.Fprintf(tw, "\t%s", id)
 	}
 	fmt.Fprintln(tw)
 	for _, s := range r.Specs {
-		fmt.Fprintf(tw, "%s\t%d", specName(s.Class, s.Spec), s.Bots)
+		fmt.Fprintf(tw, "%s\t%s\t%d", specName(s.Class, s.Spec), s.Band, s.Bots)
 		for _, c := range s.Checks {
 			fmt.Fprintf(tw, "\t%s", countCell(c))
 		}
@@ -255,26 +268,32 @@ func (r Reading) WriteText(w io.Writer) error {
 	return nil
 }
 
-// countCell is one spec table cell: the three verdict counts and the mean of the judged numbers.
+// countCell is one spec table cell: the three verdict counts and, when enough bots were judged, the
+// mean of the judged numbers. Below MinSpecBotsForMean the cell says how many bots it is over.
 func countCell(c CheckCount) string {
 	cell := fmt.Sprintf("%d/%d/%d", c.Pass, c.Fail, c.Inconclusive)
-	if c.Judged > 0 {
+	switch {
+	case c.Judged >= MinSpecBotsForMean:
 		cell += fmt.Sprintf(" %s %.2f", meanWord(c.ID), c.Mean)
+	case c.Judged > 0:
+		cell += fmt.Sprintf(" n=%d", c.Judged)
 	}
 	return cell
 }
 
-// meanWord names the number a check's mean is: what the cell's number measures.
+// meanWord names the number a check's mean is: what the cell's number measures. The talents and gear
+// means are shares (of the points the common picks account for; of the item levels read), the stats
+// mean is the gear rule's fit share, and the enchant mean is a count of bad slots.
 func meanWord(id string) string {
 	switch id {
 	case RuleTalents:
-		return "pts"
+		return "share"
 	case RuleGear:
 		return "above"
 	case RuleStats:
 		return "fit"
 	default:
-		return "cov"
+		return "bad"
 	}
 }
 
@@ -302,90 +321,98 @@ type CheckDiff struct {
 	Change string     `json:"change"`
 }
 
-// SpecDiff is one class and spec's before/after counts per check.
+// SpecDiff is one class, spec and level band's before/after counts per check. Presence is "" when
+// the key is in both readings ("compared"), else "only before" or "only after": those keys are
+// listed, never compared.
 type SpecDiff struct {
-	Class  string      `json:"class"`
-	Spec   string      `json:"spec"`
-	Bots   int         `json:"bots"`
-	Checks []CheckDiff `json:"checks"`
+	Class    string      `json:"class"`
+	Spec     string      `json:"spec"`
+	Band     string      `json:"band"`
+	Bots     int         `json:"bots"`
+	Presence string      `json:"presence,omitempty"`
+	Checks   []CheckDiff `json:"checks"`
 }
 
-// BotDiff is one bot's before/after verdict per check.
-type BotDiff struct {
-	ID     string          `json:"id"`
-	Class  string          `json:"class"`
-	Spec   string          `json:"spec"`
-	Level  int             `json:"level"`
-	Checks []VerdictChange `json:"checks"`
-}
-
-// VerdictChange is one check's verdict before and after for one bot.
-type VerdictChange struct {
-	ID     string `json:"id"`
-	Before string `json:"before"`
-	After  string `json:"after"`
-	Change string `json:"change"`
-}
-
-// Diff is the before/after report: the per-check counts, the per-spec counts and every bot whose
-// verdict changed.
+// Diff is the before/after report: the per-check counts and the per-spec-and-band counts. It never
+// pairs bots: a botN id is assigned by name order in each snapshot, so before.bot3 and after.bot3
+// can be different characters.
 type Diff struct {
 	Format string      `json:"format"`
 	Before string      `json:"before,omitempty"`
 	After  string      `json:"after,omitempty"`
 	Checks []CheckDiff `json:"checks"`
 	Specs  []SpecDiff  `json:"specs"`
-	Bots   []BotDiff   `json:"bots"`
 }
 
-// Compare diffs two readings: after is the newer snapshot.
+// specKey is one class, spec and level band.
+type specKey struct{ Class, Spec, Band string }
+
+// Compare diffs two readings: after is the newer snapshot. Only keys in both readings are compared
+// (on shares over each side's bots); a key in one reading only is listed with its Presence.
 func Compare(before, after Reading) Diff {
 	d := Diff{Format: DiffFormat, Before: before.Source, After: after.Source}
-	afterBots := map[string]BotReading{}
-	for _, b := range after.Bots {
-		afterBots[b.ID] = b
-	}
 	for _, id := range checkIDs {
 		b, a := countOf(before.Checks, id), countOf(after.Checks, id)
-		d.Checks = append(d.Checks, CheckDiff{ID: id, Before: b, After: a, Change: changeWord(b, a)})
+		d.Checks = append(d.Checks, CheckDiff{ID: id, Before: b, After: a, Change: changeWord(b, a, before.Judged(), after.Judged())})
 	}
-	afterSpecs := map[string]SpecSummary{}
-	for _, s := range after.Specs {
-		afterSpecs[s.Class+"\x00"+s.Spec] = s
+	beforeSpecs := specMap(before.Specs)
+	afterSpecs := specMap(after.Specs)
+	keys := map[specKey]bool{}
+	for k := range beforeSpecs {
+		keys[k] = true
 	}
-	for _, s := range before.Specs {
-		sd := SpecDiff{Class: s.Class, Spec: s.Spec, Bots: s.Bots}
-		a, ok := afterSpecs[s.Class+"\x00"+s.Spec]
-		if ok {
-			sd.Bots = a.Bots
+	for k := range afterSpecs {
+		keys[k] = true
+	}
+	ordered := make([]specKey, 0, len(keys))
+	for k := range keys {
+		ordered = append(ordered, k)
+	}
+	sort.Slice(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		if a.Class != b.Class {
+			return a.Class < b.Class
 		}
-		for _, id := range checkIDs {
-			b := countOf(s.Checks, id)
-			var ac CheckCount
-			if ok {
-				ac = countOf(a.Checks, id)
+		if a.Spec != b.Spec {
+			return a.Spec < b.Spec
+		}
+		return a.Band < b.Band
+	})
+	for _, k := range ordered {
+		bs, bOK := beforeSpecs[k]
+		as, aOK := afterSpecs[k]
+		sd := SpecDiff{Class: k.Class, Spec: k.Spec, Band: k.Band}
+		switch {
+		case bOK && aOK:
+			sd.Bots = as.Bots
+			for _, id := range checkIDs {
+				bc, ac := countOf(bs.Checks, id), countOf(as.Checks, id)
+				sd.Checks = append(sd.Checks, CheckDiff{ID: id, Before: bc, After: ac,
+					Change: changeWord(bc, ac, bs.Bots, as.Bots)})
 			}
-			sd.Checks = append(sd.Checks, CheckDiff{ID: id, Before: b, After: ac, Change: changeWord(b, ac)})
+		case bOK:
+			sd.Bots, sd.Presence = bs.Bots, "only before"
+			for _, id := range checkIDs {
+				sd.Checks = append(sd.Checks, CheckDiff{ID: id, Before: countOf(bs.Checks, id), Change: sd.Presence})
+			}
+		default:
+			sd.Bots, sd.Presence = as.Bots, "only after"
+			for _, id := range checkIDs {
+				sd.Checks = append(sd.Checks, CheckDiff{ID: id, After: countOf(as.Checks, id), Change: sd.Presence})
+			}
 		}
 		d.Specs = append(d.Specs, sd)
 	}
-	for _, b := range before.Bots {
-		a, ok := afterBots[b.ID]
-		if !ok {
-			continue
-		}
-		bd := BotDiff{ID: b.ID, Class: b.Class, Spec: b.Spec, Level: b.Level}
-		for _, id := range checkIDs {
-			bc, ac := b.check(id), a.check(id)
-			change := "same"
-			if bc.Verdict != ac.Verdict {
-				change = verdictChange(bc.Verdict, ac.Verdict)
-			}
-			bd.Checks = append(bd.Checks, VerdictChange{ID: id, Before: bc.Verdict, After: ac.Verdict, Change: change})
-		}
-		d.Bots = append(d.Bots, bd)
-	}
 	return d
+}
+
+// specMap indexes per-spec-and-band rows by their key.
+func specMap(specs []SpecSummary) map[specKey]SpecSummary {
+	out := make(map[specKey]SpecSummary, len(specs))
+	for _, s := range specs {
+		out[specKey{Class: s.Class, Spec: s.Spec, Band: s.Band}] = s
+	}
+	return out
 }
 
 // countOf returns one check's count, an empty count for a check the reading does not carry.
@@ -398,37 +425,42 @@ func countOf(counts []CheckCount, id string) CheckCount {
 	return CheckCount{ID: id}
 }
 
-// changeWord says whether the counts improved: fewer FAILs is better, more is worse; with the FAIL
-// counts equal, more PASSes is better.
-func changeWord(before, after CheckCount) string {
+// changeWord says whether one check's per-spec-and-band counts improved, on SHARES of each side's
+// bots (the two readings' bot sets may differ). More FAILs is worse, fewer better; with FAILs equal,
+// more PASSes is better. A verdict that turned INCONCLUSIVE while nothing started passing is "no
+// longer judged" — a lost read-out is not an improvement.
+func changeWord(before, after CheckCount, beforeN, afterN int) string {
+	if beforeN <= 0 || afterN <= 0 {
+		return "same"
+	}
 	switch {
-	case after.Fail < before.Fail:
+	case shareMore(after.Inconclusive, afterN, before.Inconclusive, beforeN) &&
+		!shareMore(after.Fail, afterN, before.Fail, beforeN) &&
+		!shareMore(after.Pass, afterN, before.Pass, beforeN) &&
+		(shareLess(after.Fail, afterN, before.Fail, beforeN) || shareLess(after.Pass, afterN, before.Pass, beforeN)):
+		return "no longer judged"
+	case shareLess(after.Fail, afterN, before.Fail, beforeN):
 		return "better"
-	case after.Fail > before.Fail:
+	case shareMore(after.Fail, afterN, before.Fail, beforeN):
 		return "worse"
-	case after.Pass > before.Pass:
+	case shareMore(after.Pass, afterN, before.Pass, beforeN):
 		return "better"
-	case after.Pass < before.Pass:
+	case shareLess(after.Pass, afterN, before.Pass, beforeN):
 		return "worse"
+	case shareMore(after.Inconclusive, afterN, before.Inconclusive, beforeN):
+		return "no longer judged"
 	}
 	return "same"
 }
 
-// verdictChange says whether one bot's verdict moved for the better.
-func verdictChange(before, after string) string {
-	switch {
-	case before == VerdictFail && after == VerdictPass:
-		return "better"
-	case before == VerdictInconclusive && after == VerdictPass:
-		return "better"
-	case before == VerdictFail && after == VerdictInconclusive:
-		return "better"
-	case after == VerdictFail:
-		return "worse"
-	case before == VerdictPass && after == VerdictInconclusive:
-		return "worse"
-	}
-	return "other"
+// shareLess reports count1/N1 < count2/N2 without floating point.
+func shareLess(count1, n1, count2, n2 int) bool {
+	return int64(count1)*int64(n2) < int64(count2)*int64(n1)
+}
+
+// shareMore reports count1/N1 > count2/N2 without floating point.
+func shareMore(count1, n1, count2, n2 int) bool {
+	return int64(count1)*int64(n2) > int64(count2)*int64(n1)
 }
 
 // WriteText prints the before/after as a table.
@@ -442,41 +474,33 @@ func (d Diff) WriteText(w io.Writer) error {
 	}
 	tw.Flush()
 
-	fmt.Fprintln(w, "\n## Per spec")
+	fmt.Fprintln(w, "\n## Per spec and level band")
 	tw = tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "class/spec")
+	fmt.Fprintf(tw, "class/spec\tband\tpresence")
 	for _, id := range checkIDs {
 		fmt.Fprintf(tw, "\t%s", id)
 	}
 	fmt.Fprintln(tw)
+	var unpaired []SpecDiff
 	for _, s := range d.Specs {
-		fmt.Fprintf(tw, "%s", specName(s.Class, s.Spec))
+		fmt.Fprintf(tw, "%s\t%s\t%s", specName(s.Class, s.Spec), s.Band, orDefault(s.Presence, "compared"))
 		for _, c := range s.Checks {
+			if s.Presence != "" {
+				fmt.Fprintf(tw, "\t%s", s.Presence)
+				continue
+			}
 			fmt.Fprintf(tw, "\t%s -> %s %s", countCell(c.Before), countCell(c.After), c.Change)
 		}
 		fmt.Fprintln(tw)
-	}
-	tw.Flush()
-
-	var changed []BotDiff
-	for _, b := range d.Bots {
-		for _, c := range b.Checks {
-			if c.Change != "same" {
-				changed = append(changed, b)
-				break
-			}
+		if s.Presence != "" {
+			unpaired = append(unpaired, s)
 		}
 	}
-	if len(changed) > 0 {
-		fmt.Fprintln(w, "\n## Bots that changed")
-		for _, b := range changed {
-			fmt.Fprintf(w, "%s (%s, level %d)\n", b.ID, specName(b.Class, b.Spec), b.Level)
-			for _, c := range b.Checks {
-				if c.Change == "same" {
-					continue
-				}
-				fmt.Fprintf(w, "  %-18s %s -> %s (%s)\n", c.ID, c.Before, c.After, c.Change)
-			}
+	tw.Flush()
+	if len(unpaired) > 0 {
+		fmt.Fprintln(w, "\nSpecs and level bands in one snapshot only (listed, not compared):")
+		for _, s := range unpaired {
+			fmt.Fprintf(w, "  %s level band %s: %s\n", specName(s.Class, s.Spec), s.Band, s.Presence)
 		}
 	}
 	return nil

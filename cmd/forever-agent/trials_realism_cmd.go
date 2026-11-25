@@ -13,10 +13,10 @@ import (
 	"github.com/pjerra/forever-agent/internal/trials/realism"
 )
 
-// exitNoJudge is the exit code when the reading judged nothing at all: 21 is the next free code
-// above the table (11/12/13 are plan and fight checks, 15/16/17 are slot and rpc refusals, 20 and 22
-// are plan-probe and patrol-record codes).
-const exitNoJudge = 21
+// exitNoJudge is the exit code when the reading judged nothing at all: 3, the code the usage text,
+// the manual and the ticket name. It is deliberately not 21 (the trash check's "found" code): a
+// report that assessed nothing must not be read as a pass, and the caller needs one code to test.
+const exitNoJudge = 3
 
 const realismUsage = "usage: forever-agent trials realism --snapshot FILE [--baseline FILE] [--json]\n" +
 	"  judges one bot snapshot (forever bot-snapshot) against the player data: talents, gear realism,\n" +

@@ -58,7 +58,7 @@ The bench lives in `forever-agent trials` and is a Go port of the Python trials 
 | `trials sweep` | class sweep: tanks first, one run folder and card per trial, plus `sweep.md` |
 | `trials cleanup` | replay a run's ledger: kill its summons, clear auras, free bots, release leases |
 | `trials forever-data-check` | ask the live server every spell, item and mob entry the trials name |
-| `trials realism` | judge a bot snapshot against the player data, per bot and per spec, with a baseline's before/after |
+| `trials realism` | judge a bot snapshot against the player data, per bot and per spec and level band, with a baseline's before/after |
 
 # A trial file
 
@@ -218,7 +218,7 @@ forever-agent forever bot-snapshot --dir ./serve --out bots.json
 forever-agent trials realism --snapshot bots.json [--baseline before.json] [--json]
 ```
 
-`trials realism` judges one snapshot of what bots have — their talents, worn items and enchants — against the same player data: talents by level group, gear realism (item levels against the level's allowance, raid, PvP and reputation sources), the spec's stat priority through the player-data gear rule, and the level 60 enchants, with a per-spec table and a before/after when a baseline is given. Every verdict is `PASS`, `FAIL` or `INCONCLUSIVE`, and none fails on data the snapshot does not carry. The snapshot format, the taker, each check's thresholds and its `INCONCLUSIVE` cases are in [realism checks](realism.md).
+`trials realism` judges one snapshot of what bots have — their talents, worn items and enchants — against the same player data: talents by level group, gear realism (required level and item levels against the level's allowance, raid, PvP and reputation sources), the spec's stat priority through the player-data gear rule (one judgement; the priority is reported, never judged), and the level 60 enchants, with a per-spec-and-level-band table and a before/after when a baseline is given. Every verdict is `PASS`, `FAIL` or `INCONCLUSIVE`, and none fails on data the snapshot does not carry; a check whose decisive part is unread is `INCONCLUSIVE`, never a `PASS`. The snapshot format, what the taker fills today, each check's starting thresholds and its `INCONCLUSIVE` cases are in [realism checks](realism.md).
 
 # Validating trial files
 

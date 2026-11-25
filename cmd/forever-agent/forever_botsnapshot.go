@@ -8,9 +8,9 @@ package main
 // that bot's notes, so the checks answer INCONCLUSIVE with the reason instead of guessing:
 //
 //	filled   class and level (the `unit` row / `bot_view`), worn items with slot, item id, name,
-//	         quality, item level and required level (`equipment` + `item_info`) — for the character
-//	         the serve runs, which is the bot it owns; a grouped bot's row carries class and level
-//	         only.
+//	         quality, item level and required level (`equipment` + `item_info`) — for bot1, the
+//	         character the serve is logged in as (the agent's own character, which the bot module's
+//	         realism work does not gear); a grouped bot's row carries class and level only.
 //	empty    spec (no module read-out names a bot's spec), talents (the module proves learned spells
 //	         only for ids it is asked to learn, never the whole build), enchants and an item's
 //	         source (the equipment read names neither).
@@ -19,6 +19,7 @@ package main
 // command needs for its calls die with the process.
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -33,9 +34,10 @@ import (
 )
 
 const botSnapshotUsage = "usage: forever-agent forever bot-snapshot --dir DIR [--bots NAME,...] [--wait MS] [--out FILE]\n" +
-	"  reads the serve in DIR (forever serve --dir DIR) and writes a bot snapshot: per bot its class, level\n" +
-	"  and worn items (bot1, bot2, …; never a character name), for `trials realism --snapshot`. The fields\n" +
-	"  the serve cannot read today (spec, talents, enchants, item sources) are left empty and noted."
+	"  reads the serve in DIR (forever serve --dir DIR) and writes a bot snapshot: bot1 is the character\n" +
+	"  the serve runs, with its class, level and worn items; each party bot has its class and level\n" +
+	"  only (never a character name). Spec, talents, stats, enchants and item sources are not read on\n" +
+	"  this tree: they stay empty and noted, and the checks that need them answer INCONCLUSIVE."
 
 // serve calls bot-snapshot makes; each is a method the serve already registers.
 const (
@@ -351,6 +353,13 @@ func botsnapshotCmd(ctx context.Context, args []string, stdout, stderr io.Writer
 	if err != nil {
 		fmt.Fprintf(stderr, "forever bot-snapshot: %v\n", err)
 		return exitUsage
+	}
+	// The command's own output goes through the loader before it is written: a serve whose status
+	// has no level (a character not in the world, say) would otherwise write a file that `trials
+	// realism` refuses, after the command reported success.
+	if _, err := realism.Decode(bytes.NewReader(out)); err != nil {
+		fmt.Fprintf(stderr, "forever bot-snapshot: the serve's data does not make a loadable snapshot: %v\n", err)
+		return exitSlotRefused
 	}
 	if o.out != "" {
 		if err := os.WriteFile(o.out, out, 0o644); err != nil {

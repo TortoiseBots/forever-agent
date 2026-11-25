@@ -57,14 +57,19 @@ type Tables interface {
 }
 
 // Part is one reading a check makes: its own verdict, the number it measured and the reason it
-// could not be judged.
+// could not be judged. Decisive marks a part whose reading the check needs: when one is not judged
+// the check is INCONCLUSIVE, never a PASS over the parts that were read. Skipped marks a part that
+// does not apply to this bot (no slot in the enchant dead zone, say): it is neither judged nor
+// counted as missing.
 type Part struct {
-	Name    string   `json:"name"`
-	Verdict string   `json:"verdict"`
-	Value   float64  `json:"value,omitempty"`
-	Measure string   `json:"measure,omitempty"`
-	Reason  string   `json:"reason,omitempty"`
-	Lines   []string `json:"lines,omitempty"`
+	Name     string   `json:"name"`
+	Verdict  string   `json:"verdict"`
+	Value    float64  `json:"value,omitempty"`
+	Measure  string   `json:"measure,omitempty"`
+	Reason   string   `json:"reason,omitempty"`
+	Lines    []string `json:"lines,omitempty"`
+	Decisive bool     `json:"-"`
+	Skipped  bool     `json:"-"`
 }
 
 // Check is one check's reading for one bot: the parts it judges, the number it headlines, and the
@@ -89,13 +94,17 @@ func Judge(b Bot, t Tables) []Check {
 	}
 }
 
-// verdictOf sums a check's parts: FAIL when any judged part fails, PASS when at least one part was
-// judged and none failed, INCONCLUSIVE otherwise. The reason names the parts that were not judged,
-// so no PASS is ever read as a verdict on data the snapshot does not carry.
+// verdictOf sums a check's parts: FAIL when any judged part fails; INCONCLUSIVE when a decisive
+// part was not judged (a PASS over a partial reading would hide the missing data); PASS when every
+// judged part passes and no decisive part is missing; INCONCLUSIVE otherwise. Skipped parts do not
+// apply to this bot and are not counted as missing. The reason names the parts that were not judged.
 func verdictOf(parts []Part) (string, string) {
-	var failed, judged int
+	var failed, judged, decisiveMissing int
 	var missing []string
 	for _, p := range parts {
+		if p.Skipped {
+			continue
+		}
 		switch p.Verdict {
 		case VerdictFail:
 			failed++
@@ -103,6 +112,9 @@ func verdictOf(parts []Part) (string, string) {
 		case VerdictPass:
 			judged++
 		default:
+			if p.Decisive {
+				decisiveMissing++
+			}
 			if p.Reason != "" {
 				missing = append(missing, fmt.Sprintf("%s: %s", p.Name, p.Reason))
 			} else {
@@ -112,8 +124,12 @@ func verdictOf(parts []Part) (string, string) {
 	}
 	sort.Strings(missing)
 	switch {
+	case failed > 0 && len(missing) > 0:
+		return VerdictFail, fmt.Sprintf("%d of %d judged parts fail; not judged: %s", failed, judged, strings.Join(missing, "; "))
 	case failed > 0:
 		return VerdictFail, fmt.Sprintf("%d of %d judged parts fail", failed, judged)
+	case decisiveMissing > 0:
+		return VerdictInconclusive, "a decisive part was not judged: " + strings.Join(missing, "; ")
 	case judged > 0:
 		if len(missing) > 0 {
 			return VerdictPass, "judged parts pass; not judged: " + strings.Join(missing, "; ")

@@ -5,9 +5,11 @@ package realism
 //
 // Two parts:
 //
-//	point_share  the share of the bot's talent points that sit in the talents at least TalentPickShare
-//	             percent of its level group's players of the spec took. PASS at or above
-//	             TalentPointShareMin.
+//	point_share  the share of the points the level group's common picks account for that the bot
+//	             spends in them. The denominator is capped per tree at what that tree's common picks
+//	             can hold, so a build that takes every common pick cannot score under 100% because
+//	             the file's common picks cannot fill the character's whole point budget. PASS at or
+//	             above TalentPointShareMin.
 //	split        level 60 only: the bot's point split (points per tree) against the nearest of the
 //	             spec's 20 most common splits, in points moved between trees. PASS at or below
 //	             SplitPointsMax, and INCONCLUSIVE when a point sits in a talent the tables do not
@@ -28,15 +30,20 @@ import (
 const (
 	// TalentPickShare is the pick share that makes a talent common for its level group, in percent:
 	// the same 50% the player-data talent rule reads (playdata.MinTalentShare), so "the common
-	// picks" means one thing across the bench.
+	// picks" means one thing across the bench. Starting value to tune, not a fact about players.
 	TalentPickShare = 50.0
-	// TalentPointShareMin is the least share of a bot's points that must sit in those common picks:
-	// four points in five. A spec's off-picks (a hybrid's second tree, a PvP talent) are a fifth of
-	// a build at most, which is where the number comes from.
+	// TalentPointShareMin is the least share of the points the common picks account for that must
+	// sit in them: four points in five. Starting value to tune, not a fact about players: it is the
+	// first cut the review of the ticket asked for, and a real batch should move it if the common
+	// picks prove too loose or too strict.
 	TalentPointShareMin = 0.80
+	// TalentCommonPointsMin is the fewest points the common picks must account for before the share
+	// is judged at all: two. A level group whose common picks hold one point says almost nothing
+	// about a build, so the part is INCONCLUSIVE with that reason. Starting value to tune.
+	TalentCommonPointsMin = 2
 	// SplitPointsMax is how many points a level-60 bot's tree split may differ from the nearest
 	// common split in talent-splits-60.csv: five points moved between trees. The file holds each
-	// spec's 20 most common splits, which normally covers most of its characters.
+	// spec's 20 most common splits. Starting value to tune.
 	SplitPointsMax = 5.0
 	// splitTabs is the number of talent trees a split names (three in 1.12).
 	splitTabs = 3
@@ -88,24 +95,46 @@ func talentCheck(b Bot, t Tables) Check {
 		return checkOf(RuleTalents, []Part{part("point_share", VerdictInconclusive, 0, "",
 			fmt.Sprintf("no %s/%s talent pick reaches %.0f%% at %s", class, spec, TalentPickShare, group))}, nil)
 	}
+	// A learned rank is reported by the rank-1 spell id; an id the tables do not name cannot be
+	// placed in a tree or told apart from a higher rank's id, so the share is not judged at all
+	// (never a FAIL on an id the module may simply spell differently).
+	known := map[int64]aotc.TalentPick{}
+	for _, row := range t.CommonTalents(class, spec, "all", 0) {
+		known[row.SpellID] = row
+	}
+	var unknown []string
+	var total, inCommon int
+	var pointsPerTab [splitTabs]int
 	commonSet := map[int64]bool{}
 	for _, p := range common {
 		commonSet[p.SpellID] = true
 	}
-	var total, inCommon int
 	var offLines []string
 	for _, talent := range b.Talents {
 		total += talent.Rank
 		if commonSet[talent.SpellID] {
 			inCommon += talent.Rank
+		} else {
+			offLines = append(offLines, fmt.Sprintf("%d point(s) in talent %d, not among the level group's common picks",
+				talent.Rank, talent.SpellID))
+		}
+		row, ok := known[talent.SpellID]
+		if !ok {
+			unknown = append(unknown, fmt.Sprintf("%d", talent.SpellID))
 			continue
 		}
-		offLines = append(offLines, fmt.Sprintf("%d point(s) in talent %d, not among the level group's common picks",
-			talent.Rank, talent.SpellID))
+		if row.Tab >= 0 && row.Tab < splitTabs {
+			pointsPerTab[row.Tab] += talent.Rank
+		}
 	}
 	if total == 0 {
 		return checkOf(RuleTalents, []Part{part("point_share", VerdictInconclusive, 0, "",
 			"the snapshot's talents carry no ranks")}, nil)
+	}
+	if len(unknown) > 0 {
+		reason := fmt.Sprintf("talent id(s) %s are not rank-1 ids the player data names for %s/%s: the snapshot must carry the rank-1 spell id of each talent",
+			strings.Join(unknown, ", "), class, spec)
+		return checkOf(RuleTalents, []Part{part("point_share", VerdictInconclusive, 0, "", reason)}, nil)
 	}
 	// The whole build, not only the flag: a level 40 character has 31 points, so a 15-point list
 	// marked complete is a partial read and its missing points would read as off-picks.
@@ -117,14 +146,36 @@ func talentCheck(b Bot, t Tables) Check {
 			part("split", VerdictInconclusive, 0, "", reason),
 		}, nil)
 	}
-	share := float64(inCommon) / float64(total)
+	// The denominator is what the common picks can account for in the trees this build uses: per
+	// tree, the lesser of the bot's points there and the tree's common picks' maximum ranks. The
+	// file's common picks of a level group often cannot fill the whole point budget (at level 19 a
+	// single talent may be the only common pick); measuring against the bot's full points would fail
+	// a build that took every common pick.
+	var capacityPerTab [splitTabs]int
+	for _, row := range common {
+		if row.Tab >= 0 && row.Tab < splitTabs {
+			capacityPerTab[row.Tab] += int(row.MaxRank)
+		}
+	}
+	denominator := 0
+	for tab := range splitTabs {
+		denominator += min(pointsPerTab[tab], capacityPerTab[tab])
+	}
+	if denominator < TalentCommonPointsMin {
+		return checkOf(RuleTalents, []Part{part("point_share", VerdictInconclusive, 0, "",
+			fmt.Sprintf("the level group's common picks account for only %d of the build's %d point(s) in its trees: too few to judge",
+				denominator, total))}, nil)
+	}
+	share := float64(inCommon) / float64(denominator)
 	parts := []Part{{
 		Name: "point_share", Verdict: verdictAtLeast(share, TalentPointShareMin), Value: share,
-		Measure: fmt.Sprintf("%d of %d points in %s's common picks at %s (%.0f%% floor)", inCommon, total, spec, group,
-			TalentPointShareMin*100),
-		Lines: offLines,
+		Measure: fmt.Sprintf("%d of the %d point(s) the common picks account for are in them (%s at %s, %.0f%% floor)",
+			inCommon, denominator, spec, group, TalentPointShareMin*100),
+		Lines:    offLines,
+		Decisive: true,
 	}}
-	evidence := []string{fmt.Sprintf("%d point(s), %d in the %d common picks at %s", total, inCommon, len(common), group)}
+	evidence := []string{fmt.Sprintf("%d point(s), %d in the %d common picks at %s (they can hold %d point(s) in this build's trees)",
+		total, inCommon, len(common), group, denominator)}
 	if b.Level == 60 {
 		parts = append(parts, splitPart(b, t, class, spec, group))
 	}

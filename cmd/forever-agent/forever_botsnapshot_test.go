@@ -177,6 +177,46 @@ func TestTakeBotSnapshotPropagatesAServeError(t *testing.T) {
 	}
 }
 
+// TestBotSnapshotValidatesBeforeWriting pins the low finding: a serve whose character is not in the
+// world (level 0) would write a file the loader refuses, so the command must refuse before writing.
+func TestBotSnapshotValidatesBeforeWriting(t *testing.T) {
+	token := rpcCLITestToken(t)
+	srv := rpc.NewServer()
+	srv.SetToken(token)
+	srv.Register("status", rpc.Typed(func(context.Context, struct{}) (map[string]any, error) {
+		return map[string]any{"guid": "0x01", "level": 0}, nil
+	}))
+	srv.Register("unit", rpc.Typed(func(context.Context, struct {
+		GUID string `json:"guid"`
+	}) (map[string]any, error) {
+		return map[string]any{"guid": "0x01", "class": 11, "level": 0}, nil
+	}))
+	srv.Register("equipment", rpc.Typed(func(context.Context, struct {
+		Names bool `json:"names"`
+	}) ([]map[string]any, error) {
+		return nil, nil
+	}))
+	srv.Register("bot_view", rpc.Typed(func(context.Context, struct {
+		Bots   []string `json:"bots,omitempty"`
+		WaitMS int      `json:"wait_ms,omitempty"`
+	}) (map[string]any, error) {
+		return map[string]any{"bots": []map[string]any{}}, nil
+	}))
+	port := rpcTestServerPort(t, srv)
+	dir := rpcCLITestDir(t, port, token)
+	out := filepath.Join(t.TempDir(), "snap.json")
+	code, stdout, stderr := runCLI("forever", "bot-snapshot", "--dir", dir, "--out", out)
+	if code == exitOK {
+		t.Fatalf("a level 0 character must not produce a successful snapshot (stdout %q)", stdout)
+	}
+	if !strings.Contains(stderr, "loadable snapshot") || !strings.Contains(stderr, "level") {
+		t.Fatalf("the error must say the snapshot does not load and why: %q", stderr)
+	}
+	if _, err := os.Stat(out); !os.IsNotExist(err) {
+		t.Fatalf("the command wrote a file the loader refuses: %v", err)
+	}
+}
+
 // rpcTestServerPort starts a real rpc server for a test and returns its port.
 func rpcTestServerPort(t *testing.T, srv *rpc.Server) int {
 	t.Helper()

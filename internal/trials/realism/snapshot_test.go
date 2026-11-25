@@ -155,19 +155,68 @@ func TestSpecBotsGroupsAndOrders(t *testing.T) {
 		Bot{ID: "bot2", Class: "druid", Spec: "balance", Level: 60},
 		Bot{ID: "bot3", Class: "druid", Spec: "", Level: 60},
 		Bot{ID: "bot4", Class: "druid", Spec: "balance", Level: 40},
+		Bot{ID: "bot5", Class: "druid", Spec: "balance", Level: 45},
+		Bot{ID: "bot6", Class: "druid", Spec: "balance", Level: 5},
 	)
 	groups := SpecBots(s)
-	if len(groups) != 3 {
+	if len(groups) != 5 {
 		t.Fatalf("groups: %+v", groups)
 	}
-	if groups[0].Class != "druid" || groups[0].Spec != "" || len(groups[0].Bots) != 1 {
+	if groups[0].Class != "druid" || groups[0].Spec != "" || groups[0].Band != "60" || len(groups[0].Bots) != 1 {
 		t.Fatalf("the empty spec must sort first under its class: %+v", groups[0])
 	}
-	if groups[1].Spec != "balance" || len(groups[1].Bots) != 2 || groups[1].Bots[0] != "bot2" || groups[1].Bots[1] != "bot4" {
-		t.Fatalf("balance must group both levels in snapshot order: %+v", groups[1])
+	if groups[1].Spec != "balance" || groups[1].Band != "1-9" || groups[1].Bots[0] != "bot6" {
+		t.Fatalf("below level 10 is its own band: %+v", groups[1])
 	}
-	if groups[2].Class != "warrior" {
-		t.Fatalf("classes must sort: %+v", groups[2])
+	if groups[2].Spec != "balance" || groups[2].Band != "40-49" || len(groups[2].Bots) != 2 ||
+		groups[2].Bots[0] != "bot4" || groups[2].Bots[1] != "bot5" {
+		t.Fatalf("balance must group one band in snapshot order: %+v", groups[2])
+	}
+	if groups[3].Spec != "balance" || groups[3].Band != "60" || groups[3].Bots[0] != "bot2" {
+		t.Fatalf("the level 60 bots are a separate band: %+v", groups[3])
+	}
+	if groups[4].Class != "warrior" {
+		t.Fatalf("classes must sort: %+v", groups[4])
+	}
+}
+
+// TestSnapshotTablesRefusesAMalformedBuild pins the loader's table checks: a rank above the talent's
+// maximum, and a build with more points than the level allows, are malformed snapshots.
+func TestSnapshotTablesRefusesAMalformedBuild(t *testing.T) {
+	valid := func() Snapshot {
+		s := snapshotOf(bot("bot1", 60))
+		s.Bots[0].Talents = balance60()
+		return s
+	}
+	cases := []struct {
+		name string
+		edit func(*Snapshot)
+		want string
+	}{
+		{"rank above the talent's maximum", func(s *Snapshot) {
+			s.Bots[0].Talents[2].Rank = 4 // Moonglow's maximum is 3
+		}, "above its maximum rank"},
+		{"more points than the level allows", func(s *Snapshot) {
+			s.Bots[0].Level = 30
+			s.Bots[0].Talents = balance60()[:4] // 12 points, level 30 allows 21: not this; use 25
+			s.Bots[0].Talents = append(s.Bots[0].Talents,
+				Talent{SpellID: 16909, Rank: 5}, Talent{SpellID: 16850, Rank: 5},
+				Talent{SpellID: 16896, Rank: 5}, Talent{SpellID: 17063, Rank: 3})
+		}, "more than the 21"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := valid()
+			tc.edit(&s)
+			if err := s.ValidateTables(Default()); err == nil {
+				t.Fatalf("the tables accepted %s", tc.name)
+			} else if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("the error does not name %q: %v", tc.want, err)
+			}
+		})
+	}
+	if err := valid().ValidateTables(Default()); err != nil {
+		t.Fatalf("a valid build was refused: %v", err)
 	}
 }
 

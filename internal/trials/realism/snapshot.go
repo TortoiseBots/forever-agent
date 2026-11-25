@@ -4,9 +4,9 @@
 // one from what the agent can read today, and `trials realism` judges it.
 //
 // A snapshot names each bot by a name-free id (bot1, bot2, …; a real character name never goes into
-// a file that may be committed), its class and spec, its level, its learned talents (by the
-// talent's spell id and rank), and the items it wears (slot, item id, item level, quality, stats,
-// enchant, and where the item came from when that is known). The loader is strict: an unknown key,
+// a file that may be committed), its class and spec, its level, its learned talents (by the talent's
+// RANK-1 spell id and the rank learned), and the items it wears (slot, item id, item level, required
+// level, quality, stats, enchant, and where the item came from when that is known). The loader is strict: an unknown key,
 // an id that is not botN, a slot the server does not have, a level outside 1..60 or a quality
 // outside the item ladder is refused with the file and the field, so a malformed file is never
 // scored as a pass.
@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/data/aotc"
+	"github.com/pjerra/forever-agent/internal/trials/playdata"
 )
 
 // Format is the snapshot file format this package reads and `forever bot-snapshot` writes. A file
@@ -138,8 +139,9 @@ type Item struct {
 	Source string `json:"source,omitempty"`
 }
 
-// Talent is one learned talent: the talent's spell id (what a learn or known read-back proves) and
-// the rank the bot has in it. Tab is the tree's page (0-2), nil when not read.
+// Talent is one learned talent: the talent's RANK-1 spell id (the id the player tables key the
+// talent by, not the id of a higher learned rank) and the rank the bot has in it. Tab is the tree's
+// page (0-2), nil when not read.
 type Talent struct {
 	SpellID int64 `json:"spell_id"`
 	Rank    int   `json:"rank"`
@@ -163,7 +165,8 @@ func Marshal(s Snapshot) ([]byte, error) {
 	return append(raw, '\n'), nil
 }
 
-// Load reads and validates one snapshot file. The error names the file and the field.
+// Load reads and validates one snapshot file with the shipped player tables: the structural checks
+// of Decode plus the table checks of ValidateTables. The error names the file and the field.
 func Load(path string) (Snapshot, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -174,7 +177,41 @@ func Load(path string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("%s: %w", path, err)
 	}
+	if err := s.ValidateTables(Default()); err != nil {
+		return Snapshot{}, fmt.Errorf("%s: %w", path, err)
+	}
 	return s, nil
+}
+
+// ValidateTables checks the fields that need the player tables: a talent rank may not exceed the
+// talent's own maximum rank, and a build may not hold more points than its level allows. Both are
+// malformed snapshots, so the loader refuses them. A spell id the tables do not name is not refused
+// here: the talent check reports it INCONCLUSIVE (the module may use another id, and a bad id must
+// never read as a realism FAIL).
+func (s Snapshot) ValidateTables(t Tables) error {
+	for i := range s.Bots {
+		b := &s.Bots[i]
+		if len(b.Talents) == 0 {
+			continue
+		}
+		maxRank := map[int64]int64{}
+		for _, row := range t.CommonTalents(b.Class, b.Spec, "all", 0) {
+			maxRank[row.SpellID] = row.MaxRank
+		}
+		total := 0
+		for j, talent := range b.Talents {
+			total += talent.Rank
+			if max, ok := maxRank[talent.SpellID]; ok && max > 0 && int64(talent.Rank) > max {
+				return fmt.Errorf("bots[%d]: talents[%d]: spell_id %d rank %d is above its maximum rank %d",
+					i, j, talent.SpellID, talent.Rank, max)
+			}
+		}
+		if allowed := TalentPoints(b.Level); total > allowed {
+			return fmt.Errorf("bots[%d]: talents: %d point(s) is more than the %d a level %d character has",
+				i, total, allowed, b.Level)
+		}
+	}
+	return nil
 }
 
 // Decode reads and validates one snapshot from r.
@@ -353,16 +390,19 @@ func ClassName(id uint8) string {
 	return ""
 }
 
-// SpecBots groups a snapshot's bots by class and spec, the order the report prints: class then spec,
-// and a bot with no spec under its class's empty spec last.
+// SpecBots groups a snapshot's bots by class, spec and level band, the order the report prints:
+// class then spec then band, and a bot with no spec under its class's empty spec last. Bands are the
+// talent groups (10-19 … 60) plus 1-9 below level 10, so a level 60 bot is never summed with a level
+// 45 one.
 func SpecBots(s Snapshot) []SpecGroup {
 	groups := map[string]*SpecGroup{}
 	var order []string
 	for _, b := range s.Bots {
-		key := b.Class + "\x00" + b.Spec
+		group := SpecGroup{Class: b.Class, Spec: b.Spec, Band: BandOf(b.Level)}
+		key := group.Class + "\x00" + group.Spec + "\x00" + group.Band
 		g := groups[key]
 		if g == nil {
-			g = &SpecGroup{Class: b.Class, Spec: b.Spec}
+			g = &group
 			groups[key] = g
 			order = append(order, key)
 		}
@@ -376,16 +416,29 @@ func SpecBots(s Snapshot) []SpecGroup {
 		if out[i].Class != out[j].Class {
 			return out[i].Class < out[j].Class
 		}
-		return out[i].Spec < out[j].Spec
+		if out[i].Spec != out[j].Spec {
+			return out[i].Spec < out[j].Spec
+		}
+		return out[i].Band < out[j].Band
 	})
 	return out
 }
 
-// SpecGroup is one class and spec's bots, in the snapshot's order.
+// SpecGroup is one class, spec and level band's bots, in the snapshot's order.
 type SpecGroup struct {
 	Class string
 	Spec  string
+	Band  string
 	Bots  []string
+}
+
+// BandOf names a level's band: the talent groups the player data uses, and 1-9 below level 10 (no
+// talent points, but still a band of its own).
+func BandOf(level int) string {
+	if band := playdata.LevelGroup(level); band != "" {
+		return band
+	}
+	return "1-9"
 }
 
 // SlotName is an equipment slot word as the snapshot format writes it (lower case, trimmed), and

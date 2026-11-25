@@ -43,9 +43,9 @@ func passingSnapshot() realism.Snapshot {
 			balanceTalent(17063, 5, 2), balanceTalent(17069, 5, 2), balanceTalent(17106, 3, 2),
 		},
 		Items: []realism.Item{
-			{Slot: "head", ItemID: 22267, ItemLevel: 62, Quality: new(3), Source: "dungeon", EnchantID: new(int64(0))},
-			{Slot: "chest", ItemID: 22409, ItemLevel: 62, Quality: new(4), Source: "dungeon", EnchantID: new(int64(0))},
-			{Slot: "main_hand", ItemID: 13964, ItemLevel: 58, Quality: new(4), Source: "dungeon", EnchantID: new(int64(273629))},
+			{Slot: "head", ItemID: 22267, ItemLevel: 62, RequiredLevel: 58, Quality: new(3), Source: "dungeon", EnchantID: new(int64(0))},
+			{Slot: "chest", ItemID: 22409, ItemLevel: 62, RequiredLevel: 58, Quality: new(4), Source: "dungeon", EnchantID: new(int64(0))},
+			{Slot: "main_hand", ItemID: 13964, ItemLevel: 58, RequiredLevel: 55, Quality: new(4), Source: "dungeon", EnchantID: new(int64(273629))},
 		},
 	}}}
 }
@@ -114,7 +114,7 @@ func TestTrialsRealismBaseline(t *testing.T) {
 		t.Fatalf("the newer snapshot passes, so the exit must be 0: code %d stderr %q", code, stderr)
 	}
 	if !strings.Contains(stdout, "before:") || !strings.Contains(stdout, "after:") ||
-		!strings.Contains(stdout, "## Bots that changed") || !strings.Contains(stdout, realism.RuleGear) {
+		!strings.Contains(stdout, "## Per spec and level band") || !strings.Contains(stdout, realism.RuleGear) {
 		t.Fatalf("the before/after is not printed:\n%s", stdout)
 	}
 
@@ -159,6 +159,19 @@ func TestTrialsRealismNothingJudgedExits(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "coverage:") || !strings.Contains(stdout, "0 check(s) judged") {
 		t.Fatalf("the report must print its coverage:\n%s", stdout)
+	}
+}
+
+// TestTrialsRealismRefusesAMalformedBuild pins the table checks in the loader: a talent rank above
+// the talent's maximum is a malformed snapshot, refused before any check reads it.
+func TestTrialsRealismRefusesAMalformedBuild(t *testing.T) {
+	s := passingSnapshot()
+	s.Bots[0].Talents[1].Rank = 4 // Moonglow's maximum is 3
+	dir := t.TempDir()
+	path := writeSnapshot(t, dir, "snap.json", s)
+	code, _, errOut := runCLI("trials", "realism", "--snapshot", path)
+	if code != exitUsage || !strings.Contains(errOut, "maximum rank") {
+		t.Fatalf("a rank above the maximum must be refused: code %d %q", code, errOut)
 	}
 }
 

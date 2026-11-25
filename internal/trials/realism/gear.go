@@ -4,17 +4,18 @@ package realism
 // level could have.
 //
 // Reported for every bot with known items: the average item level of the worn gear, the quality mix
-// and the item levels' spread. Judged:
+// and the item levels' spread. Judged (all three parts decisive: no PASS over a partial reading):
 //
-//	item_level  the share of slots whose item level is above the bot's level plus the band's own
-//	            allowance (GearAllowance), PASS at or below GearAboveShareMax. The allowance is the
-//	            best gear that level's own content drops: a bot dressed for a later band shows
-//	            several pieces, one noisy reading does not.
-//	source      any raid, PvP or reputation item: FAIL on one. The check reads the snapshot's item
-//	            `source`; without it the part is INCONCLUSIVE, never a guess from the item's name.
+//	required_level  any item whose required level is above the bot's level: FAIL on one. This is the
+//	                clearest "no player of this level could wear it" signal, and it is a game fact,
+//	                not a player choice.
+//	item_level      the share of slots whose item level is above the bot's level plus the band's own
+//	                allowance (GearAllowance), PASS at or below GearAboveShareMax.
+//	source          any raid, PvP or reputation item: FAIL on one. The check reads the snapshot's item
+//	                `source`; without it the part is INCONCLUSIVE, never a guess from the item's name.
 //
-// A bot that wears nothing known, or whose items carry no item level, reports the numbers it has and
-// leaves the parts it cannot judge INCONCLUSIVE.
+// A bot that wears nothing, or whose items carry no item level, reports the numbers it has and leaves
+// the parts it cannot judge INCONCLUSIVE.
 
 import (
 	"fmt"
@@ -28,23 +29,25 @@ type gearBand struct {
 	Allowance float64
 }
 
-// GearAllowance is the item level a bot may wear above its own level, by level band. The numbers
-// follow the item level of the best gear each band's own content drops: a level 19 character's quest
-// and dungeon gear sits within half a dozen item levels of its own; level 60's 30 covers the epic
-// high end of the era (the last tier bands at item level 88-92), which is what a player of that
-// level "could have" — raid gear on a pool bot is the `source` part's business, not this one's.
+// GearAllowance is the item level a bot may wear above its own level, by level band. These are
+// STARTING VALUES to tune, not facts about players: each is the 95th percentile of (item level minus
+// required level) over the game's own item table, counted at the band's levels. Through level 59 an
+// item sits about five item levels above the level its required level names; at 60 the raid tier
+// reaches item levels 88-92 on required-level-60 items, so the high percentile is 30. The manual
+// states the derivation and that a real batch may move it. Raid gear on a pool bot is the `source`
+// part's business, not this one's.
 var GearAllowance = []gearBand{
-	{MaxLevel: 19, Allowance: 6},
-	{MaxLevel: 29, Allowance: 8},
-	{MaxLevel: 39, Allowance: 10},
-	{MaxLevel: 49, Allowance: 12},
-	{MaxLevel: 59, Allowance: 15},
+	{MaxLevel: 19, Allowance: 5},
+	{MaxLevel: 29, Allowance: 5},
+	{MaxLevel: 39, Allowance: 5},
+	{MaxLevel: 49, Allowance: 5},
+	{MaxLevel: 59, Allowance: 5},
 	{MaxLevel: 60, Allowance: 30},
 }
 
 // GearAboveShareMax is the most of the measured slots that may sit above the allowance: one in ten.
-// A single piece of measurement noise is no realism fault; a bot dressed for a later band shows
-// several slots over.
+// A starting value to tune, not a fact about players: a single piece of measurement noise is no
+// realism fault, while a bot dressed for a later band shows several slots over.
 const GearAboveShareMax = 0.10
 
 // allowanceFor is the band a bot level falls in.
@@ -59,11 +62,20 @@ func allowanceFor(level int) float64 {
 
 // gearCheck judges one bot's worn gear.
 func gearCheck(b Bot, _ Tables) Check {
-	if !b.ItemsKnown || len(b.Items) == 0 {
+	if !b.ItemsKnown {
+		reason := "the snapshot carries no worn items (items_known false): no equipment read for this bot"
 		return checkOf(RuleGear, []Part{
-			part("item_level", VerdictInconclusive, 0, "",
-				"the snapshot carries no worn items (items_known false): no equipment read for this bot"),
-			part("source", VerdictInconclusive, 0, "", "no worn items to read a source from"),
+			part("required_level", VerdictInconclusive, 0, "", reason),
+			part("item_level", VerdictInconclusive, 0, "", reason),
+			part("source", VerdictInconclusive, 0, "", reason),
+		}, nil)
+	}
+	if len(b.Items) == 0 {
+		reason := "the bot wears nothing (items_known true, no items): there is no gear to judge"
+		return checkOf(RuleGear, []Part{
+			part("required_level", VerdictInconclusive, 0, "", reason),
+			part("item_level", VerdictInconclusive, 0, "", reason),
+			part("source", VerdictInconclusive, 0, "", reason),
 		}, nil)
 	}
 	var levels []int
@@ -112,18 +124,53 @@ func gearCheck(b Bot, _ Tables) Check {
 
 	var parts []Part
 	if len(levels) == 0 {
-		parts = append(parts, part("item_level", VerdictInconclusive, 0, "",
-			"no worn item carries an item level (the item read-out is missing)"))
+		parts = append(parts, Part{Name: "item_level", Verdict: VerdictInconclusive, Decisive: true,
+			Reason: "no worn item carries an item level (the item read-out is missing)"})
 	} else {
 		share := float64(above) / float64(len(levels))
+		measure := fmt.Sprintf("%d of %d item level(s) above level %d plus %.0f (%.0f%% allowed)",
+			above, len(levels), b.Level, allowance, GearAboveShareMax*100)
+		if len(levels) < len(b.Items) {
+			measure = fmt.Sprintf("%d of %d worn item(s) judged: %s; %d carry no item level",
+				len(levels), len(b.Items), measure, len(b.Items)-len(levels))
+		}
 		parts = append(parts, Part{
 			Name: "item_level", Verdict: verdictAtMost(share, GearAboveShareMax), Value: share,
-			Measure: fmt.Sprintf("%d of %d item level(s) above level %d plus %.0f (%.0f%% allowed)",
-				above, len(levels), b.Level, allowance, GearAboveShareMax*100),
-			Lines: aboveLines,
+			Measure: measure, Lines: aboveLines, Decisive: true,
 		})
 	}
 
+	// required_level: a game fact the snapshot's item read carries. An item above the bot's level is
+	// one no player of that level could wear, so one is a FAIL of realism, not a share.
+	requiredJudged, requiredOver := 0, 0
+	var requiredLines []string
+	for _, item := range b.Items {
+		if item.RequiredLevel <= 0 {
+			continue
+		}
+		requiredJudged++
+		if item.RequiredLevel > b.Level {
+			requiredOver++
+			requiredLines = append(requiredLines, fmt.Sprintf("%s: item %d needs level %d, the bot is level %d",
+				item.Slot, item.ItemID, item.RequiredLevel, b.Level))
+		}
+	}
+	switch {
+	case requiredOver > 0:
+		parts = append(parts, Part{Name: "required_level", Verdict: VerdictFail, Value: float64(requiredOver),
+			Measure: fmt.Sprintf("%d of %d item(s) need a higher level than the bot has", requiredOver, requiredJudged),
+			Lines:   requiredLines, Decisive: true})
+	case requiredJudged == 0:
+		parts = append(parts, Part{Name: "required_level", Verdict: VerdictInconclusive, Decisive: true,
+			Reason: "no worn item carries a required level (the item read-out names none)"})
+	case requiredJudged < len(b.Items):
+		parts = append(parts, Part{Name: "required_level", Verdict: VerdictInconclusive, Decisive: true,
+			Reason: fmt.Sprintf("%d of %d worn item(s) carry no required level, so a too-high one cannot be ruled out",
+				len(b.Items)-requiredJudged, len(b.Items))})
+	default:
+		parts = append(parts, Part{Name: "required_level", Verdict: VerdictPass, Value: 0, Decisive: true,
+			Measure: fmt.Sprintf("all %d item(s) are wearable at level %d", requiredJudged, b.Level)})
+	}
 	// Every worn item must carry a source for the part to pass: one permitted piece beside an
 	// unknown one would otherwise hide a raid, PvP or reputation item it cannot see.
 	judged, forbidden, unknown := 0, 0, 0
@@ -143,20 +190,20 @@ func gearCheck(b Bot, _ Tables) Check {
 	switch {
 	case forbidden > 0:
 		parts = append(parts, Part{
-			Name: "source", Verdict: VerdictFail, Value: float64(forbidden),
+			Name: "source", Verdict: VerdictFail, Value: float64(forbidden), Decisive: true,
 			Measure: fmt.Sprintf("%d of %d sourced item(s) come from a raid, PvP or reputation source", forbidden, judged),
 			Lines:   sourceLines,
 		})
 	case unknown == len(b.Items):
-		parts = append(parts, part("source", VerdictInconclusive, 0, "",
-			"no worn item carries a source (where an item comes from is not read by the snapshot command)"))
+		parts = append(parts, Part{Name: "source", Verdict: VerdictInconclusive, Decisive: true,
+			Reason: "no worn item carries a source (where an item comes from is not read by the snapshot command)"})
 	case unknown > 0:
-		parts = append(parts, part("source", VerdictInconclusive, 0, "",
-			fmt.Sprintf("%d of %d worn item(s) carry no source, so a raid, PvP or reputation item cannot be ruled out",
-				unknown, len(b.Items))))
+		parts = append(parts, Part{Name: "source", Verdict: VerdictInconclusive, Decisive: true,
+			Reason: fmt.Sprintf("%d of %d worn item(s) carry no source, so a raid, PvP or reputation item cannot be ruled out",
+				unknown, len(b.Items))})
 	default:
 		parts = append(parts, Part{
-			Name: "source", Verdict: VerdictPass, Value: 0,
+			Name: "source", Verdict: VerdictPass, Value: 0, Decisive: true,
 			Measure: fmt.Sprintf("none of %d sourced item(s) is raid, PvP or reputation", judged),
 		})
 	}

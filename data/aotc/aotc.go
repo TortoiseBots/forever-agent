@@ -834,12 +834,13 @@ func (d *Data) GearFor(class, spec, slot string) []GearItem {
 	return out
 }
 
-// EnchantsFor returns the enchants the spec uses at 60 in one slot (empty for every slot), best
-// geared population only, most used first.
+// EnchantsFor returns the enchants the spec uses at 60 in one slot (empty for every slot), the
+// all-level-60 population (every character, not only the best geared: a raider's habit is not the
+// pool's), most used first.
 func (d *Data) EnchantsFor(class, spec, slot string) []Enchant {
 	var out []Enchant
 	for _, e := range d.Enchants {
-		if e.Class != class || e.Spec != spec || e.Population != PopulationBestGeared {
+		if e.Class != class || e.Spec != spec || e.Population != PopulationAll {
 			continue
 		}
 		if slot != "" && !strings.EqualFold(e.Slot, slot) {
