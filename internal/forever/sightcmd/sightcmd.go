@@ -23,6 +23,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
@@ -49,8 +50,15 @@ const (
 
 // SpotToleranceYd is how far an echoed coordinate may sit from the one the call sent, per axis. The module prints a
 // spot with two decimals and this client sends the plan's float32 text (three decimals and more), so a sent 456.929
-// comes back 456.93: two-decimal rounding is at most 0.005, and 0.006 leaves room for the float32 text itself.
-const SpotToleranceYd = 0.006
+// comes back 456.93: two-decimal rounding is at most 0.005. The module also parses the sent text as a float32, whose
+// half-step reaches about 0.002 beyond |16384| (the map grid edge is near 17066), so the worst case there is 0.007;
+// 0.0075 covers it and is still far below the 0.01 step a real different spot would show.
+const SpotToleranceYd = 0.0075
+
+// MaxEchoBytes bounds a unit's echoed name. The module writes the unit's own name (a creature's or a character's)
+// percent-encoded, with spaces, apostrophes, hyphens and non-ASCII letters, so a name is decoded text of any shape up
+// to this many bytes; a creature name in the game's data is far shorter, and the reply line's own cap bounds the rest.
+const MaxEchoBytes = 255
 
 // ErrMalformed is a line that is not the module's sight record: another kind, a key outside the documented set or in
 // another order, a duplicate or missing key, or a value that cannot be read at all.
@@ -59,6 +67,10 @@ var ErrMalformed = errors.New("sightcmd: the line is not the module's sight reco
 // ErrBadValue is a value that is not what its key takes (an out-of-range number, an unknown refusal code, a name that
 // is not one).
 var ErrBadValue = errors.New("sightcmd: a value does not fit its key")
+
+// NotARecord is the text the daemon's los error carries when the module answered but its line is not a sight record
+// this client can read, or not the call's. A caller that asks many units tells it from a missing command by this text.
+const NotARecord = "the module's answer is not a los record"
 
 // maxLineBytes is the reply grammar's cap on one line; a longer one cannot be the module's record.
 const maxLineBytes = 3000
@@ -118,17 +130,17 @@ func ParseSide(what, s string) (Side, error) {
 }
 
 // Matches reports whether the module's echo of this side names the same thing the call asked about. A `target` side
-// is resolved on the server, so any name or guid it answers with is the selection this character sent. A guid side
-// answers with its own digits when it did not resolve and with the unit's name when it did, so both are accepted (the
-// reply's token already ties the line to the call). A spot is compared per axis with SpotToleranceYd, because the
-// module prints two decimals. A name is compared exactly, case aside.
+// is resolved on the server, so whatever it answers (the selected unit's name, a guid, or the word `target` on a
+// refusal) is the selection this character sent. A guid side answers with its own 32 hex digits when the unit was not
+// found or the answer is a refusal, and with the unit's NAME when it was found: the digits must be its own, and a name
+// is any text that is not itself a guid (spaces, apostrophes, hyphens and non-ASCII letters are all in real names).
+// A spot is compared per axis with SpotToleranceYd, because the module prints two decimals. A name is compared exactly,
+// case aside. What ties an answer to its call is not this echo but the per-call token, the serialised command channel
+// and the other side, which stays strictly matched.
 func (l Side) Matches(answered string) bool {
 	switch l.Kind {
 	case Target:
-		if _, ok := parseGuid(answered); ok {
-			return true
-		}
-		return isNameWord(answered)
+		return isEchoText(answered)
 	case Position:
 		sent, err := parseSpot(l.Word)
 		if err != nil {
@@ -145,12 +157,35 @@ func (l Side) Matches(answered string) bool {
 		}
 		return true
 	case Guid:
-		if guid, ok := parseGuid(answered); ok {
-			return guid == l.Word
+		if isGuid32(answered) {
+			return strings.EqualFold(answered, l.Word)
 		}
-		return isNameWord(answered)
+		return isEchoText(answered)
 	}
 	return strings.EqualFold(answered, l.Word)
+}
+
+// BuildLine builds the `.tb los` line for two sides and the map two spots need. `map=` is the two-spots word only (a
+// unit side carries its own map, and the module refuses the word on it), and its id is 1-65535; every other use is
+// refused here, before any line is sent. Every caller that sends the query builds its line here, so the map rule has
+// one home. A refusal wraps ErrBadValue.
+func BuildLine(a, b Side, mapID *uint32) (string, error) {
+	if a.Word == "" || b.Word == "" {
+		return "", fmt.Errorf("%w: a los side is empty", ErrBadValue)
+	}
+	if a.Kind != Position || b.Kind != Position {
+		if mapID != nil {
+			return "", fmt.Errorf("%w: map= is for two spots only; a unit side carries its own map", ErrBadValue)
+		}
+		return ".tb los " + a.Word + " " + b.Word, nil
+	}
+	if mapID == nil {
+		return "", fmt.Errorf("%w: two spots need map=<id>", ErrBadValue)
+	}
+	if *mapID < 1 || *mapID > 65535 {
+		return "", fmt.Errorf("%w: map= takes 1-65535, not %d", ErrBadValue, *mapID)
+	}
+	return ".tb los " + a.Word + " " + b.Word + " map=" + strconv.FormatUint(uint64(*mapID), 10), nil
 }
 
 // answerKeys is the module's line, key by key. Every key is required (a refusal writes an empty dist=), and reason is
@@ -350,20 +385,30 @@ func parseGuid(s string) (string, bool) {
 	return strings.Repeat("0", 32-len(hex)) + strings.ToLower(hex), true
 }
 
-// isNameWord reports whether s is a character or bot name by the module's own rule: one word of at most 24 ASCII
-// letters and digits, never a leading digit.
-func isNameWord(s string) bool {
-	if s == "" || len(s) > 24 {
+// isGuid32 reports whether s is a guid as the module prints one: exactly 32 hex digits, no `0x`.
+func isGuid32(s string) bool {
+	if len(s) != 32 {
 		return false
 	}
 	for i := range s {
 		c := s[i]
-		alpha := c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z'
-		digit := c >= '0' && c <= '9'
-		if i == 0 && !alpha {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
 			return false
 		}
-		if !alpha && !digit {
+	}
+	return true
+}
+
+// isEchoText reports whether s can be the name the module echoes for a unit it found, or the typed word it echoes
+// when it did not: non-empty text with something other than blanks in it, at most MaxEchoBytes long, with no control
+// character. It is deliberately not a name grammar: creature names carry spaces, apostrophes, hyphens and non-ASCII
+// letters, and the module sends whatever the unit is called.
+func isEchoText(s string) bool {
+	if len(s) > MaxEchoBytes || strings.TrimSpace(s) == "" {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) {
 			return false
 		}
 	}

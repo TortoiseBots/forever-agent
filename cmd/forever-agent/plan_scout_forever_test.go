@@ -17,6 +17,7 @@ import (
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/forever/serveclient"
+	"github.com/pjerra/forever-agent/internal/forever/sightcmd"
 	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/planscout"
@@ -110,6 +111,8 @@ type fakeForeverServe struct {
 	losErr      error
 	losRefusal  string
 	losRefusals map[string]string
+	// losErrs answers the query for the named guid (canonical form) with this error.
+	losErrs     map[string]error
 	losCalls    int
 	loss        []string
 	lossAt      []time.Time
@@ -170,6 +173,9 @@ func (f *fakeForeverServe) LOS(_ context.Context, p serveclient.LOSParams) (serv
 	if f.losRefusal != "" {
 		answer.Reason = f.losRefusal
 		return answer, nil
+	}
+	if err, ok := f.losErrs[fakeCanonGuid(p.B)]; ok {
+		return serveclient.LOS{}, err
 	}
 	if reason, ok := f.losRefusals[fakeCanonGuid(p.B)]; ok {
 		answer.Reason = reason
@@ -1333,6 +1339,60 @@ func TestScoutForeverServerSightSkipsOneRefusedUnit(t *testing.T) {
 				t.Fatalf("check data %v, want the one unit the server answered", c.Data)
 			}
 		})
+	}
+}
+
+// TestScoutForeverServerSightGoesOnPastAnUnreadAnswer: one unit's answer that is not a record this client understands
+// (a side the module did not echo as expected, a malformed line) is recorded for that unit as "answer not understood";
+// the rest of the pack is still asked and the pass does not stop.
+func TestScoutForeverServerSightGoesOnPastAnUnreadAnswer(t *testing.T) {
+	dir := t.TempDir()
+	mmaps := foreverFlat(t)
+	foreverScoutPackPlanFile(t, dir, "scout_unread")
+	fake := newFakeForeverServe(foreverPackUnits()...)
+	fake.ray = func(_ [3]float32, _, _, _ float32) serveclient.WalkRay {
+		return serveclient.WalkRay{Known: true, In: false, Hit: 3, Source: "navmesh_raycast"}
+	}
+	fake.losErrs = map[string]error{fakeCanonGuid("0x00000000000000000000000000000064"): &serveclient.Error{Code: rpc.CodeGame,
+		Message: "los: " + sightcmd.NotARecord + ": tbcmd: the answer names b=\"Dark Iron Dwarf\"", Method: "los"}}
+	useFakeForeverServe(t, fake)
+	code, _, errOut := runCLI("plan-scout", "scout_unread", "--dir", dir, "--mmaps", mmaps,
+		"--spawns", foreverExport(), "--forever", "--out", filepath.Join(dir, "out"), "--live", "--slot", t.TempDir())
+	if code == exitLivePhaseRefused || code == exitPlanScoutLiveAborted {
+		t.Fatalf("live pass: code %d err %q", code, errOut)
+	}
+	fake.mu.Lock()
+	calls := fake.losCalls
+	fake.mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("%d los queries, want both pack units asked", calls)
+	}
+	rep := foreverReport(t, dir, "scout_unread")
+	understood := 0
+	for _, n := range rep.Notes {
+		if strings.Contains(n, "does not answer los") || strings.Contains(n, "los query for") {
+			t.Fatalf("one unread answer stopped the pass: %q", n)
+		}
+		if strings.Contains(n, "answer not understood") && strings.Contains(n, "1 pack unit") {
+			understood++
+		}
+	}
+	if understood != 1 {
+		t.Fatalf("%d note(s) record the unread answer, want 1: %q", understood, rep.Notes)
+	}
+	var step int
+	for _, st := range rep.Steps {
+		for _, c := range st.Checks {
+			if c.Name == planscout.CheckLiveLOS {
+				step = st.Step
+			}
+		}
+	}
+	if step == 0 {
+		t.Fatal("the report has no live_los check")
+	}
+	if c := foreverLOSCheck(t, rep, step); c.Data["server_answered"] != 1 {
+		t.Fatalf("check data %v, want the one unit the server answered", c.Data)
 	}
 }
 

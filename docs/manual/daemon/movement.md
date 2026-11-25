@@ -169,7 +169,7 @@ carries its own map) are refused `-32602` with nothing sent.
 
 | Field | Meaning |
 |---|---|
-| `a`, `b` | The sides the server answered, in its own words: a unit's NAME when the server found it (a side sent as a guid included), a ground spot with two decimals, or the word it could not resolve. A `target` side answers what the character had selected. |
+| `a`, `b` | The sides the server answered, in its own words. A unit it found is answered by its NAME, exactly as the unit is called: it can hold spaces, apostrophes, hyphens and non-ASCII letters (`Dark Iron Dwarf`, `Bael'Gar`), and this holds for a side sent as a guid too. A guid it did not find, and any refusal, comes back as the 32 hex digits sent. A ground spot comes back with two decimals. A `target` side answers the selected unit's name or guid, or the word `target` on a refusal. An empty side, a name over 255 bytes, one with a control character, and a guid side answered with a different guid are not this call's answer (see below). |
 | `clear` | The server's line of sight between them. |
 | `dist_yd` | How far apart they are, in yards; absent on every refusal (the server states no distance when it refuses). |
 | `map` | The map the answer is about; absent on a refusal that hides it. Map id 0 is a real map (Eastern Kingdoms) and is left out of the JSON too, so a caller reads a non-refusal without it as map 0. |
@@ -184,7 +184,7 @@ query costs one of the server's five per second per caller; a refused query cost
 refusal instead of asking again at once. A server whose module build does not answer the query refuses the call
 with `-32003` and `los: not supported by this module build`; that is not a parse error and not a timeout. An answer
 that is not the module's record — a missing or unknown key, a value its key does not take, a second line, an answer
-for another pair — is refused `-32003` `los: the module's answer is not a los record: ...`, never read as a zero.
+for another pair or another call (a different token) — is refused `-32003` `los: the module's answer is not a los record: ...`, never read as a zero.
 
 The plan scout's Forever live pass asks it from each pull row's stand to the units of its target pack and records
 the server's answer beside the navmesh ray (see [plan tools](../dungeons/plan-tools.md#plan-scout)).

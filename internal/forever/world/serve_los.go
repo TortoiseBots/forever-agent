@@ -15,6 +15,7 @@ import (
 	"errors"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
+	"github.com/pjerra/forever-agent/internal/forever/sightcmd"
 	"github.com/pjerra/forever-agent/internal/rpc"
 )
 
@@ -88,7 +89,7 @@ func losError(err error) error {
 		return &rpc.Error{Code: rpc.CodeGame,
 			Message: "los: not supported by this module build (the server does not answer the los query)"}
 	case errors.Is(err, tbcmd.ErrBadReport), errors.Is(err, tbcmd.ErrBadValue):
-		return &rpc.Error{Code: rpc.CodeGame, Message: "los: the module's answer is not a los record: " + err.Error()}
+		return &rpc.Error{Code: rpc.CodeGame, Message: "los: " + sightcmd.NotARecord + ": " + err.Error()}
 	}
 	return err
 }

@@ -144,6 +144,21 @@ func TestLOSAnswers(t *testing.T) {
 		{"a guid side answers the unit's name", "-7,0,0", "0x0000000000000000000000000000BEEF",
 			"los a=-7.00,0.00,0.00 b=Kobold map=700 los=1 dist=3.0 same_map=1 in_world=1 #T",
 			LOSReport{A: "-7.00,0.00,0.00", B: "Kobold", Map: 700, HasMap: true, Clear: true, DistYD: 3, HasDist: true, SameMap: true, InWorld: true}},
+		{"a guid side answers a name with a space", "-7,0,0", "0x0000000000000000000000000000BEEF",
+			"los a=-7.00,0.00,0.00 b=Dark%20Iron%20Dwarf map=230 los=1 dist=3.0 same_map=1 in_world=1 #T",
+			LOSReport{A: "-7.00,0.00,0.00", B: "Dark Iron Dwarf", Map: 230, HasMap: true, Clear: true, DistYD: 3, HasDist: true, SameMap: true, InWorld: true}},
+		{"a guid side answers a name with an apostrophe", "-7,0,0", "0x0000000000000000000000000000BEEF",
+			"los a=-7.00,0.00,0.00 b=Bael%27Gar map=230 los=0 dist=9.5 same_map=1 in_world=1 #T",
+			LOSReport{A: "-7.00,0.00,0.00", B: "Bael'Gar", Map: 230, HasMap: true, DistYD: 9.5, HasDist: true, SameMap: true, InWorld: true}},
+		{"a guid side answers a hyphenated name", "-7,0,0", "0x0000000000000000000000000000BEEF",
+			"los a=-7.00,0.00,0.00 b=Anvil-Guard map=230 los=1 dist=3.0 same_map=1 in_world=1 #T",
+			LOSReport{A: "-7.00,0.00,0.00", B: "Anvil-Guard", Map: 230, HasMap: true, Clear: true, DistYD: 3, HasDist: true, SameMap: true, InWorld: true}},
+		{"a guid side answers a long name", "-7,0,0", "0x0000000000000000000000000000BEEF",
+			"los a=-7.00,0.00,0.00 b=" + strings.Repeat("Long%20Name%20", 12) + " map=230 los=1 dist=3.0 same_map=1 in_world=1 #T",
+			LOSReport{A: "-7.00,0.00,0.00", B: strings.Repeat("Long Name ", 12), Map: 230, HasMap: true, Clear: true, DistYD: 3, HasDist: true, SameMap: true, InWorld: true}},
+		{"the selection answers a name with a space", "Tanka", "target",
+			"los a=Tanka b=Dark%20Iron%20Dwarf map=230 los=1 dist=3.0 same_map=1 in_world=1 #T",
+			LOSReport{A: "Tanka", B: "Dark Iron Dwarf", Map: 230, HasMap: true, Clear: true, DistYD: 3, HasDist: true, SameMap: true, InWorld: true}},
 		{"a three-decimal spot comes back with two", "456.929,-12.345,3.5", "Tanka",
 			"los a=456.93,-12.35,3.50 b=Tanka map=530 los=1 dist=12.5 same_map=1 in_world=1 #T",
 			LOSReport{A: "456.93,-12.35,3.50", B: "Tanka", Map: 530, HasMap: true, Clear: true, DistYD: 12.5, HasDist: true, SameMap: true, InWorld: true}},
@@ -235,6 +250,9 @@ func TestLOSMalformed(t *testing.T) {
 		{"a map that is not an id", "los a=Tanka b=Healera map=elwynn los=1 dist=1.0 same_map=1 in_world=1 #T"},
 		{"an unknown reason", "los a=Tanka b=Healera map= los=0 dist= same_map= in_world= reason=nope #T"},
 		{"a lower-case escape", "los a=Tanka%2f b=Healera map=0 los=1 dist=1.0 same_map=1 in_world=1 #T"},
+		{"a guid side answers another guid's digits", "los a=Tanka b=00000000000000000000000000000065 map=0 los=1 dist=1.0 same_map=1 in_world=1 #T"},
+		{"a guid side answers nothing", "los a=Tanka b= map=0 los=1 dist=1.0 same_map=1 in_world=1 #T"},
+		{"a guid side answers a control character", "los a=Tanka b=Kobold%07 map=0 los=1 dist=1.0 same_map=1 in_world=1 #T"},
 		{"another pair", "los a=Other b=Healera map=0 los=1 dist=1.0 same_map=1 in_world=1 #T"},
 		{"another b", "los a=Tanka b=Other map=0 los=1 dist=1.0 same_map=1 in_world=1 #T"},
 		{"a name where the spot must echo", "los a=1.00,2.00,3.00 b=4.00,5.00,6.00 map=700 los=0 dist=5.0 same_map=1 in_world=1 #T"},
@@ -246,6 +264,9 @@ func TestLOSMalformed(t *testing.T) {
 				a, b = "1.5,2.5,3.5", "4.5,5.5,6.5"
 				x := uint32(700)
 				m = &x
+			}
+			if strings.HasPrefix(tc.name, "a guid side") {
+				b = "0x0000000000000000000000000000BEEF"
 			}
 			r := oneReply(tc.line)
 			_, err := NewClient(r).LOS(context.Background(), a, b, m)
@@ -270,6 +291,34 @@ func TestLOSMalformed(t *testing.T) {
 	}
 	if _, err := NewClient(r).LOS(context.Background(), "Tanka", "Healera", nil); !errors.Is(err, ErrBadReport) {
 		t.Fatalf("an unfinished reply: %v", err)
+	}
+}
+
+// TestLOSWrongToken: what ties an answer to its call is the run's token. A line for another call is refused even
+// when its sides would match this call's, and a name echo (spaces and all) carries no identity of its own.
+func TestLOSWrongToken(t *testing.T) {
+	const line = "los a=-7.00,0.00,0.00 b=Dark%20Iron%20Dwarf map=230 los=1 dist=3.0 same_map=1 in_world=1 #T"
+	r := oneReply(line)
+	if _, err := NewClient(r).LOS(context.Background(), "-7,0,0", "0x0000000000000000000000000000BEEF", nil); err != nil {
+		t.Fatalf("the run's own line: %v", err)
+	}
+	r = &fakeRunner{script: func(_ string, o command.Options) (*command.Reply, error) {
+		rep := reply(o, line)
+		rep.Lines[0].Token = "other-call"
+		return rep, nil
+	}}
+	_, err := NewClient(r).LOS(context.Background(), "-7,0,0", "0x0000000000000000000000000000BEEF", nil)
+	if !errors.Is(err, ErrBadReport) || !strings.Contains(err.Error(), "token") {
+		t.Fatalf("an answer for another call: %v, want a bad report naming the token", err)
+	}
+	// A reply with no token on its line is refused too.
+	r = &fakeRunner{script: func(_ string, o command.Options) (*command.Reply, error) {
+		rep := reply(o, line)
+		rep.Lines[0].Token = ""
+		return rep, nil
+	}}
+	if _, err := NewClient(r).LOS(context.Background(), "-7,0,0", "0x0000000000000000000000000000BEEF", nil); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("an answer with no token: %v", err)
 	}
 }
 

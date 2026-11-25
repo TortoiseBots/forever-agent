@@ -20,7 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strconv"
+	"strings"
 
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/sightcmd"
@@ -80,26 +80,14 @@ type LOSReport struct {
 	Raw     []string
 }
 
-// LOSLine builds the `.tb los` line for two sides and the map two spots need. `map=` is the two-spots word only (a
-// unit side carries its own map, and the module refuses the word on it), and its id is 1-65535; every other use is
-// refused here, before any line is sent.
+// LOSLine builds the `.tb los` line for two sides and the map two spots need. The line and its map rule live in
+// sightcmd.BuildLine (one home for every caller); a refusal is reported here as ErrBadValue.
 func LOSLine(a, b LOSide, mapID *uint32) (string, error) {
-	if a.Word == "" || b.Word == "" {
-		return "", fmt.Errorf("%w: a los side is empty", ErrBadValue)
+	line, err := sightcmd.BuildLine(a, b, mapID)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", ErrBadValue, strings.TrimPrefix(err.Error(), sightcmd.ErrBadValue.Error()+": "))
 	}
-	if a.Kind != LOSidePosition || b.Kind != LOSidePosition {
-		if mapID != nil {
-			return "", fmt.Errorf("%w: map= is for two spots only; a unit side carries its own map", ErrBadValue)
-		}
-		return ".tb los " + a.Word + " " + b.Word, nil
-	}
-	if mapID == nil {
-		return "", fmt.Errorf("%w: two spots need map=<id>", ErrBadValue)
-	}
-	if *mapID < 1 || *mapID > 65535 {
-		return "", fmt.Errorf("%w: map= takes 1-65535, not %d", ErrBadValue, *mapID)
-	}
-	return ".tb los " + a.Word + " " + b.Word + " map=" + strconv.FormatUint(uint64(*mapID), 10), nil
+	return line, nil
 }
 
 // LOS asks the server one sight query: a and b are read by ParseLOSide, and mapID is the map two spots need (it is
@@ -187,6 +175,9 @@ func parseLOS(rep *command.Reply, a, b LOSide) (LOSReport, error) {
 	}
 	if len(rep.Lines) != 1 {
 		return LOSReport{}, fmt.Errorf("%w: a los answer is one line, the reply has %d", ErrBadReport, len(rep.Lines))
+	}
+	if rep.Lines[0].Token != rep.Token {
+		return LOSReport{}, fmt.Errorf("%w: the line carries token %q, the run's is %q", ErrBadReport, rep.Lines[0].Token, rep.Token)
 	}
 	ans, err := sightcmd.ParseAnswer(rep.Lines[0])
 	if err != nil {

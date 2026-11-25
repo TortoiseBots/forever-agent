@@ -426,6 +426,9 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 	if sight.skipped > 0 {
 		data.Notes = append(data.Notes, fmt.Sprintf("live sight: the module refused %d pack unit(s) (unknown-unit, not-in-world or different-maps); those units stay unanswered and the pass went on", sight.skipped))
 	}
+	if sight.unread > 0 {
+		data.Notes = append(data.Notes, fmt.Sprintf("live sight: the module's answer was not understood for %d pack unit(s) (answer not understood); those units stay unanswered and the pass went on", sight.unread))
+	}
 	budget := o.walkBudgetD
 	if budget <= 0 {
 		budget = 5 * time.Minute
@@ -535,8 +538,9 @@ func foreverWalkRayAt(ctx context.Context, c scoutForeverClient, spot planscout.
 
 // scoutForeverSight is the module's own sight query over one live pass: whether the module still answers it, how long
 // it may keep asking, and how many stands and units it did not ask about. A refusal that is about the whole pass
-// (unsupported, no access, a malformed answer, a rate refusal that survived the one retry) stops the asking and is
-// said once; a refusal about one unit (it despawned, died or changed map) skips that unit alone.
+// (unsupported, no access, a rate refusal that survived the one retry) stops the asking and is said once; a refusal
+// about one unit (it despawned, died or changed map) or an answer for one unit that is not understood skips that unit
+// alone.
 type scoutForeverSight struct {
 	ok       bool
 	said     bool
@@ -544,6 +548,7 @@ type scoutForeverSight struct {
 	end      time.Time // the pass's bound, set at its first query
 	notAsked int       // stands whose pack was never asked
 	skipped  int       // pack units the module refused one by one
+	unread   int       // pack units whose answer was not a record this client understands (each is left unanswered)
 	timedOut bool      // the bound, not a refusal, stopped the pass
 }
 
@@ -599,10 +604,17 @@ func foreverLOSUnsupported(err error) bool {
 	return strings.Contains(err.Error(), "not supported by this module build")
 }
 
+// foreverLOSUnread reports whether the query failed because the module's answer for this one unit was not a record this
+// client understands (the daemon's "not a los record"): that unit stays unanswered and the pass goes on.
+func foreverLOSUnread(err error) bool {
+	code, ok := serveclient.CodeOf(err)
+	return ok && code == rpc.CodeGame && strings.Contains(err.Error(), sightcmd.NotARecord)
+}
+
 // foreverServerSightAt records the server's own sight answer between a pull row's stand and every unit of its target
 // pack that the live read saw. Each answer is stored beside the navmesh ray under the same LOSKey, so the report shows
-// both. The queries are paced and bounded; a whole-pass refusal (no command, no access, a malformed answer, a repeated
-// rate) is said once and the pass asks no more, while a unit the server no longer has is skipped alone. An error is
+// both. The queries are paced and bounded; a whole-pass refusal (no command, no access, a repeated rate) is said once and
+// the pass asks no more, while a unit the server no longer has, or whose answer is not understood, is skipped alone. An error is
 // returned only for the pass's own context ending.
 func foreverServerSightAt(ctx context.Context, c scoutForeverClient, spot planscout.LiveSpot, units []serveclient.Unit,
 	data *planscout.LiveData, sight *scoutForeverSight) error {
@@ -649,6 +661,11 @@ func foreverServerSightAt(ctx context.Context, c scoutForeverClient, spot plansc
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if foreverLOSUnread(err) {
+				// One unit's answer that is not understood is recorded for that unit and the rest of the pack is asked.
+				sight.unread++
+				continue
 			}
 			if foreverLOSUnsupported(err) {
 				give(fmt.Sprintf("live sight: the server does not answer los (%v); the sight answers are the navmesh ray's alone", err))

@@ -37,6 +37,14 @@ func TestParseAnswerRealShapes(t *testing.T) {
 	}{
 		{"a resolved guid answers the unit's name", "los a=-7.00,0.00,0.00 b=ForeverRat map=700 los=1 dist=3.0 same_map=1 in_world=1 #T",
 			Answer{A: "-7.00,0.00,0.00", B: "ForeverRat", Map: 700, HasMap: true, Clear: true, DistYD: 3, HasDist: true, SameMap: true, InWorld: true}},
+		{"a resolved guid answers a name with a space", "los a=-7.00,0.00,0.00 b=Dark%20Iron%20Dwarf map=230 los=1 dist=3.0 same_map=1 in_world=1 #T",
+			Answer{A: "-7.00,0.00,0.00", B: "Dark Iron Dwarf", Map: 230, HasMap: true, Clear: true, DistYD: 3, HasDist: true, SameMap: true, InWorld: true}},
+		{"a resolved guid answers a name with an apostrophe", "los a=-7.00,0.00,0.00 b=Bael%27Gar map=230 los=0 dist=9.5 same_map=1 in_world=1 #T",
+			Answer{A: "-7.00,0.00,0.00", B: "Bael'Gar", Map: 230, HasMap: true, DistYD: 9.5, HasDist: true, SameMap: true, InWorld: true}},
+		{"a resolved guid answers a hyphenated name", "los a=-7.00,0.00,0.00 b=Anvil-Guard map=230 los=1 dist=3.0 same_map=1 in_world=1 #T",
+			Answer{A: "-7.00,0.00,0.00", B: "Anvil-Guard", Map: 230, HasMap: true, Clear: true, DistYD: 3, HasDist: true, SameMap: true, InWorld: true}},
+		{"a resolved guid answers a non-ASCII name", "los a=-7.00,0.00,0.00 b=Pr%C3%AAtre%20d%27Ombre map=230 los=1 dist=3.0 same_map=1 in_world=1 #T",
+			Answer{A: "-7.00,0.00,0.00", B: "Pr\u00eatre d'Ombre", Map: 230, HasMap: true, Clear: true, DistYD: 3, HasDist: true, SameMap: true, InWorld: true}},
 		{"names", "los a=Tanka b=Healera map=530 los=1 dist=12.5 same_map=1 in_world=1 #T",
 			Answer{A: "Tanka", B: "Healera", Map: 530, HasMap: true, Clear: true, DistYD: 12.5, HasDist: true, SameMap: true, InWorld: true}},
 		{"map 0 is a real map", "los a=Tanka b=Healera map=0 los=1 dist=12.5 same_map=1 in_world=1 #T",
@@ -116,13 +124,31 @@ func TestEchoMatches(t *testing.T) {
 		{"a guid answers its name", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "ForeverRat", true},
 		{"a guid answers its own digits", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "0000000000000000000000000000BEEF", true},
 		{"a guid answers another guid", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "00000000000000000000000000000065", false},
-		{"a guid answers a malformed word", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "Forever Rat", false},
+		{"a guid answers a name with a space", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "Forever Rat", true},
+		{"a guid answers a name with an apostrophe", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "Bael'Gar", true},
+		{"a guid answers a hyphenated name", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "Anvil-Guard", true},
+		{"a guid answers a non-ASCII name", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "Pr\u00eatre d'Ombre", true},
+		{"a guid answers a long name", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), strings.Repeat("Long Name ", 20), true},
+		{"a guid answers a name over the bound", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), strings.Repeat("a", MaxEchoBytes+1), false},
+		{"a guid answers an empty echo", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "", false},
+		{"a guid answers blanks", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "   ", false},
+		{"a guid answers a control character", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "Forever\x07Rat", false},
+		{"a guid answers a new line", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "Forever\nRat", false},
+		{"a guid answers a C1 control", mustSide(t, "b", "0x0000000000000000000000000000BEEF"), "Forever\u0085Rat", false},
 		{"a name ignores case", mustSide(t, "a", "tanka"), "Tanka", true},
 		{"a name must match", mustSide(t, "a", "tanka"), "Tank", false},
 		{"the selection answers a name", mustSide(t, "b", "target"), "Healera", true},
 		{"the selection answers a guid", mustSide(t, "b", "target"), "00000000000000000000000000000065", true},
 		{"the selection answers itself on a refusal", mustSide(t, "b", "target"), "target", true},
 		{"the selection answers nothing", mustSide(t, "b", "target"), "", false},
+		{"the selection answers a name with a space", mustSide(t, "b", "target"), "Dark Iron Dwarf", true},
+		{"the selection answers a name with an apostrophe", mustSide(t, "b", "target"), "Bael'Gar", true},
+		{"the selection answers a hyphenated name", mustSide(t, "b", "target"), "Anvil-Guard", true},
+		{"the selection answers a long name", mustSide(t, "b", "target"), strings.Repeat("Long Name ", 20), true},
+		{"the selection answers a control character", mustSide(t, "b", "target"), "Dark\x00Iron", false},
+		{"a name side stays exact", mustSide(t, "a", "tanka"), "Dark Iron Dwarf", false},
+		{"a spot at a large coordinate", mustSide(t, "a", "17000.123,-12.345,3.5"), "17000.13,-12.35,3.50", true},
+		{"a spot at the tolerance edge", mustSide(t, "a", "1.000,2.000,3.000"), "1.01,2.00,3.00", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.side.Matches(tc.answered); got != tc.want {
@@ -155,15 +181,64 @@ func TestParseSide(t *testing.T) {
 	}
 }
 
-func TestNameWord(t *testing.T) {
-	for _, ok := range []string{"Tanka", "a", "Bot2", "x12345678901234567890123"} {
-		if !isNameWord(ok) {
-			t.Errorf("%q refused as a name", ok)
+func TestEchoText(t *testing.T) {
+	for _, ok := range []string{"Tanka", "Dark Iron Dwarf", "Bael'Gar", "Anvil-Guard", "Pr\u00eatre", strings.Repeat("a", MaxEchoBytes)} {
+		if !isEchoText(ok) {
+			t.Errorf("%q refused as an echo", ok)
 		}
 	}
-	for _, bad := range []string{"", "2Bot", "Tan ka", "ForeverRat_", strings.Repeat("a", 25)} {
-		if isNameWord(bad) {
-			t.Errorf("%q accepted as a name", bad)
+	for _, bad := range []string{"", " ", "\t", "a\x00b", "a\x7fb", "a\nb", strings.Repeat("a", MaxEchoBytes+1)} {
+		if isEchoText(bad) {
+			t.Errorf("%q accepted as an echo", bad)
 		}
+	}
+}
+
+func TestGuid32(t *testing.T) {
+	for _, ok := range []string{"0000000000000000000000000000beef", "0000000000000000000000000000BEEF"} {
+		if !isGuid32(ok) {
+			t.Errorf("%q refused as a guid", ok)
+		}
+	}
+	for _, bad := range []string{"", "beef", "0x0000000000000000000000000000beef", "0000000000000000000000000000beeg", "00000000000000000000000000000beef"} {
+		if isGuid32(bad) {
+			t.Errorf("%q accepted as a guid", bad)
+		}
+	}
+}
+
+// TestBuildLine: the line and the map rule live here, for every caller. A unit side carries its own map, so map= is
+// the two-spots word only and its id is 1-65535.
+func TestBuildLine(t *testing.T) {
+	m, zero, high := uint32(700), uint32(0), uint32(65536)
+	for _, tc := range []struct {
+		name string
+		a, b string
+		m    *uint32
+		want string // the line, or "" for a refusal
+	}{
+		{"two names", "tanka", "Healera", nil, ".tb los Tanka Healera"},
+		{"a spot and a guid", "-2.50,3,4.25", "0x0000000000000000000000000000BEEF", nil, ".tb los -2.5,3,4.25 " + guid},
+		{"two spots with their map", "1.5,2.5,3.5", "4.5,5.5,6.5", &m, ".tb los 1.5,2.5,3.5 4.5,5.5,6.5 map=700"},
+		{"two spots without a map", "1,2,3", "4,5,6", nil, ""},
+		{"map 0", "1,2,3", "4,5,6", &zero, ""},
+		{"map 65536", "1,2,3", "4,5,6", &high, ""},
+		{"a map with a unit side", "Tanka", "1,2,3", &m, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line, err := BuildLine(mustSide(t, "a", tc.a), mustSide(t, "b", tc.b), tc.m)
+			if tc.want == "" {
+				if !errors.Is(err, ErrBadValue) || line != "" {
+					t.Fatalf("line %q err %v, want a refusal wrapping ErrBadValue", line, err)
+				}
+				return
+			}
+			if err != nil || line != tc.want {
+				t.Fatalf("line %q err %v, want %q", line, err, tc.want)
+			}
+		})
+	}
+	if _, err := BuildLine(Side{Kind: Name}, mustSide(t, "b", "Tanka"), nil); !errors.Is(err, ErrBadValue) {
+		t.Fatalf("an empty side: %v", err)
 	}
 }
