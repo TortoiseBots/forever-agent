@@ -19,6 +19,13 @@ type BotCasts struct {
 	Casts     map[string]int `json:"casts,omitempty"`
 	Truncated bool           `json:"truncated,omitempty"`
 	ActiveS   float64        `json:"active_s"`
+	// Expected are spells the caller already knows the bot should have cast, for a reason the spec's own lists do not
+	// model: a talent the bot has that grants an active ability (the bench's player-data rules). They are judged like
+	// the spec's core list, so one never cast is a missing spell; a name the core list already has is kept once.
+	Expected []string `json:"expected,omitempty"`
+	// Spec is the bot's spec when the record states it (a trial's bot block, a bench report). Judge then reads that
+	// spec's lists instead of inferring one from the casts; empty infers, as every trace did before.
+	Spec string `json:"spec,omitempty"`
 }
 
 // Finding is the judgment of one bot. Level is warn (a missing core spell or a never spell), na (not judged: too little active
@@ -33,6 +40,9 @@ type Finding struct {
 	Missing []string `json:"missing,omitempty"`
 	Unknown []string `json:"unknown,omitempty"`
 	Never   []string `json:"never,omitempty"`
+	// Held are the caller's expectations the spec's lists call situational: reported, never judged
+	// missing, because a bot may rightly hold a situational ability.
+	Held    []string `json:"held,omitempty"`
 	OffList []string `json:"off_list,omitempty"`
 	Text    string   `json:"text"`
 }
@@ -143,7 +153,11 @@ func (o *Oracle) Judge(b BotCasts, minActiveS float64) Finding {
 		f.Text = f.SpecHow
 		return f
 	}
-	f.Spec, f.SpecHow = o.InferSpec(b.Class, b.Role, b.Casts)
+	if stated := strings.ToLower(strings.TrimSpace(b.Spec)); stated != "" {
+		f.Spec, f.SpecHow = stated, "record"
+	} else {
+		f.Spec, f.SpecHow = o.InferSpec(b.Class, b.Role, b.Casts)
+	}
 	var core, situational []string
 	switch f.Spec {
 	case "unknown":
@@ -160,6 +174,12 @@ func (o *Oracle) Judge(b BotCasts, minActiveS float64) Finding {
 			return f
 		}
 		core, situational = s.Core, s.Situational
+	}
+	// The caller's own expectations join the core list (never the situational one): a talent the bot has that grants
+	// an active ability is a should-have-cast, judged by the same first-rank and capped-list guards below. A name the
+	// spec's situational list already has is only reported as held: the spec says a bot may rightly hold it.
+	if len(b.Expected) > 0 {
+		core, f.Held = appendExpected(core, situational, b.Expected)
 	}
 
 	// A bot seen for less than the threshold is not judged on its core list: a fight it joined late, or a trace cut short, says
@@ -187,7 +207,7 @@ func (o *Oracle) Judge(b BotCasts, minActiveS float64) Finding {
 		}
 	}
 	known := map[string]bool{}
-	for _, l := range [][]string{core, situational, neverOf(o, f.Class, f.Spec), o.Common.Generic[f.Class], o.Common.Ignore} {
+	for _, l := range [][]string{core, situational, f.Held, neverOf(o, f.Class, f.Spec), o.Common.Generic[f.Class], o.Common.Ignore} {
 		for _, n := range l {
 			known[strings.ToLower(n)] = true
 		}
@@ -223,6 +243,9 @@ func (o *Oracle) Judge(b BotCasts, minActiveS float64) Finding {
 	if len(f.Never) > 0 {
 		parts = append(parts, "never: "+strings.Join(f.Never, ", "))
 	}
+	if len(f.Held) > 0 {
+		parts = append(parts, "held (situational): "+strings.Join(f.Held, ", "))
+	}
 	if len(f.OffList) > 0 {
 		parts = append(parts, "off-list: "+strings.Join(f.OffList, ", "))
 	}
@@ -234,6 +257,35 @@ func (o *Oracle) Judge(b BotCasts, minActiveS float64) Finding {
 	}
 	f.Text = strings.Join(parts, "; ")
 	return f
+}
+
+// appendExpected splits the caller's expectations: a name the spec's core list already has is left out (it is judged
+// there), a name the situational list names is returned as held (reported, never judged missing), and every other name
+// joins the core list, each once. The caller states the bot should have cast the spell; only the spec's own situational
+// reading may overrule that, and it never fails the bot.
+func appendExpected(core, situational, expected []string) (judged, held []string) {
+	seen := map[string]bool{}
+	for _, name := range core {
+		seen[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	sit := map[string]bool{}
+	for _, name := range situational {
+		sit[strings.ToLower(strings.TrimSpace(name))] = true
+	}
+	judged = append([]string{}, core...)
+	for _, name := range expected {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		if sit[key] {
+			held = append(held, name)
+			continue
+		}
+		judged = append(judged, name)
+	}
+	return judged, held
 }
 
 // neverOf is the never list of the judged spec, or of every dps spec when the spec is not known.

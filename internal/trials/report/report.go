@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pjerra/forever-agent/data/aotc"
 	"github.com/pjerra/forever-agent/internal/trials/naming"
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
 	"github.com/pjerra/forever-agent/internal/trials/wr"
@@ -422,6 +423,37 @@ func WriteCard(runDir string, runTrials []map[string]any) ([]any, error) {
 			})
 		}
 	}
+	playerData := playerDataRows(runTrials)
+	if len(playerData) > 0 {
+		lines = append(lines, "", "## Player data (aotc.gg)", "",
+			aotc.Credit+".", "",
+			"| trial | repeat | rule | verdict | fits | detail |",
+			"|---|---|---|---|---|---|")
+		for _, rowVal := range playerData {
+			row, ok := pyjson.Object(rowVal)
+			if !ok {
+				continue
+			}
+			fits := "-"
+			if n := intField(row["n"]); n > 0 {
+				fits = fmt.Sprintf("%d/%d", intField(row["k"]), n)
+			}
+			lines = append(lines, fmt.Sprintf("| %s | %s | %s | %s | %s | %s |",
+				pyjson.Str(row["trial"]), pyjson.Str(row["rep"]), pyjson.Str(row["id"]),
+				pyjson.Str(row["verdict"]), fits, orEmpty(row["reason"])))
+		}
+		for _, rowVal := range playerData {
+			row, ok := pyjson.Object(rowVal)
+			if !ok || pyjson.Str(row["verdict"]) == "PASS" {
+				continue
+			}
+			evidence, _ := pyjson.List(row["evidence"])
+			for _, line := range evidence {
+				lines = append(lines, fmt.Sprintf("- %s %s %s: %s", pyjson.Str(row["trial"]),
+					pyjson.Str(row["rep"]), pyjson.Str(row["id"]), pyjson.Str(line)))
+			}
+		}
+	}
 	lines = append(lines, "")
 	for _, trial := range runTrials {
 		verdicts, _ := pyjson.List(trial["verdicts"])
@@ -470,6 +502,10 @@ func WriteCard(runDir string, runTrials []map[string]any) ([]any, error) {
 	}
 	if cardRows == nil {
 		doc["rows"] = []any{}
+	}
+	if len(playerData) > 0 {
+		doc["player_data"] = playerData
+		doc["player_data_credit"] = aotc.Credit
 	}
 	if err := pyjson.Dump(filepath.Join(runDir, "card.json"), doc); err != nil {
 		return nil, fmt.Errorf("write card.json: %w", err)
@@ -975,4 +1011,26 @@ func orEmpty(v any) string {
 		return ""
 	}
 	return pyjson.Str(v)
+}
+
+// playerDataRows is every trial's player-data rows (trial.json's `player_data`, written by
+// `trials score --player-data`) with the trial id added: the card's own section and card.json's
+// `player_data`.
+func playerDataRows(runTrials []map[string]any) []any {
+	var out []any
+	for _, trial := range runTrials {
+		rows, _ := pyjson.List(trial["player_data"])
+		for _, rowVal := range rows {
+			row, ok := pyjson.Object(rowVal)
+			if !ok {
+				continue
+			}
+			merged := map[string]any{"trial": trial["trial"]}
+			for k, v := range row {
+				merged[k] = v
+			}
+			out = append(out, merged)
+		}
+	}
+	return out
 }

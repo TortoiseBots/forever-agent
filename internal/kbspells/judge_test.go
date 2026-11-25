@@ -97,3 +97,71 @@ func TestJudgeLevelSkip(t *testing.T) {
 		t.Fatalf("%+v", f)
 	}
 }
+
+// TestJudgeExpected: a caller's own should-have-cast list joins the core judgment, except a spell the spec's lists
+// call situational: Last Stand is situational for protection, so a caller's expectation reports it as held, never as a
+// missing core spell. An expectation the core list already names is not duplicated.
+func TestJudgeExpected(t *testing.T) {
+	o := fixtureOracle(t)
+	base := BotCasts{Name: "Ragemeister", Class: "warrior", Role: "tank", ActiveS: 60,
+		Casts: map[string]int{"Shield Slam": 4, "Sunder Armor": 8, "Heroic Strike": 3}}
+
+	f := o.Judge(base, 20)
+	if f.Level != "ok" || len(f.Missing) != 0 || len(f.Held) != 0 {
+		t.Fatalf("without an expectation: %+v", f)
+	}
+
+	with := base
+	with.Expected = []string{"Last Stand"}
+	f = o.Judge(with, 20)
+	if f.Level != "ok" || len(f.Missing) != 0 || !slices.Equal(f.Held, []string{"Last Stand"}) {
+		t.Fatalf("expected Last Stand: %+v", f)
+	}
+	if !strings.Contains(f.Text, "held (situational): Last Stand") {
+		t.Fatalf("text %q", f.Text)
+	}
+
+	// Not cast, already core: one entry, not two.
+	with = base
+	with.Casts = map[string]int{"Shield Slam": 4, "Sunder Armor": 8}
+	with.Expected = []string{"Heroic Strike"}
+	f = o.Judge(with, 20)
+	if !slices.Equal(f.Missing, []string{"Heroic Strike"}) {
+		t.Fatalf("core expectation duplicated: %v", f.Missing)
+	}
+
+	// An expectation judged by the bot's level guard is skipped, like a core spell: Whirlwind is in no
+	// protection list and its first rank is level 36 in the Turtle table.
+	with = base
+	with.Level = 20
+	with.Expected = []string{"Whirlwind"}
+	f = o.Judge(with, 20)
+	if len(f.Missing) != 0 || len(f.Held) != 0 {
+		t.Fatalf("level guard not applied: %v (held %v)", f.Missing, f.Held)
+	}
+}
+
+// TestJudgeStatedSpec: a record that states the spec is judged on it (the inference does not run), an
+// unknown stated spec is na rather than guessed, and an empty Spec still infers as before.
+func TestJudgeStatedSpec(t *testing.T) {
+	o := fixtureOracle(t)
+	casts := map[string]int{"Shield Slam": 4, "Sunder Armor": 8, "Heroic Strike": 3}
+
+	f := o.Judge(BotCasts{Class: "warrior", Role: "tank", Spec: "protection", Casts: casts, ActiveS: 60}, 20)
+	if f.Spec != "protection" || f.SpecHow != "record" || f.Level != "ok" {
+		t.Fatalf("stated spec: %+v", f)
+	}
+	if !strings.Contains(f.Text, "spec protection (record)") {
+		t.Fatalf("text %q", f.Text)
+	}
+
+	f = o.Judge(BotCasts{Class: "warrior", Role: "tank", Spec: "retribution", Casts: casts, ActiveS: 60}, 20)
+	if f.Level != "na" || len(f.Missing) != 0 {
+		t.Fatalf("an unknown stated spec was inferred: %+v", f)
+	}
+
+	f = o.Judge(BotCasts{Class: "warrior", Role: "tank", Casts: casts, ActiveS: 60}, 20)
+	if f.Spec != "protection" || f.SpecHow == "record" {
+		t.Fatalf("an empty Spec did not infer: %+v", f)
+	}
+}

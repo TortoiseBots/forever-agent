@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/pjerra/forever-agent/internal/trials/events"
+	"github.com/pjerra/forever-agent/internal/trials/playdata"
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
 	"github.com/pjerra/forever-agent/internal/trials/report"
 	"github.com/pjerra/forever-agent/internal/trials/rules"
@@ -750,7 +751,21 @@ func ScoreTrial(trialDir string, trial Trial) map[string]any {
 // ScoreTrialE scores every repeat of one trial, writes trial.json and returns the error an
 // input the Python bench raises on would have raised.
 func ScoreTrialE(trialDir string, trial Trial) (map[string]any, error) {
-	return scoreTrialWith(trialDir, trial, ScoreRepE)
+	return ScoreTrialWith(trialDir, trial, Options{})
+}
+
+// Options are the scoring half's readings beyond the Python bench's. The zero value is exactly the
+// bench's behavior.
+type Options struct {
+	// PlayerData adds the player-data rules (internal/trials/playdata: gear fits the spec, talents
+	// imply spells) to each trial's rows under trial.json's `player_data`, which the report card
+	// prints under its own heading. Off unless asked (trials score --player-data).
+	PlayerData bool
+}
+
+// ScoreTrialWith is ScoreTrialE with the extra readings Options names.
+func ScoreTrialWith(trialDir string, trial Trial, opts Options) (map[string]any, error) {
+	return scoreTrialWithOpts(trialDir, trial, opts, ScoreRepE)
 }
 
 // repScorer is the per-repeat scorer ScoreTrialE threads prior events through. It is a
@@ -758,6 +773,11 @@ func ScoreTrialE(trialDir string, trial Trial) (map[string]any, error) {
 type repScorer func(repDir string, trial Trial, prior []rules.PriorEvent) (map[string]any, error)
 
 func scoreTrialWith(trialDir string, trial Trial, scoreRep repScorer) (map[string]any, error) {
+	return scoreTrialWithOpts(trialDir, trial, Options{}, scoreRep)
+}
+
+// scoreTrialWithOpts is the body of ScoreTrialWith and of the rep-order test's scorer-parameter form.
+func scoreTrialWithOpts(trialDir string, trial Trial, opts Options, scoreRep repScorer) (map[string]any, error) {
 	reps := RepDirs(trialDir)
 	carries := false
 	trialRules, _ := pyjson.List(trial["rules"])
@@ -994,6 +1014,11 @@ func scoreTrialWith(trialDir string, trial Trial, scoreRep repScorer) (map[strin
 	if outRules == nil {
 		out["verdicts"] = []any{}
 	}
+	// The player-data rules read the run's own record, not the trial definition: they are added only
+	// when asked, so a default score is byte for byte the bench's.
+	if opts.PlayerData {
+		out["player_data"] = playdata.TrialRows(trialDir, trial, playdata.DefaultInputs())
+	}
 	if err := pyjson.Dump(filepath.Join(trialDir, "trial.json"), out); err != nil {
 		return nil, fmt.Errorf("write %s: %w", filepath.Join(trialDir, "trial.json"), err)
 	}
@@ -1040,6 +1065,11 @@ func ScoreRun(runDir string) []map[string]any {
 // ScoreRunE scores all trials of a run and returns the error an input the Python bench raises
 // on would have raised (an unreadable snapshot, a non-object events line, ...).
 func ScoreRunE(runDir string) ([]map[string]any, error) {
+	return ScoreRunWith(runDir, Options{})
+}
+
+// ScoreRunWith is ScoreRunE with the extra readings Options names.
+func ScoreRunWith(runDir string, opts Options) ([]map[string]any, error) {
 	var runTrials []map[string]any
 	runDoc := objectOrEmpty(readJSON(filepath.Join(runDir, "RUN.json")))
 	trials, _ := pyjson.List(runDoc["trials"])
@@ -1079,7 +1109,7 @@ func ScoreRunE(runDir string) ([]map[string]any, error) {
 		if info, err := os.Stat(tdir); err != nil || !info.IsDir() {
 			continue
 		}
-		doc, err := ScoreTrialE(tdir, trial)
+		doc, err := ScoreTrialWith(tdir, trial, opts)
 		if err != nil {
 			return nil, err
 		}

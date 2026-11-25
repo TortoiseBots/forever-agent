@@ -18,6 +18,12 @@ sources:
     resource: cmd/forever-agent/trials_datacheck_cmd.go
   - id: score
     resource: internal/trials/score/score.go
+  - id: playdata
+    resource: internal/trials/playdata/playdata.go
+  - id: playdata-gear
+    resource: internal/trials/playdata/gear.go
+  - id: aotc
+    resource: data/aotc/aotc.go
   - id: scenario-schema
     resource: internal/trials/scenario/scenario.go
   - id: live-run
@@ -136,6 +142,27 @@ How a verdict is reached:
 4. With zero valid repeats the trial is `INCONCLUSIVE`, unless some repeat was `INVALID` and none scored, in which case it is `INVALID`.
 
 `trials report <run folder>` rebuilds the card from the stored `trial.json` files without scoring again. `trials compare <run folder> --baseline <before folder>` pairs rows by trial id and rule id and prints the before/after table with Fisher's exact p on the k/n metrics.
+
+# Judging against the player data
+
+```sh
+forever-agent trials score ./runs/2026-11-24-paladin --player-data
+```
+
+`--player-data` adds two bench readings, off by default, from the run's own record and the embedded aggregate of WoW Forever player statistics (read 2026-11-24; player choices, not game facts, so the server's own data wins on any item or spell):
+
+| Rule | What it reads |
+|---|---|
+| `AOTC-GEAR-FITS-SPEC` | each equipped item against its spec's level 60 gear tables and the stat families its players wear in that slot |
+| `AOTC-TALENTS-IMPLY-SPELLS` | the talents most players of the spec take that grant an active spell, against what the bot learned and cast in its combat windows |
+
+The gear rule is data-driven. An item any row of the bot's spec's own level 60 gear tables names (any population, share or slot) is fine. An item outside that data is judged by its stat family: its own primary stats when the record carries them, otherwise the families of the specs that commonly wear it. The families the spec's own players wear in that slot are summed by wear share, and a family is acceptable when it holds at least 20% of the slot's summed family share or is the single largest family. An item whose family is unknown is `INCONCLUSIVE`, never `FAIL`; stamina, crit and hit name no family, item level is never a reason, and a record with no item data is `INCONCLUSIVE`.
+
+Known limits: the tables carry no item stats or armour type, only wearer choices. A feral druid in strength plate is fine, because strength is one of its own families; and an enhancement shaman in hunter-only agility mail fails in Wrist, Hands, Waist and Feet, where its own slot data names only a caster family; the agility mail its own players wear is fine.
+
+The talent rule expects only a talent the record proves learned, judges only a combat window of at least 30 s and spells whose cooldown fits the window, and never fails a spell the spec's spell lists call situational (it reports it as held). A partial talent read-back can turn a `PASS` into `INCONCLUSIVE`, never into a `FAIL`; no talent data or no proven combat is `INCONCLUSIVE`.
+
+The rows print under `## Player data` (the heading names the data source) with the source credit line, `card.json` carries `player_data` and `player_data_credit`, and `trials report` re-renders them. They are bench readings, not part of the trial verdict: they never change the exit code, and `--player-data` adds a second line with the player-data `PASS`, `FAIL` and `INCONCLUSIVE` counts.
 
 # Validating trial files
 
