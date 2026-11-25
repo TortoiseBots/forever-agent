@@ -174,6 +174,41 @@ func TestGearAndEnchantAccessors(t *testing.T) {
 	}
 }
 
+// TestGearRows pins the gear rule's own-data accessor: every row of the spec, in both populations
+// and every slot (item-set rows included), exactly as the file has them. The rule's own-data
+// membership must never lose the all_60 population.
+func TestGearRows(t *testing.T) {
+	d := Default()
+	rows := d.GearRows("shaman", "enhancement")
+	var want int
+	for _, g := range d.Gear {
+		if g.Class == "shaman" && g.Spec == "enhancement" {
+			want++
+		}
+	}
+	if len(rows) != want {
+		t.Fatalf("%d rows, want %d", len(rows), want)
+	}
+	pops := map[string]bool{}
+	both := map[int64]map[string]bool{}
+	for _, g := range rows {
+		if g.Class != "shaman" || g.Spec != "enhancement" {
+			t.Fatalf("row of %s/%s in the result", g.Class, g.Spec)
+		}
+		pops[g.Population] = true
+		if both[g.ID] == nil {
+			both[g.ID] = map[string]bool{}
+		}
+		both[g.ID][g.Population] = true
+	}
+	if !pops[PopulationBestGeared] || !pops[PopulationAll] {
+		t.Fatalf("populations %v", pops)
+	}
+	if !both[19159][PopulationBestGeared] || !both[19159][PopulationAll] {
+		t.Fatalf("item 19159 populations %v", both[19159])
+	}
+}
+
 // TestItemIndex pins the per-item view the gear rule reads: the name, the slots and the specs.
 func TestItemIndex(t *testing.T) {
 	d := Default()

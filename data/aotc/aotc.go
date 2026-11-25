@@ -782,6 +782,18 @@ func (d *Data) StatPriorityFor(class, spec string) []StatWeight {
 	return out
 }
 
+// GearRows returns every level 60 gear row the spec has, in every slot and population (item-set
+// rows included): the gear rule's own-data membership and per-slot family reading.
+func (d *Data) GearRows(class, spec string) []GearItem {
+	var out []GearItem
+	for _, g := range d.Gear {
+		if g.Class == class && g.Spec == spec {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
 // GearFor returns the items the spec wears at 60 in one slot (empty for every slot), best geared
 // population only, item-set rows excluded, most worn first.
 func (d *Data) GearFor(class, spec, slot string) []GearItem {

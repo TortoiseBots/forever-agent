@@ -2,13 +2,14 @@
 // real WoW Forever players of its class and spec do (data/aotc, from aotc.gg; see that package's
 // Credit).
 //
-// Rule "gear fits the spec" (AOTC-GEAR-FITS-SPEC): an equipped item is FINE when it is among the
-// items the spec's level 60 players wear in that slot, or when its primary stats match the spec's
-// stat priority. Only a clear mismatch fails: an item whose stats match none of the priority, or one
-// that only players of a contrary stat family wear. A family is contrary only when none of the
-// spec's top PriorityStats priority stats belongs to it (a strength plate piece on a caster);
-// stamina has no family, so it never makes an item contrary. Item level is never a reason. A record
-// with no item data is INCONCLUSIVE, never a pass.
+// Rule "gear fits the spec" (AOTC-GEAR-FITS-SPEC): an equipped item is FINE when any row of the
+// spec's own level 60 gear tables names it (any population, any share, any slot). An item outside
+// that data is contrary only when its stat family is known and none of the families the spec's own
+// players wear in that slot is its own; the acceptable families come from the data (the items its
+// players wear at or above GearFamilyShare), never from a single priority stat, so a hybrid spec
+// (enhancement, protection paladin) is not read as a pure caster. An item whose family is unknown is
+// INCONCLUSIVE, never a FAIL; stamina, crit and hit name no family, so they never make an item
+// contrary. Item level is never a reason. A record with no item data is INCONCLUSIVE, never a pass.
 //
 // Rule "talents imply spells" (AOTC-TALENTS-IMPLY-SPELLS): for the bot's level group, the talents most
 // players of its spec take (share at or above MinTalentShare) that grant an ACTIVE spell join the
@@ -46,15 +47,15 @@ const (
 	// GearLevel is the only level the player gear data covers: a bot of another level is not
 	// judged on it.
 	GearLevel = 60
-	// GearFamilyShare is the share of a spec's characters that makes the spec a common wearer of
-	// an item, for the stat-family reading.
+	// GearFamilyShare is the share of a spec's characters that makes it a common wearer of an
+	// item, and the share at which one of the spec's own worn items contributes its family to the
+	// families that spec's players wear in a slot.
 	GearFamilyShare = 5.0
-	// GearMismatchSpecs is how many specs of another stat family must commonly wear an item before
-	// its wearers prove a mismatch for this bot's family (one spec's item may be a shared piece).
+	// GearMismatchSpecs is how many specs must commonly wear an item before its wearers name its
+	// stat family (one spec's piece may be a shared item).
 	GearMismatchSpecs = 2
-	// PriorityStats is how many of the spec's top priority stats ("top" throughout the rule: the
-	// first three) an item's own stats must match, and the only stats whose families decide whether
-	// an item's wearers make it contrary.
+	// PriorityStats is how many of a spec's top priority stats its family set reads, and how many
+	// the explanation line quotes as the tie-break: the verdict's families come from the gear data.
 	PriorityStats = 3
 	// MinTalentShare is the pick share at which most players of a spec take a talent (percent).
 	MinTalentShare = 50.0
@@ -118,6 +119,9 @@ type Tables interface {
 	CommonTalents(class, spec, levels string, minShare float64) []aotc.TalentPick
 	StatPriorityFor(class, spec string) []aotc.StatWeight
 	GearFor(class, spec, slot string) []aotc.GearItem
+	// GearRows is every gear row the spec has, across all slots and populations: the gear rule's
+	// own-data membership and per-slot family reading.
+	GearRows(class, spec string) []aotc.GearItem
 	Item(id int64) (aotc.ItemInfo, bool)
 }
 
@@ -237,16 +241,6 @@ func StatFamily(stat string) string {
 		return FamilyAgility
 	case "strength", "defense":
 		return FamilyStrength
-	}
-	return FamilyAny
-}
-
-// SpecFamily is the family of a spec's stat priority: the first priority stat that has one.
-func SpecFamily(priority []aotc.StatWeight) string {
-	for _, w := range priority {
-		if family := StatFamily(w.Stat); family != FamilyAny {
-			return family
-		}
 	}
 	return FamilyAny
 }

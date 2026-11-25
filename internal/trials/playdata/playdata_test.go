@@ -47,6 +47,9 @@ func (f *fakeTables) GearFor(class, spec, slot string) []aotc.GearItem {
 	}
 	return out
 }
+func (f *fakeTables) GearRows(class, spec string) []aotc.GearItem {
+	return append([]aotc.GearItem(nil), f.gear[key(class, spec)]...)
+}
 func (f *fakeTables) Item(id int64) (aotc.ItemInfo, bool) {
 	info, ok := f.items[id]
 	return info, ok
@@ -81,10 +84,21 @@ func fixture() *fakeTables {
 		gear: map[string][]aotc.GearItem{
 			key("priest", "holy"): {
 				{Class: "priest", Spec: "holy", Population: aotc.PopulationBestGeared, Slot: "Head", Name: "Good Hat", ID: 1, Pct: 40},
+				// Below GearFamilyShare and in another population: the spec's own data all the same.
+				{Class: "priest", Spec: "holy", Population: aotc.PopulationAll, Slot: "Waist", Name: "Rare Sash", ID: 5, Pct: 0.4},
+			},
+			key("mage", "fire"): {
+				{Class: "mage", Spec: "fire", Population: aotc.PopulationBestGeared, Slot: "Head", Name: "Fire Hat", ID: 11, Pct: 55},
 			},
 		},
 		items: map[int64]aotc.ItemInfo{
-			1: {ID: 1, Name: "Good Hat", Slots: []string{"Head"}},
+			1: {ID: 1, Name: "Good Hat", Slots: []string{"Head"}, Wearers: []aotc.ItemWearer{
+				{Class: "priest", Spec: "holy", Slot: "Head", Population: aotc.PopulationBestGeared, Pct: 40},
+			}},
+			5: {ID: 5, Name: "Rare Sash", Slots: []string{"Waist"}},
+			11: {ID: 11, Name: "Fire Hat", Slots: []string{"Head"}, Wearers: []aotc.ItemWearer{
+				{Class: "mage", Spec: "fire", Slot: "Head", Population: aotc.PopulationBestGeared, Pct: 55},
+			}},
 			// 2: a tank head piece two stamina specs wear: a clear mismatch for a caster.
 			2: {ID: 2, Name: "Plate Tank Helm", Slots: []string{"Head"}, Wearers: []aotc.ItemWearer{
 				{Class: "warrior", Spec: "protection", Slot: "Head", Population: aotc.PopulationBestGeared, Pct: 30},
@@ -133,49 +147,67 @@ func TestGearFitsSpec(t *testing.T) {
 			rec: Record{Class: "priest", Spec: "holy", Level: 60, EquippedKnown: true,
 				Equipped: []Item{{Entry: 1}}},
 			verdict: VerdictPass, k: 1, n: 1,
-			wantLine: []string{"Head: Good Hat (1)", "worn by 40.0%"},
+			wantLine: []string{"Head: Good Hat (1)", "the items priest holy players wear include it (Head, 40.0%)"},
 		},
 		{
 			name: "fine by its own stats",
 			rec: Record{Class: "priest", Spec: "holy", Level: 60, EquippedKnown: true,
 				Equipped: []Item{{Entry: 9, Name: "Spirit Hood", Slot: "Head", Stats: []string{"Spirit", "Stamina"}}}},
 			verdict: VerdictPass, k: 1, n: 1,
-			wantLine: []string{"its stats (Spirit, Stamina) match the priority (Healing, Spirit, Intellect)"},
+			wantLine: []string{"its stats (Spirit, Stamina)", "its families (caster)", "the priority tie-break lists (Healing, Spirit, Intellect)"},
 		},
 		{
 			name: "clear mismatch by its stats",
 			rec: Record{Class: "priest", Spec: "holy", Level: 60, EquippedKnown: true,
 				Equipped: []Item{{Entry: 10, Name: "Strength Plate Helm", Slot: "Head", Stats: []string{"Strength", "Stamina"}}}},
 			verdict: VerdictFail, k: 0, n: 1,
-			wantLine: []string{"Strength Plate Helm", "match none of the priority"},
+			wantLine: []string{"Strength Plate Helm", "its families (strength)", "are none of the families its players wear in Head (caster)"},
 		},
 		{
 			name: "clear mismatch by its wearers",
 			rec: Record{Class: "priest", Spec: "holy", Level: 60, EquippedKnown: true,
 				Equipped: []Item{{Entry: 2}}},
 			verdict: VerdictFail, k: 0, n: 1,
-			wantLine: []string{"Plate Tank Helm (2)", "commonly worn by", "warrior/protection", "none of their stat families (strength) is in its priority"},
+			wantLine: []string{"Plate Tank Helm (2)", "commonly worn by", "warrior/protection", "its families (strength)"},
 		},
 		{
 			name: "a mage in a strength plate piece",
 			rec: Record{Class: "mage", Spec: "fire", Level: 60, EquippedKnown: true,
 				Equipped: []Item{{Entry: 2}}},
 			verdict: VerdictFail, k: 0, n: 1,
-			wantLine: []string{"Plate Tank Helm (2)", "none of their stat families (strength) is in its priority"},
+			wantLine: []string{"Plate Tank Helm (2)", "its families (strength)"},
 		},
 		{
-			name: "mixed wearers prove no mismatch",
+			name: "mixed wearers naming a wanted family are no mismatch",
 			rec: Record{Class: "priest", Spec: "holy", Level: 60, EquippedKnown: true,
 				Equipped: []Item{{Entry: 3}}},
+			verdict: VerdictPass, k: 1, n: 1,
+			wantLine: []string{"Shared Tank Crown (3)", "its families (caster, strength)", "are among the families"},
+		},
+		{
+			// No family in the stats: the record says nothing about whether the piece fits, so the
+			// rule reports it rather than failing it.
+			name: "stats naming no family are inconclusive",
+			rec: Record{Class: "priest", Spec: "holy", Level: 60, EquippedKnown: true,
+				Equipped: []Item{{Entry: 10, Name: "Stamina Belt", Slot: "Head", Stats: []string{"Stamina", "Crit"}}}},
 			verdict: VerdictInconclusive, k: 0, n: 1,
-			wantLine: []string{"not among the Head items holy players wear"},
+			wantLine: []string{"Stamina Belt (10)", "its stats (Stamina, Crit) name no stat family"},
 		},
 		{
 			name: "unlisted and no stats",
 			rec: Record{Class: "priest", Spec: "holy", Level: 60, EquippedKnown: true,
 				Equipped: []Item{{Entry: 4}}},
 			verdict: VerdictInconclusive, k: 0, n: 1,
-			wantLine: []string{"not among the Head items holy players wear", "no item stats"},
+			wantLine: []string{"not among the Head items priest holy players wear", "the record carries no item stats and no common wearers"},
+		},
+		{
+			// The lead case: data anywhere in the spec's own tables is fine, whatever the share or
+			// the population (here 0.4% in all_60, another slot table from the equipped one).
+			name: "own data at any share and population",
+			rec: Record{Class: "priest", Spec: "holy", Level: 60, EquippedKnown: true,
+				Equipped: []Item{{Entry: 5}}},
+			verdict: VerdictPass, k: 1, n: 1,
+			wantLine: []string{"Rare Sash (5)", "the items priest holy players wear include it (Waist, 0.4%)"},
 		},
 		{
 			name: "slot unknown",
@@ -230,10 +262,9 @@ func TestGearFitsSpec(t *testing.T) {
 	}
 }
 
-// TestGearFitsSpecRealData pins the shipped tables on the cases a cold review found: a feral bot in
-// rogue/hunter agility leather and rings is no clear mismatch (Agility is feral's #2 stat; Stamina
-// names no family), an enhancement shaman in mail its own spec also wears is fine, and a mage in a
-// strength plate piece is still a clear mismatch.
+// TestGearFitsSpecRealData pins the shipped tables: a feral bot in rogue/hunter agility leather and
+// rings is no clear mismatch, an enhancement shaman in mail its own spec also wears is fine, and a
+// mage in a strength plate piece is still a clear mismatch.
 func TestGearFitsSpecRealData(t *testing.T) {
 	in := Inputs{Tables: aotc.Default()}
 	cases := []struct {
@@ -272,28 +303,85 @@ func TestGearFitsSpecRealData(t *testing.T) {
 	}
 }
 
-// TestGearFitsSpecEverySpecOwnGearPasses is the rule's property: every class/spec's own most-worn
-// items are exactly what the spec's players wear, so the rule must pass every one of them.
+// TestGearFitsSpecEverySpecOwnGearPasses is the rule's property over the shipped data: every item
+// every row of a spec's own gear tables names (both populations, any share, any slot) is FINE, so a
+// record of all of them passes. It fails if the rule ever reads a spec's own data as a mismatch.
 func TestGearFitsSpecEverySpecOwnGearPasses(t *testing.T) {
 	tables := aotc.Default()
 	in := Inputs{Tables: tables}
-	for _, spec := range tables.Specs {
+	for _, spec := range tables.SpecList() {
 		t.Run(spec.Class+"/"+spec.Spec, func(t *testing.T) {
 			var items []Item
-			seen := map[string]bool{}
-			for _, g := range tables.GearFor(spec.Class, spec.Spec, "") {
-				if g.ID <= 0 || seen[g.Slot] {
+			for _, g := range tables.GearRows(spec.Class, spec.Spec) {
+				if g.SetSlot() || g.ID <= 0 {
 					continue
 				}
-				seen[g.Slot] = true
 				items = append(items, Item{Entry: g.ID, Slot: g.Slot})
 			}
 			if len(items) == 0 {
-				t.Fatal("no most-worn items")
+				t.Fatal("no gear rows")
 			}
 			row := gearRow(Record{Class: spec.Class, Spec: spec.Spec, Level: GearLevel, EquippedKnown: true, Equipped: items}, in)
-			if row.Verdict != VerdictPass {
-				t.Fatalf("its own gear is %s: %s\n%s", row.Verdict, row.Reason, strings.Join(row.Evidence, "\n"))
+			if row.Verdict != VerdictPass || row.K != row.N {
+				t.Fatalf("its own gear is %s %d/%d: %s\n%s", row.Verdict, row.K, row.N, row.Reason, strings.Join(row.Evidence, "\n"))
+			}
+		})
+	}
+}
+
+// TestGearFitsSpecForeignItemsFail is the property's inverse: for six specs, a piece from a spec of
+// another armour class and role (not in the judged spec's own data, worn at or above
+// GearFamilyShare by the named spec) is a clear mismatch. Every case below is a plate, mail, leather
+// or cloth piece whose family the judged spec's own players do not wear in that slot.
+//
+// Mutation check: inverting the family decision in gearRow — accepting an item when its families do
+// NOT intersect the acceptable families — makes every case here PASS instead of FAIL, so the
+// `row.Verdict != VerdictFail` assertion catches an inverted family test. Deleting or skipping the
+// acceptable-set comparison is caught the same way.
+func TestGearFitsSpecForeignItemsFail(t *testing.T) {
+	tables := aotc.Default()
+	in := Inputs{Tables: tables}
+	cases := []struct {
+		class, spec         string
+		item                int64
+		fromClass, fromSpec string
+		what                string
+	}{
+		{"mage", "fire", 13166, "warrior", "protection", "plate tank shoulders"},
+		{"priest", "holy", 16707, "rogue", "assassination", "leather dps helm"},
+		{"warrior", "protection", 15067, "druid", "balance", "leather caster shoulders"},
+		{"hunter", "marksmanship", 13969, "paladin", "holy", "plate healer bracers"},
+		{"rogue", "assassination", 11842, "shaman", "elemental", "mail caster shoulders"},
+		{"shaman", "enhancement", 16736, "warrior", "protection", "plate tank belt"},
+	}
+	for _, tc := range cases {
+		name := tc.class + "/" + tc.spec + " in " + tc.what
+		t.Run(name, func(t *testing.T) {
+			for _, g := range tables.GearRows(tc.class, tc.spec) {
+				if g.ID == tc.item {
+					t.Fatalf("item %d is in %s/%s own data (%s %s), so it is not foreign", tc.item, tc.class, tc.spec, g.Population, g.Slot)
+				}
+			}
+			info, ok := tables.Item(tc.item)
+			if !ok {
+				t.Fatalf("item %d is not in the item tables", tc.item)
+			}
+			var share float64
+			var slot string
+			for _, w := range info.Wearers {
+				if w.Class == tc.fromClass && w.Spec == tc.fromSpec && w.Pct >= GearFamilyShare && w.Pct > share {
+					share, slot = w.Pct, w.Slot
+				}
+			}
+			if share == 0 {
+				t.Fatalf("item %d is not commonly worn by %s/%s", tc.item, tc.fromClass, tc.fromSpec)
+			}
+			row := gearRow(Record{Class: tc.class, Spec: tc.spec, Level: GearLevel, EquippedKnown: true,
+				Equipped: []Item{{Entry: tc.item, Slot: slot}}}, in)
+			if row.Verdict != VerdictFail {
+				t.Fatalf("%s/%s in %s (%.1f%% of %s/%s) is %s, want FAIL: %s\n%s",
+					tc.class, tc.spec, tc.what, share, tc.fromClass, tc.fromSpec, row.Verdict, row.Reason,
+					strings.Join(row.Evidence, "\n"))
 			}
 		})
 	}
@@ -500,13 +588,19 @@ func TestSpecNameAndFamily(t *testing.T) {
 			t.Errorf("%s: %q, want %q", stat, got, want)
 		}
 	}
-	family := SpecFamily([]aotc.StatWeight{{Stat: "Hit"}, {Stat: "Agility"}, {Stat: "Stamina"}})
-	if family != FamilyAgility {
-		t.Errorf("priority family %q, want %q", family, FamilyAgility)
+	if families := priorityFamilies([]aotc.StatWeight{{Stat: "Hit"}, {Stat: "Agility"}, {Stat: "Stamina"}}); len(families) != 1 || !families[FamilyAgility] {
+		t.Errorf("priority families %v, want only %q", families, FamilyAgility)
 	}
-	// A stamina-first feral priority resolves to its first family stat, Agility, not to Strength.
-	if family := SpecFamily([]aotc.StatWeight{{Stat: "Stamina"}, {Stat: "Agility"}, {Stat: "Strength"}}); family != FamilyAgility {
-		t.Errorf("feral priority family %q, want %q", family, FamilyAgility)
+	// A stamina-first feral priority names both of its physical families, not only the first.
+	families := priorityFamilies([]aotc.StatWeight{{Stat: "Stamina"}, {Stat: "Agility"}, {Stat: "Strength"}})
+	if len(families) != 2 || !families[FamilyAgility] || !families[FamilyStrength] {
+		t.Errorf("feral priority families %v, want %q and %q", families, FamilyAgility, FamilyStrength)
+	}
+	// Only the top PriorityStats stats count: Intellect sixth in a physical priority adds nothing.
+	if families := priorityFamilies([]aotc.StatWeight{
+		{Stat: "Stamina"}, {Stat: "Agility"}, {Stat: "Strength"}, {Stat: "Attack Power"}, {Stat: "Crit"}, {Stat: "Intellect"},
+	}); families[FamilyCaster] {
+		t.Errorf("priority families %v, want no %q from beyond the top %d", families, FamilyCaster, PriorityStats)
 	}
 }
 

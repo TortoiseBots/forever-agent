@@ -20,6 +20,7 @@ Typed accessors:
 | `CommonTalents(class, spec, levels, minShare)` | the talent picks at a level group with at least `minShare` percent, highest share first |
 | `StatPriorityFor(class, spec)` | the stat priority at 60, highest first |
 | `GearFor(class, spec, slot)` | the 20 most worn items per slot at 60, `best_geared` population only (item-set rows excluded) |
+| `GearRows(class, spec)` | every level 60 gear row the spec has, in every slot and population (the gear rule's own-data reading) |
 | `EnchantsFor(class, spec, slot)` | the most used enchants per slot at 60 |
 | `Item(id)` | an item's name, slots and the specs that wear it |
 | `SpecList()`, `SpecKnown()` | the 27 class/spec pairs the population file names |
@@ -33,21 +34,28 @@ Input: the bot's class, spec, level and equipped items from the run's own record
 ledger's `equip` rows replayed in order, each piece replacing the one before it in its slot; the
 serve has no equipment read and this repository carries no item stats). Per item:
 
-- **FINE** when the item is among the items the spec's level 60 players wear in that slot.
-- **FINE** when the item's own primary stats (when the record carries them) include one of the spec's
-  top `PriorityStats` stats.
-- **FINE** when the item is commonly worn only by specs of one stat family that the spec's top
-  `PriorityStats` stats include (a feral's Agility, a feral bot in rogue/hunter leather).
-- **MISMATCH** (the rule FAILs) when its stats match none of the priority, or when none of the stat
-  families of the specs that commonly wear it (`GearFamilyShare`, `GearMismatchSpecs`) is in the
-  spec's top `PriorityStats` — the reading that catches a caster in strength plate without item
-  stats.
-- **UNPROVEN** otherwise (mixed wearer families, or no item table entry): the rule is INCONCLUSIVE
-  and names the item, so a missing item table is never a pass.
+- **FINE** when any row of the spec's own level 60 gear tables names the item: any population
+  (`best_geared` or `all_60`), any share and any slot. The spec's own players' data is the rule's
+  strongest evidence, so a hybrid's shared pieces (enhancement mail, protection plate) are fine
+  without reading a stat family.
+- **FINE** when the item is outside that data and one of its families is among the families the
+  spec's own players wear in its slot. That acceptable set is the data's: the union of the families
+  of the items the spec's tables list in the slot at or above `GearFamilyShare` (both populations),
+  cached per repeat. An item's families are its own primary stats when the record carries them;
+  otherwise they are the families of the specs that commonly wear it (`GearMismatchSpecs` specs at
+  or above `GearFamilyShare`, each spec's set from its top `PriorityStats` stats).
+- **MISMATCH** (the rule FAILs) when the item's family is known and none of its families is one the
+  spec's own players wear in that slot — the reading that catches a caster in strength plate and a
+  warrior in a caster's shoulders.
+- **UNPROVEN** otherwise: an item whose family is unknown (no item stats and no common wearers), a
+  slot whose own items name no family, or an item with no table entry. The rule is INCONCLUSIVE and
+  names the item, so a missing item table or item stats is never a pass.
 
-Stamina has no stat family: every priority lists it for survivability, so it cannot make an item
-contrary (a feral's Agility is second, an enhancement shaman's Intellect second). A family is
-contrary only when it is absent from the spec's top three priority stats.
+Stamina, crit and hit have no stat family: every priority lists stamina for survivability, so it
+cannot make an item contrary (a feral's Agility is second, an enhancement shaman's Intellect
+second). A spec's family set is every family among its top `PriorityStats` stats, not only the
+first one, so a mixed spec is never reduced to a pure caster or a pure physical spec. The stat
+priority remains in the evidence line as the tie-break; the verdict's families come from the data.
 
 Item level is never a reason. A record with no item data, a bot below level 60 (the gear data is
 level 60 only) or an unknown spec is INCONCLUSIVE with the reason.
@@ -85,13 +93,13 @@ Thresholds are named constants in `internal/trials/playdata/playdata.go`.
 
 ## Limits
 
-- No item stats in this repository: the stat-priority reading runs only when a record carries an
-  item's stats; otherwise the family-of-wearers reading or INCONCLUSIVE. A live bot's kit pieces are
-  often outside the top 20 of their spec's slot, so expect UNPROVEN (never a pass) until the
-  resistance-gear item read-out (#20) carries item stats into the record.
+- No item stats in this repository: an item's families come from its own stats when a record
+  carries them, otherwise from the specs that commonly wear it; with neither the item is UNPROVEN,
+  never a pass. A live bot's kit pieces are often outside its spec's tables, so expect UNPROVEN
+  until the resistance-gear item read-out (#20) carries item stats into the record.
 - The gear data is level 60 only; the talent data has a level group per decade.
-- An item outside the top 20 of a spec's slot list is not evidence against it (the table is top 20),
-  so such an item is UNPROVEN, never a mismatch on its absence alone.
+- An item absent from all of a spec's gear tables (both populations) is judged only by its family:
+  with no item stats and no common wearers it is UNPROVEN, never a mismatch on its absence alone.
 - The rules read the trials record (setup.json's `bot_items` read-back, the ledger's `equip` and
   `bot_talents` rows, the samples' bot combat flags). A watch record carries neither items nor
   talents, so a watch is not judged by them today; the resistance-gear read-out (#20) is the piece
