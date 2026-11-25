@@ -58,6 +58,9 @@ type PullRecord struct {
 	RestS            float64        `json:"rest_s"`
 	PracticeRevives  int            `json:"practice_revives"`
 	Retries          int            `json:"retries"`
+	// Joined marks a pull the run did not start: a fight its party was already in, joined by the leader (fight_join),
+	// recorded for the plan group that owns the units (none is written when no group does).
+	Joined bool `json:"joined,omitempty"`
 }
 
 // RunSummary is the run's own JSON: the plan's numbers and the run's counters, no identifiers of people or servers.
@@ -383,16 +386,26 @@ type PlayFrameBot struct {
 	Combat bool
 }
 
-// PlayFrame writes one frame of a player run from the party roster, the agent's own GUID and the hostile units in
+// PlaySelf is the player run's own character as a frame writes it: its guid (the party's leader), where it stands, its
+// map and whether it is alive.
+type PlaySelf struct {
+	GUID  string
+	Pos   Vec3
+	Map   uint32
+	Alive bool
+}
+
+// PlayFrame writes one frame of a player run from the party roster, the run's own character and the hostile units in
 // view. The first frame a bot is in also writes its party record (guid, role, class and level), which the spell judge
 // joins the combat log on. A unit owned by a party member (the agent included) is the frame's pet, not a mob. It
 // reports whether the writer kept the frame (it samples). A frame never carries a character name.
-func (r *Recorder) PlayFrame(t time.Time, selfGUID string, bots []PlayFrameBot, units []Unit) bool {
+func (r *Recorder) PlayFrame(t time.Time, self PlaySelf, bots []PlayFrameBot, units []Unit) bool {
 	if r == nil || r.trace == nil {
 		return false
 	}
 	ms := r.ms(t)
 	f := trace.Frame{Via: "session", Envelope: trace.Envelope{T: ms}}
+	f.Self = &trace.Self{X: self.Pos[0], Y: self.Pos[1], Z: self.Pos[2], Map: self.Map, Alive: self.Alive}
 	for _, b := range bots {
 		m := b.Member
 		g := m.GUID.String()
@@ -418,7 +431,7 @@ func (r *Recorder) PlayFrame(t time.Time, selfGUID string, bots []PlayFrameBot, 
 		}
 	}
 	members := frameMembers(f.Bots)
-	if g := strings.ToUpper(strings.TrimSpace(selfGUID)); g != "" {
+	if g := strings.ToUpper(strings.TrimSpace(self.GUID)); g != "" {
 		members[g] = true
 	}
 	for _, u := range units {
@@ -620,10 +633,31 @@ func (r *Recorder) PullStart(t time.Time, p PullRecord) {
 		return
 	}
 	p.Start = t.Sub(r.start).Seconds()
+	// A pull_start never overwrites an open pull: that one is closed first, so every pull_start has one pull_end.
+	r.PullAbort(t, "superseded")
 	r.pull = &p
-	r.Event(t, "pull_start", map[string]any{
+	data := map[string]any{
 		"leg": p.Leg, "group": p.Group, "entries": p.Entries, "boss": p.Boss, "mobs": p.Mobs,
+	}
+	if p.Joined {
+		data["joined"] = true
+	}
+	r.Event(t, "pull_start", data)
+}
+
+// PullAbort closes the open pull's record with a pull_end that says why (`aborted`), when no fight came of it: a
+// regroup that took the run out of the pull before the party was in combat, a fight another pack's fight replaced, a
+// stop. The pull is no pull of the summary (its rows are the pulls that were fought), and the call is a no-op between
+// pulls.
+func (r *Recorder) PullAbort(t time.Time, why string) {
+	if r == nil || r.pull == nil {
+		return
+	}
+	p := r.pull
+	r.Event(t, "pull_end", map[string]any{
+		"seconds": t.Sub(r.start).Seconds() - p.Start, "mobs": p.Mobs, "adds": p.Adds, "deaths": p.Deaths, "aborted": why,
 	})
+	r.pull = nil
 }
 
 // UpdatePull changes the open pull's record (the fight's counts are known only when it ends).

@@ -138,6 +138,9 @@ type PlayFake struct {
 	TriggerFails bool
 	// OnWalk, when set, is asked before a walk of that destination: a test scripts the party's state there.
 	OnWalk func(f *PlayFake, to Vec3)
+	// WalkBlock, when set, is the walk instead of the straight move: a test scripts a walker that blocks until its
+	// context ends (the walk-back bound's own case).
+	WalkBlock func(ctx context.Context) error
 	// OnRest, when set, is asked before the party is sat down: the pre-boss gate's rows are scripted there, after the
 	// pull's gather and before the gate's first read.
 	OnRest func(f *PlayFake)
@@ -1208,6 +1211,9 @@ func (f *PlayFake) Walk(ctx context.Context, pts [][3]float32) error {
 		f.OnWalk(f, Vec3(pts[len(pts)-1]))
 	}
 	f.Walks = append(f.Walks, append([][3]float32(nil), pts...))
+	if f.WalkBlock != nil {
+		return f.WalkBlock(ctx)
+	}
 	var length float64
 	for i := 1; i < len(pts); i++ {
 		length += dist3(Vec3(pts[i-1]), Vec3(pts[i]))

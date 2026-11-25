@@ -564,7 +564,9 @@ func (p *playRun) stepStand(o ObjectAt) (Vec3, string) {
 // when the run stopped, and StatePull when a pack in the way comes first (the step begins again after the fight).
 func (p *playRun) stepArrived() (string, bool) {
 	switch {
-	case p.stopReason != "":
+	case p.stopReason != "" || p.stall != "":
+		// #256: a step's walk that ended on a member's death is the regroup's, not the step's: the step is begun again
+		// after it, from its own stand.
 		return "", false
 	case p.pack >= 0 || !p.stranger.IsZero():
 		return StatePull, false

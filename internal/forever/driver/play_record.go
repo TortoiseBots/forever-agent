@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/botcmd"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 // The player run's record (round P5b, #88): the counters the milestone's verdict reads and the evidence the spell
@@ -113,10 +114,22 @@ func (p *playRun) learnParty(ctx context.Context) bool {
 // sample writes one frame of the party and the hostile units (when the caller has them), and drains the session's
 // combat log into the run's file. The trace's writer samples, so a call per poll is cheap; frames before the party is
 // formed are skipped.
+//
+// A bot's combat flag is the run's fight or a living hostile in the view with that bot as its target: a pull's gather,
+// a walk and a wait are not a fight of the run's, and a frame that said "not in combat" while the bots fought on it
+// would leave a party left behind unreadable (#256).
 func (p *playRun) sample(units []Unit) {
 	if p.rec == nil || p.who == nil {
 		return
 	}
+	attacked := map[wire.GUID]bool{}
+	for _, u := range units {
+		if u.Dead || u.Friendly || u.Target.IsZero() {
+			continue
+		}
+		attacked[u.Target] = true
+	}
+	p.refreshSelf()
 	var bots []PlayFrameBot
 	for _, m := range p.roster() {
 		for i, name := range p.cfg.Bots {
@@ -124,10 +137,11 @@ func (p *playRun) sample(units []Unit) {
 				continue
 			}
 			w := p.who[strings.ToLower(name)]
-			bots = append(bots, PlayFrameBot{Member: m, Name: playSlot(i), Role: traceRole(i), Class: w.class, Level: w.level, Combat: p.inFight})
+			bots = append(bots, PlayFrameBot{Member: m, Name: playSlot(i), Role: traceRole(i), Class: w.class, Level: w.level, Combat: p.inFight || attacked[m.GUID]})
 		}
 	}
-	if p.rec.PlayFrame(p.now(), p.ports.Group.Leader().String(), bots, units) {
+	self := PlaySelf{GUID: p.ports.Group.Leader().String(), Pos: p.self, Map: p.selfMap, Alive: p.ports.Player.Phase() == PhaseAlive}
+	if p.rec.PlayFrame(p.now(), self, bots, units) {
 		p.frames++
 	}
 	p.drainCombat()

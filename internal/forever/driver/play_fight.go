@@ -140,7 +140,8 @@ func (p *playRun) pull(ctx context.Context) string {
 		p.pack = -1
 		return StateLegWalk
 	}
-	p.rec.PullStart(p.now(), PullRecord{Leg: p.legName(), Group: g.ID, Entries: g.Entries, Mobs: len(members)})
+	// The pull's record opens once the party is gathered and the marks go out (#256): a gather a regroup interrupts is
+	// no pull that happened, and it leaves no pull_start without its pull_end behind it.
 	// A pack pull is made from the plan's stand with the party beside the agent: the tank follows behind, so a pull
 	// taken wherever the leg walk stopped can leave it out of the pack's sight (proof-3 part A).
 	if !p.pullApproach(ctx, g) {
@@ -159,6 +160,16 @@ func (p *playRun) pull(ctx context.Context) string {
 	if p.stopReason != "" {
 		return ""
 	}
+	if p.stall != "" {
+		return ""
+	}
+	members = p.liveMembers(g)
+	if len(members) == 0 {
+		p.pulled[g.ID] = true
+		p.pack = -1
+		return StateLegWalk
+	}
+	p.rec.PullStart(p.now(), PullRecord{Leg: p.legName(), Group: g.ID, Entries: g.Entries, Mobs: len(members)})
 	// The agent's own pull is a fallback, never the first move (the review of 2026-11-24): the tank is ordered and
 	// answers with an explicit sight refusal at least once before the agent may take the pull, however near the skull
 	// it stands after the close-in walk. Only the REMAINING step-closer retries are skipped when it already stands in
@@ -172,6 +183,11 @@ func (p *playRun) pull(ctx context.Context) string {
 			return StateFight
 		}
 		if p.stopReason != "" {
+			return ""
+		}
+		if p.stall != "" {
+			// #256: a member found down mid-pull is the regroup's (or the fight's, when the pack already has the party):
+			// no retry step and no second order.
 			return ""
 		}
 		if p.refusedOut {
@@ -284,13 +300,16 @@ func (p *playRun) pullStranger(ctx context.Context) string {
 		return StateLegWalk
 	}
 	members := []Unit{u}
-	p.rec.PullStart(p.now(), PullRecord{Leg: p.legName(), Group: -1, Entries: []uint32{u.Entry}, Mobs: 1})
 	// The stranger's own pull stand is where the agent stood: there is no plan point for a unit the plan does not know.
 	p.pullStand = p.self
 	p.closeToSee(ctx, -1, u)
 	if p.stopReason != "" {
 		return ""
 	}
+	if p.stall != "" {
+		return ""
+	}
+	p.rec.PullStart(p.now(), PullRecord{Leg: p.legName(), Group: -1, Entries: []uint32{u.Entry}, Mobs: 1})
 	// The same rule as a pack's pull: the tank is ordered first, and the agent pulls only after its explicit sight
 	// refusal (engageSeen's reach shortcut then skips the remaining step-closer retries).
 	reason := "no-answer"
@@ -307,7 +326,7 @@ func (p *playRun) pullStranger(ctx context.Context) string {
 			p.stranger = wire.GUID{}
 			return StateFight
 		}
-		if p.stopReason != "" {
+		if p.stopReason != "" || p.stall != "" {
 			return ""
 		}
 		if evadeCode(p.orderCode) {
@@ -456,7 +475,7 @@ func (p *playRun) closeToSee(ctx context.Context, group int, skull Unit) {
 		p.pullWalk = true
 		p.walkTo(ctx, stand, false, false)
 		p.pullWalk = false
-		if p.stopReason != "" {
+		if p.stopReason != "" || p.stall != "" {
 			return
 		}
 		// The module reads the line from the TANK's own position: a stand that gives the agent sight gives the tank
@@ -558,7 +577,9 @@ func (p *playRun) pullApproach(ctx context.Context, g Group) bool {
 		p.pullWalk = true
 		p.walkTo(ctx, stand, false, false)
 		p.pullWalk = false
-		if p.stopReason != "" {
+		if p.stopReason != "" || p.stall != "" {
+			// #256: the approach writes no pull_stand for a walk that did not arrive, and the pull is no pull's until the
+			// stand is reached again after the regroup.
 			return false
 		}
 	}
@@ -567,7 +588,40 @@ func (p *playRun) pullApproach(ctx context.Context, g Group) bool {
 	})
 	// The stand bounds the agent's own pull: it never walks further than the pull distance beyond it.
 	p.pullStand = stand
-	return p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt)
+	// #256 (iv): the gather is a wait where the party can be left behind like any other (the live run stood here while
+	// its four bots stayed 100 yd back), so the gate holds here too: wait, one follow, a bounded walk back.
+	if !p.holdParty(ctx, "gather") {
+		return false
+	}
+	if !p.backToStand(ctx, stand) {
+		return false
+	}
+	if !p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt, "gather") {
+		return false
+	}
+	// The gather's own waits run the party gate (a walk back of up to PlayRegroupBackYd), so the leader may stand off the
+	// stand when the party is in: it goes back to the stand before the pull is marked and ordered, and the party that
+	// follows it is gathered once more.
+	if dist3(p.self, stand) > PlayArriveYd {
+		if !p.backToStand(ctx, stand) {
+			return false
+		}
+		return p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt, "gather")
+	}
+	return true
+}
+
+// backToStand walks the leader back to the pull's stand when it stands off it (the gate's walk back took it away): the
+// pull is marked and ordered from the stand. It reports false when the run stopped or a regroup is next.
+func (p *playRun) backToStand(ctx context.Context, stand Vec3) bool {
+	p.refreshSelf()
+	if dist3(p.self, stand) <= PlayArriveYd {
+		return true
+	}
+	p.pullWalk = true
+	p.walkTo(ctx, stand, false, false)
+	p.pullWalk = false
+	return p.stopReason == "" && p.stall == ""
 }
 
 // pullStep moves the agent closer after a pull no one answered: the walk goes to PlayPullStepYd along the line to the
@@ -580,11 +634,11 @@ func (p *playRun) pullStep(ctx context.Context, skull Unit) bool {
 		p.pullWalk = true
 		p.walkTo(ctx, to, false, false)
 		p.pullWalk = false
-		if p.stopReason != "" {
+		if p.stopReason != "" || p.stall != "" {
 			return false
 		}
 	}
-	return p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt)
+	return p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt, "gather")
 }
 
 // pullStepPoint is the point a retry pull steps to: PlayPullStepYd from `from` toward the skull, and no nearer than
@@ -620,7 +674,7 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 	p.bossGUID = u.GUID
 	// The party first: the boss walk pauses only past PlayFollowYd, and a boss pulled with the tank 35 yd behind is
 	// the tank's pull to lose.
-	if !p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt) {
+	if !p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt, "gather") {
 		return ""
 	}
 	// And the bars: the gate is read even when ready() says the party is rested, because ready() skips a corpse (and
@@ -629,7 +683,6 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 		return ""
 	}
 	members := p.bossMembers(b, u)
-	p.rec.PullStart(p.now(), PullRecord{Leg: p.legName(), Group: -1, Entries: []uint32{b.Entry}, Boss: true, Mobs: len(members)})
 	// The plan's entries to kill before the boss are the skull first, in its order; the boss is the skull once they are
 	// down, and the cross goes on the next unit of the order.
 	skull, cross := p.bossOrder(b, members)
@@ -637,6 +690,10 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 	if p.stopReason != "" {
 		return ""
 	}
+	if p.stall != "" {
+		return ""
+	}
+	p.rec.PullStart(p.now(), PullRecord{Leg: p.legName(), Group: -1, Entries: []uint32{b.Entry}, Boss: true, Mobs: len(members)})
 	for attempt := range 2 {
 		if attempt > 0 {
 			p.rec.Event(p.now(), "pull_retry", map[string]any{"entry": b.Entry})
@@ -662,7 +719,7 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 		if p.engageSeen(ctx, members, skull, cross) {
 			return StateFight
 		}
-		if p.stopReason != "" {
+		if p.stopReason != "" || p.stall != "" {
 			return ""
 		}
 		if p.refusedOut {
@@ -692,7 +749,7 @@ func (p *playRun) reacquireBoss(ctx context.Context, b *Boss) (Unit, bool) {
 		p.refreshSelf()
 		if to := pullStepPoint(p.self, b.Pos); dist3(p.self, to) > 0 {
 			p.walkTo(ctx, to, false, false)
-			if p.stopReason != "" {
+			if p.stopReason != "" || p.stall != "" {
 				return Unit{}, false
 			}
 		}
@@ -892,7 +949,7 @@ func (p *playRun) engageSeen(ctx context.Context, members []Unit, skull, cross U
 		p.pullWalk = true
 		p.walkTo(ctx, stand, false, false)
 		p.pullWalk = false
-		if p.stopReason != "" {
+		if p.stopReason != "" || p.stall != "" {
 			return false
 		}
 		// The module reads the line from the TANK: the next order waits (bounded) for it to come beside the stand,
@@ -1955,7 +2012,7 @@ func (p *playRun) rest(ctx context.Context) string {
 	for {
 		if p.ready() {
 			p.rec.Event(p.now(), "rest_end", map[string]any{"seconds": p.now().Sub(started).Seconds()})
-			return StateLegWalk
+			return p.resumed()
 		}
 		if p.timeUp() {
 			p.stop("time")
@@ -1963,7 +2020,7 @@ func (p *playRun) rest(ctx context.Context) string {
 		}
 		if !p.now().Before(deadline) {
 			p.rec.Event(p.now(), "rest_timeout", map[string]any{"seconds": p.now().Sub(started).Seconds()})
-			return StateLegWalk
+			return p.resumed()
 		}
 		if !p.sleep(ctx, p.lim.Poll) {
 			return ""
@@ -2373,7 +2430,8 @@ func (p *playRun) boss(ctx context.Context) string {
 	}
 	for _, wp := range append(append([]Vec3(nil), b.Approach...), b.Pos) {
 		p.walkTo(ctx, wp, false, false)
-		if p.stopReason != "" {
+		if p.stopReason != "" || p.stall != "" {
+			// #256: a death on the way to the boss is the regroup's; the boss walk resumes at the same point after it.
 			return ""
 		}
 		if p.pack >= 0 || !p.stranger.IsZero() {

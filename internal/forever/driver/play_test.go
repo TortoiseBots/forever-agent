@@ -314,8 +314,9 @@ func TestPlaySummonCooldownWaits(t *testing.T) {
 	}
 }
 
-// TestPlayStragglerFollowThenSummon: a bot 100 yd behind during a leg gets a follow at 30 s and a summon at 90 s, and
-// the run ends as straggler at 150 s when neither brings it back (the module refuses a summon of a bot on its map).
+// TestPlayStragglerFollowThenSummon: a bot 100 yd off during a leg gets the party gate's one follow order, then the
+// walk's own ladder: a follow at 30 s and a summon at 90 s, and the run ends as straggler at 150 s naming the bot and
+// its distance when neither brings it back (the module refuses a summon of a bot on its map).
 func TestPlayStragglerFollowThenSummon(t *testing.T) {
 	rig := newPlayRig(t, func(f *PlayFake) {
 		f.Stuck["botfour"] = true
@@ -325,13 +326,14 @@ func TestPlayStragglerFollowThenSummon(t *testing.T) {
 		}
 	})
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
-	if res.Stop != "straggler" {
-		t.Fatalf("stop = %q; want straggler", res.Stop)
+	if !strings.HasPrefix(res.Stop, "straggler:") {
+		t.Fatalf("stop = %q; want straggler:<slot>@<yd>", res.Stop)
 	}
-	follow, ok := rig.fake.Line(".bot follow Botfour")
-	if !ok {
-		t.Fatal("the straggler was never told to follow")
+	follows := rig.fake.Lines(".bot follow Botfour")
+	if len(follows) != 2 {
+		t.Fatalf("follow orders = %d; want 2 (the party gate's re-order and the walk's own follow)", len(follows))
 	}
+	follow := follows[len(follows)-1]
 	summon, ok := rig.fake.Line(".bot summon Botfour")
 	if !ok {
 		t.Fatal("the straggler was never summoned")
