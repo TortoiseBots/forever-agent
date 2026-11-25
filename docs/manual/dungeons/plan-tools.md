@@ -252,6 +252,29 @@ The checks are the plan-check lints plus the scout's own rules: `reach` (a hop t
 step the walk never takes, from the plan row and from where a fight leaves the lead), `arrival` (a path that ends
 short), `climb_anchor` (too much climb at a gather point), and `joiners` (bodies a pull wakes that it does not own).
 
+On a Forever server the live pass also asks the server's own sight query (`los`, see
+[movement](../daemon/movement.md#los)) from each pull row's stand to every unit of its target pack that the live
+read saw. The server's answer is recorded beside the navmesh ray under the same unit: the pull row's `live_los`
+check carries `server_answered`, `server_in_sight` and `disagree` next to the ray's `answered` and `in_sight`, and
+its reason gives the server's verdict and how many units the two disagree about. One report note adds the pass's
+totals (`live sight: the server and the navmesh ray disagree on N of M sight answers`). The server decides: one unit
+in its sight settles the check even where the ray says otherwise, and its "none in sight" counts only when it answered
+for every unit of the pack — a partial answer that saw nothing leaves the ray's verdict standing, with the reason
+saying how many the server answered.
+
+The queries are paced at 250 ms, which keeps them inside the server's five-at-once bucket and its 200 ms refill, and
+the whole query pass has a one-minute bound. A `rate` refusal is waited out and the same query asked once more. A unit
+the server no longer has (`unknown-unit`, `not-in-world`, `different-maps`: it despawned, died or changed map between
+the read and the query) is skipped alone, with one note naming how many pack units stayed unanswered; the rest of the
+pack is still asked. `no-access` is skipped for that one unit too, with its own note: below GameMaster it is what a
+unit that did not resolve answers, and the same code a query without a unit of the caller's own gets, so the note
+carries the count without naming a cause. An answer for one unit that is not understood (it is not the module's
+record, or not the call's) is recorded for that unit as `answer not understood` in one note with the count, and the
+pass goes on with the rest of the pack. A server whose module build has no query, that answers `bad-argument` (the
+sides would be read the same way for every unit), or that answers `rate` twice is said once in the notes and the pass
+goes on with the ray alone. When the query pass's bound or such a stop leaves stands unasked, one note says how many
+were not asked.
+
 # plan-diff
 
 Compares two exports of one plan — two migrations, two plan files, or one of each — and prints what changed, with

@@ -108,7 +108,7 @@ long call (a fight, a walk, an `act` script) holds the queue behind it while it 
 - Read-only methods (`status`, `units`, `chat_log`, `spells`, `map_snapshot`, `death_status`, ...) are
   still served while the link is reconnecting; actions are not.
 - A `dungeon_run` start preflight holds the command channel for each of its own reads (the module probe and each
-  `.pinfo`). A `bot`, `gm` or `commander` call arriving in that window is refused at once with `-32003` `busy: a
+  `.pinfo`). A `bot`, `gm`, `commander` or `los` call arriving in that window is refused at once with `-32003` `busy: a
   run preflight holds the command channel, retry`, having sent nothing, so the check still finishes and every other
   method (`status` included) keeps answering; retry the call after it. The preflight's waits are bounded: 35 s for
   the channel, and each read's own deadline (plus 2 s) counted from the moment the channel is its own.

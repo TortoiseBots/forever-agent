@@ -229,6 +229,7 @@ func TestServeClientTypesMatchTheDaemon(t *testing.T) {
 		{"party member", reflect.TypeFor[ServePartyMember](), reflect.TypeFor[serveclient.PartyMember]()},
 		{"party mark", reflect.TypeFor[ServeMark](), reflect.TypeFor[serveclient.PartyMark]()},
 		{"command", reflect.TypeFor[ServeCommand](), reflect.TypeFor[serveclient.Command]()},
+		{"los", reflect.TypeFor[ServeLOS](), reflect.TypeFor[serveclient.LOS]()},
 		{"logout", reflect.TypeFor[serveLogoutResult](), reflect.TypeFor[serveclient.Logout]()},
 		{"events page", reflect.TypeFor[ServeEventsPage](), reflect.TypeFor[serveclient.EventsPage]()},
 		{"event_log page", reflect.TypeFor[ServeEventPage](), reflect.TypeFor[serveclient.EventLogPage]()},
@@ -265,6 +266,9 @@ func TestServeClientTypesMatchTheDaemon(t *testing.T) {
 		Source: "A", SourceGUID: g.String(), Text: "hi", Party: true}}, Next: 3, More: true, Dropped: 2, Epoch: "abc", Reset: true}
 	roundTrip(t, "event_log", log, new(serveclient.EventLogPage))
 	roundTrip(t, "act", ServeActResult{Lines: []string{"step 1 wait ok"}, OK: true}, new(serveclient.ActResult))
+	dist := 12.5
+	roundTrip(t, "los", ServeLOS{A: "-7.00,0.00,0.00", B: "ForeverRat", Map: 700, Clear: true, DistYD: &dist,
+		SameMap: true, InWorld: true}, new(serveclient.LOS))
 }
 
 // TestStatusKeysPinContract pins ServeStatus's JSON keys and verifies that every TA StatusInfo JSON key except the
@@ -420,7 +424,7 @@ func TestServeClientMethodPin(t *testing.T) {
 		"quest_hello", "quest_query", "quest_accept", "quest_complete", "quest_reward", "quest_abandon", "quest_log",
 		"taxi",
 		"loot", "loot_take", "loot_close", "open_object", "use_object", "gameobjects", "roll",
-		"trainer_list", "train", "trade"} {
+		"trainer_list", "train", "trade", "los"} {
 		if !slices.Contains(ported, m) {
 			t.Errorf("%s is not a ported method any more: %v", m, ported)
 		}

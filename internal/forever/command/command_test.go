@@ -803,3 +803,39 @@ func TestTokenCollectorBareBodyAndModulePrefix(t *testing.T) {
 		t.Fatalf("no BareBody: err %v lines %d", err, len(rep2.Lines))
 	}
 }
+
+// TestOneLineTokenReply is the module's one-line answer (the los record): the run ends on the first line that carries
+// its token, another command's line is still not ours, and an accepted refusal still ends it as an error.
+func TestOneLineTokenReply(t *testing.T) {
+	lines := []chat.Line{
+		sys("State: 4 bots online"),
+		sys("los a=Tanka b=target map=0 los=1 dist=12.5 same_map=1 in_world=1 #zzz"),
+		sys("los a=Tanka b=target map=0 los=1 dist=12.5 same_map=1 in_world=1 #s1"),
+		sys("los a=Tanka b=target map=0 los=0 dist=40.0 same_map=1 in_world=1 #s1"),
+	}
+	tr, _, now := newScript(lines)
+	rep, err := Run(context.Background(), tr, ".tb los Tanka target", Options{Token: "s1", OneLine: true, Now: now})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !rep.Complete || rep.End != "line" {
+		t.Fatalf("reply = complete %v end %q, want complete at its line", rep.Complete, rep.End)
+	}
+	if len(rep.Lines) != 1 || rep.Lines[0].Kind != "los" || rep.Lines[0].Fields["los"] != "1" {
+		t.Fatalf("lines = %v, want the one los line of this token", rep.Raw)
+	}
+
+	// Without OneLine the same answer is not complete: a token run waits for its end marker.
+	tr2, _, now2 := newScript(lines)
+	rep2, err2 := Run(context.Background(), tr2, ".tb los Tanka target", Options{Token: "s1", Now: now2})
+	if !errors.Is(err2, ErrIncomplete) || rep2.Complete || len(rep2.Lines) != 2 {
+		t.Fatalf("without OneLine: err %v complete %v lines %v", err2, rep2.Complete, rep2.Raw)
+	}
+
+	// A refusal this channel may take ends the run as its error, not as a line.
+	tr3, _, now3 := newScript([]chat.Line{sys("Subcommand 'los' does not exist.")})
+	rep3, err3 := Run(context.Background(), tr3, ".tb los Tanka target", Options{Token: "s1", OneLine: true, allowRefusal: true, Now: now3})
+	if !errors.Is(err3, ErrSyntax) || rep3.End != "error" || len(rep3.Lines) != 1 {
+		t.Fatalf("refusal: err %v end %q lines %d", err3, rep3.End, len(rep3.Lines))
+	}
+}
