@@ -1030,9 +1030,14 @@ func (a *serveAddonHost) registerAddonPrefixes(s *session, wanted []string) erro
 	return nil
 }
 
-// unregister takes the add-on's prefixes off the session's list, leaving the rest.
+// unregister takes the add-on's prefixes off the session's list, leaving the rest. A list that became unknown (a
+// registration packet failed after its unregister-all) cannot be filtered, so the host writes back the prefixes it
+// captured at addon_start instead: what the server may hold is then the session's own list, never the add-on's.
 func (a *serveAddonHost) unregister(s *session) error {
 	a.regSession, a.regList, a.regWanted = nil, nil, nil
+	if s.addonState == addonRegistrationUnknown {
+		return s.RegisterAddonPrefixes(a.held...)
+	}
 	have := s.addonRegisteredPrefixes()
 	var keep []string
 	for _, prefix := range have {

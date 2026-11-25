@@ -15,6 +15,7 @@ package world
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -1238,6 +1239,40 @@ func TestAddonHostFailedStartTakesItsPrefixesOff(t *testing.T) {
 	}
 	if got := s.addonRegisteredPrefixes(); !slices.Equal(got, []string{pbc.Prefix, "Held"}) {
 		t.Fatalf("after the refused start the session holds %v; want its own list back", got)
+	}
+}
+
+// TestAddonHostUnregisterRestoresTheHeldListWhenTheStateIsUnknown: a registration that fails after its
+// unregister-all leaves the session's list unknown, and the add-on's unregister then writes back the prefixes the
+// session held before the add-on started: the server never keeps an add-on prefix beside no host.
+//
+// Mutation this test catches: the unregister filtering a list it cannot see (an unknown list reads as empty, the
+// call no-ops and whatever the failed registration left on the server stays).
+func TestAddonHostUnregisterRestoresTheHeldListWhenTheStateIsUnknown(t *testing.T) {
+	s, tr := addonTestSession()
+	if err := s.RegisterAddonPrefixes(pbc.Prefix, "Held"); err != nil {
+		t.Fatalf("the session's own registration: %v", err)
+	}
+	a := &serveAddonHost{reserved: []string{pbc.Prefix, tbmproto.Prefix},
+		held: []string{pbc.Prefix, "Held"}, registered: []string{"KEEP"}}
+	// A later registration's second packet fails: the unregister-all left, the list is unknown.
+	tr.fail = map[int]error{len(tr.sent) + 1: errAddonSend}
+	if err := s.RegisterAddonPrefixes("KEEP"); !errors.Is(err, errAddonSend) {
+		t.Fatalf("the failed registration answered %v", err)
+	}
+	if s.addonRegisteredPrefixes() != nil {
+		t.Fatal("the failed registration left the list known")
+	}
+	tr.fail = nil
+	before := tr.count(wire.CMSGChatRegisterAddonPrefixes)
+	if err := a.unregister(s); err != nil {
+		t.Fatalf("the unregister: %v", err)
+	}
+	if got := s.addonRegisteredPrefixes(); !slices.Equal(got, []string{pbc.Prefix, "Held"}) {
+		t.Fatalf("after the unregister the session holds %v; want the list it held before the add-on", got)
+	}
+	if got := tr.count(wire.CMSGChatRegisterAddonPrefixes) - before; got != 1 {
+		t.Fatalf("the unregister sent %d registration packet(s), want one carrying the held list", got)
 	}
 }
 
