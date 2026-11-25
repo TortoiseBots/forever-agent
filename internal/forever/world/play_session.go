@@ -80,7 +80,9 @@ func playPortErr(err error) error {
 func newPlayPorts(ctx context.Context, s *session) driver.PlayPorts {
 	// The sight memo is the run's, like the port's own unsupported flag: a serve hosts one run after another on the
 	// same session, and one run's said-aloud answer (or the lines it sent) is not the next run's.
+	s.sightMu.Lock()
 	s.sightSent, s.sightSaid = nil, false
+	s.sightMu.Unlock()
 	return driver.PlayPorts{
 		Owner:  newPlayOwner(s),
 		Group:  &playGroup{ctx: ctx, s: s, zoneMap: map[uint16]uint32{}},
@@ -188,7 +190,7 @@ func (w *playServerSight) ask(ctx context.Context, a, b string) (in bool, dist f
 	}
 	// A sight line the feed saw said aloud (it arrived after the call's own window) is the same answer: the module
 	// does not answer sight for this account, and the run asks nothing more.
-	if w.s.sightSaid {
+	if w.s.sightWasSaidAloud() {
 		w.stop("said-aloud")
 		return false, 0, false
 	}
@@ -271,20 +273,63 @@ func (w *playServerSight) rate(ctx context.Context) error {
 // are one round trip apart, and a late echo of an earlier query must not be read as a command falling through.
 const playSightEchoes = 8
 
+// playSightEchoWindow bounds the echo match: a self say that repeats a sent sight line later than this is no answer
+// to that query. The query's own call window is under 10 s and a late echo is a message or two behind it, so this
+// leaves room for a slow link while a much older line (say, a log replay of an earlier run's text) is not matched.
+const playSightEchoWindow = 30 * time.Second
+
+// sightSentLine is one sight query line this run sent, and when it went out.
+type sightSentLine struct {
+	text string
+	at   time.Time
+}
+
 // noteSightSent remembers one sight line the port is about to send, so a self say of it is read as the module's
 // answer (the line said aloud), not as a command falling through.
 func (s *session) noteSightSent(line string) {
-	s.sightSent = append(s.sightSent, strings.TrimSpace(line))
+	s.sightMu.Lock()
+	defer s.sightMu.Unlock()
+	now := s.Now()
+	s.sightSent = append(s.sightSent, sightSentLine{text: strings.TrimSpace(line), at: now})
+	keep := s.sightSent[:0]
+	for _, sent := range s.sightSent {
+		if now.Sub(sent.at) <= playSightEchoWindow {
+			keep = append(keep, sent)
+		}
+	}
+	s.sightSent = keep
 	if n := len(s.sightSent); n > playSightEchoes {
 		s.sightSent = s.sightSent[n-playSightEchoes:]
 	}
 }
 
-// sightLineSaid reports whether a chat line is one of the sight query lines this run sent.
+// noteSightSaid records the one answer a said-aloud sight query gives the run.
+func (s *session) noteSightSaid() {
+	s.sightMu.Lock()
+	s.sightSaid = true
+	s.sightMu.Unlock()
+}
+
+// sightWasSaidAloud reports whether a sight query of this run came back as the account's own say chat.
+func (s *session) sightWasSaidAloud() bool {
+	s.sightMu.Lock()
+	defer s.sightMu.Unlock()
+	return s.sightSaid
+}
+
+// sightLineSaid reports whether a chat line is one of the sight query lines this run sent inside the echo window,
+// and consumes it: a line is one query's answer, so a second self say of it is not another said-aloud answer.
 func (s *session) sightLineSaid(text string) bool {
+	s.sightMu.Lock()
+	defer s.sightMu.Unlock()
 	t := strings.TrimSpace(text)
-	for _, sent := range s.sightSent {
-		if t == sent {
+	now := s.Now()
+	for i, sent := range s.sightSent {
+		if now.Sub(sent.at) > playSightEchoWindow {
+			continue
+		}
+		if t == sent.text {
+			s.sightSent = append(s.sightSent[:i], s.sightSent[i+1:]...)
 			return true
 		}
 	}

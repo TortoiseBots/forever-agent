@@ -655,10 +655,13 @@ type session struct {
 	// account's commands are being said aloud, so no further line may be sent.
 	gmConfirmed bool
 	gmStop      error
-	// sightSent holds the sight query lines this player run has sent, at most playSightEchoes of them (oldest
-	// first): a self say of one is the module's answer for the query said aloud, not a command falling through.
-	// sightSaid is set by the first such echo: the account may not ask sight, so every later query is unknown.
-	sightSent []string
+	// sightSent holds the sight query lines this player run has sent, with their send times, at most
+	// playSightEchoes of them (oldest first): a self say of one inside playSightEchoWindow is the module's answer
+	// for the query said aloud, not a command falling through, and is consumed by that match. sightSaid is set by
+	// the first such echo: the account may not ask sight, so every later query is unknown. sightMu guards the two:
+	// the run's own goroutine appends a line, the session loop matches and consumes it.
+	sightMu   sync.Mutex
+	sightSent []sightSentLine
 	sightSaid bool
 	// Round A1: the bot module's protocol. pbcAsm reassembles a body per sequence number, pbcSeq hands out request
 	// numbers, and pbcOff is the reason the protocol was turned off for this session (the caller falls back).

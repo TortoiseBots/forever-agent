@@ -118,6 +118,12 @@ cannot tell the session's prefixes from the add-on's, and reserving only `TBM` a
 leave the rest open to the add-on. Send once (`addon_send`) so the session registers again, then
 retry.
 
+A start that fails after the add-on's load (a prefix the add-on registered is over its share, or a registration
+packet the link refused) stops the host and takes the prefixes the load put on the session back off before it
+answers: a refused start leaves the session's list as it was. When a registration packet failed after its
+unregister-all the list is unknown, and the failed start writes back the prefixes the session held at
+`addon_start` (never the add-on's), so the server cannot keep an add-on prefix beside no host.
+
 `lua5.1` must be on `PATH` (the error says `lua5.1 not found (apt install lua5.1)`), and on Linux
 the sidecar must be startable under an address-space limit with `prlimit(1)` or `sh(1)`; a host
 without either is refused rather than run unbounded.

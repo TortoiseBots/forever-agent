@@ -182,9 +182,16 @@ func TestPlayTankSightSpentBudgetIsUnknown(t *testing.T) {
 
 // TestPlayTankSightPathEndWaitsOnce: a search that runs out of path right after its last wait must not wait again on
 // the same ground. A second wait buys the tank no new ground and can spend the budget's last seconds, which would turn
-// the server's known NO into an unknown and hand the pull to the fallback the search exists to prevent.
+// the server's known NO into an unknown and hand the pull to the fallback the search exists to prevent. The tank stands
+// far away and does not follow, so one wait costs its whole bound: the elapsed time pins exactly one wait (a second
+// wait would double it).
 func TestPlayTankSightPathEndWaitsOnce(t *testing.T) {
-	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) { f.SelfPos = Vec3{} })
+	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) {
+		f.SelfPos = Vec3{}
+		// The tank stands 100 yd off and was never told to follow: it cannot come beside the agent's stand.
+		f.BotPos[strings.ToLower(playBots[0])] = Vec3{0, 100, 0}
+		delete(f.Moved, strings.ToLower(playBots[0]))
+	})
 	p := &playRun{cfg: PlayConfig{Bots: playBots}, route: rig.route, ports: rig.ports, lim: DefaultPlayLimits()}
 	p.ports.ServerSight = &standSightPort{tankIn: false, pointIn: true}
 	budget := &sightBudget{start: p.now()}
@@ -196,7 +203,9 @@ func TestPlayTankSightPathEndWaitsOnce(t *testing.T) {
 	if seen || !known {
 		t.Fatalf("the path's end returned seen=%v known=%v; want a known unseen (the server answered NO)", seen, known)
 	}
-	if spent := p.now().Sub(start); spent > PlayTankWait+p.lim.Poll {
+	if spent := p.now().Sub(start); spent < PlayTankWait {
+		t.Fatalf("the search spent %v; want one full wait (%v) for a tank that cannot follow", spent, PlayTankWait)
+	} else if spent > PlayTankWait+2*p.lim.Poll {
 		t.Fatalf("the search spent %v waiting for a tank that cannot follow; want one bound %v (a second wait on the same ground)",
 			spent, PlayTankWait)
 	}

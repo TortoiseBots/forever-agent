@@ -109,12 +109,30 @@ func (c *Client) LOS(ctx context.Context, a, b string, mapID *uint32) (LOSReport
 	}
 	rep, err := c.callOneLine(ctx, line)
 	if err != nil {
-		if errors.Is(err, command.ErrUnknownCommand) || errors.Is(err, command.ErrSyntax) || losUnknownCommand(err) {
+		if errors.Is(err, command.ErrUnknownCommand) || errors.Is(err, command.ErrSyntax) || losUnknownCommand(err) || losAbsent(rep) {
 			return LOSReport{}, fmt.Errorf("%w: %v", ErrLOSUnsupported, err)
 		}
 		return LOSReport{}, err
 	}
 	return parseLOS(rep, sa, sb)
+}
+
+// losAbsent reports the core's own answer to a line no command handles (a server without the module): the collected
+// lines hold "There is no such command", and the run itself ended without a tokened line. It is the missing module,
+// never this client's answer being wrong, so it is reported as ErrLOSUnsupported like a module without the command.
+func losAbsent(rep *command.Reply) bool {
+	if rep == nil {
+		return false
+	}
+	lines := make([]string, 0, len(rep.RawText)+len(rep.Raw))
+	lines = append(lines, rep.RawText...)
+	lines = append(lines, rep.Raw...)
+	for _, line := range lines {
+		if strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(line), "."), "There is no such command") {
+			return true
+		}
+	}
+	return false
 }
 
 // losUnknownCommand reports whether a module error line says the server cannot answer the command: a dispatcher that

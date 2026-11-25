@@ -516,8 +516,11 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 			case stall == StateWipe && fighting && (p.joinFight() || next == StateFight):
 				next = StateFight
 			case stall == StateWipe:
-				// The regroup takes the run out of a pull that no fight has started: its record is closed (one
-				// pull_end for every pull_start), and the pull re-enters with its own record after the regroup.
+				// The regroup takes the run out of a pull that no fight has started: its orders are taken back (a
+				// follow for every bot, the marks cleared) so the tank cannot drag the pack into the recovery, and
+				// its record is closed (one pull_end for every pull_start); the pull re-enters with its own record
+				// after the regroup.
+				p.abortPullOrders(ctx)
 				p.rec.PullAbort(p.now(), "regroup")
 				next = stall
 			default:

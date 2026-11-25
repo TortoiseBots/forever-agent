@@ -85,13 +85,19 @@ segment of a walk, **and at a pull's gather** (the stand it orders a pull from),
 | Still behind after those attempts | The walk's own straggler ladder is the last arm: a follow at 30 s, a summon at 90 s, and the `straggler` stop at 150 s, which names every bot still behind and its distance. `regroup_timeout` records a gate whose walk back ran out of time, `regroup_blocked` the step a pack or a patrol refused or that the navmesh has no complete route for (the ladder carries it, the run does not stop on a walk error), and `regroup_giveup` the one whose attempts were spent. |
 | The character dead | The gate's waits stop the run `not-alive`: no wait or walk can put the leader back. This applies everywhere `waitNear` waits, the pull's and the boss's gathers included. |
 | A member dead, ghost or missing | Read on **2** consecutive polls (`PlayRegroupDownPolls`, at different instants; the gate waits one poll to read it again), so a roster row that drops out for one poll is no member down and costs no regroup. Then the run's own regroup (`WIPE`) before any travel: out of combat the healer raises the member (waited `BotRez`, 120 s), and one still down gets the release and corpse-run whispers; the party is then waited for. The death is counted in the summary and written as a `death` event, wherever it happened: the walks and the waits count deaths too, not only a fight. After the regroup's rest the run goes back to what the death interrupted: the portal wait (`TRAVEL`) while it is still outside the instance, the leg walk inside it (which re-enters the pull or the boss it was gathering for). The walk's own place never moves: a leg resumes at the same via point. |
-| A member down while the pull already has the party | The fight is never overridden: the damage dealers keep their orders, the pack is fought, the pull's record is closed (`pull_end`), and only then does the regroup run (`regroup` after it). A member down after the pull's orders with nothing on the party yet is the regroup's instead, and the pull's record is closed first (`pull_end` with `aborted: regroup`, no row in the summary); the pull re-enters with its own record. A run that stops inside a pull closes the record the same way (`aborted: stop`). |
+| A member down while the pull already has the party | The fight is never overridden: the damage dealers keep their orders, the pack is fought, the pull's record is closed (`pull_end`), and only then does the regroup run (`regroup` after it). A member down after the pull's orders with nothing on the party yet is the regroup's instead, and the pull's record is closed first (`pull_end` with `aborted: regroup`, no row in the summary); the pull re-enters with its own record. The abort also takes the pull's orders back before the recovery: every bot gets one `.bot follow` and the skull and cross marks are cleared (`raid_mark_clear`), so a tank still on its attack order cannot drag the pack into the recovery. A run that stops inside a pull closes the record the same way (`aborted: stop`). |
 | The same place costing regroups | `PlayRegroupLimit` (**2**) regroups of one place, then the run stops `regroup-limit:<key>`, naming it: `group-<id>` for a pack, `boss-<entry>` for a leg's boss, `stranger-<entry>` for a patrol candidate, and outside a pull `walk-<leg>-<via>` (the leg's index and the via point the walk is at, the leg's end counted as the last), `step-<leg>-<step>` for a leg's step, `travel` outside the instance. Every `regroup_down` event carries the same `key`. A stand that keeps killing the party is ground the plan does not mark, and re-entering that pull forever is not a run that can finish. |
 
 A pull's row in the record is opened once, when the party is gathered and the marks go out: a gather a regroup
 interrupts leaves no `pull_start` behind it, and every `pull_start` has exactly one `pull_end` (a pull a regroup or a
 stop took the run out of before a fight ends with `aborted` and has no row in the summary). After the gate walked the
 leader back inside the gather, it returns to the pull's stand before it marks and orders.
+
+An early exit after the `pull_start` closes the record where it happens, so the next pull does not close it later
+with the wrong end time: a pack the bots finish during the refusals is a pull that happened (`pull_end` with no
+`aborted`, and its row in the summary's `pulls`), while a boss gone from the view and a patrol candidate given up or
+left evading end with `aborted: boss-gone`, `aborted: stranger`, `aborted: stranger-gone` or `aborted: evade`. A
+record still open when the next pull starts (a path that could not close it) is closed as `aborted: superseded`.
 
 The order and its time are in the trace as an `order` event (`{"bot":"dps2","verb":"follow"}`), and every frame
 carries the leader's own position (`self`) beside the bots', so a party that splits can be read from the record
@@ -226,7 +232,10 @@ would add no sight — the leading player pulls the mob itself:
    `PlayAssistYd` (10 yd) of the skull, which is the pull's own social add and comes with it. The party's own pets,
    totems and guardians (units a party member owns, or that a party member has charmed) and critters are not counted;
    an enemy hunter's pet or a hostile totem is, and so is a party pet an enemy has charmed (the charm is the
-   controlling ownership while it is on). Where the agent already stands inside a hostile's clearance, only a point of
+   controlling ownership while it is on). The same ownership decides the stranger and gone answers: a unit that turns
+   friendly or hostile because a charm came on or off is read again on the next plan, so it can appear as `gone`, as
+   a new blocker in the clearance, or as a pull's own unit without moving. Where the agent already stands inside a
+   hostile's clearance, only a point of
    the path nearer to that hostile than the agent stood at the pull's first plan (less `PlayAgentApproachStartEpsYd`,
    0.5 yd) blocks, so a path that walks away is clear and repeated re-plans cannot creep nearer a little at a time. A hostile the view does not carry (a pack out of view) is unknown and is not counted: the check fails open there. When the path cannot keep
    the clearance, the approach walks the longest prefix of it that ends short of the first hostile, inside the other
@@ -274,12 +283,17 @@ The bounds on what may be pulled:
   agent's own hit, which is the boss's pull and not a leading player's: the agent records `agent_pull_skipped` with
   `reason: boss-near` (`group`, `target`, `entry`, `boss`, `boss_yd`) and does not pull, and the pull ends as it would
   have without a fallback.
+- **A moving patrol is checked only on a planned path.** The clearance check walks the fallback's own navmesh path and
+  counts the hostiles the path comes near; when no complete route to the mob exists (`no-path` with `detail: path`),
+  the agent pulls it from where it stands and that check does not run, so a patrol crossing that spot is not seen. It
+  is a known limit of a fallback taken only after the tank refused the order, not a promise the plan's own stand
+  replaces.
 
 A failed fallback records `agent_pull_failed` with its reason:
 
 | Reason | Meaning |
 |---|---|
-| `gone` | The mob left the view or turned friendly before or during the approach. |
+| `gone` | The mob left the view or turned friendly before or during the approach. A charm changing hands counts as turning: a party pet charmed by an enemy is a pack, and an enemy pet charmed by the party is the party's. |
 | `already-pulled` | This group (or this unknown unit) already had its one agent pull. |
 | `no-path` | No walk to the mob inside the approach's bounds; `detail` says which: `path` (no complete navmesh route), `path-length` (past 40 yd), `past-stand` (past 30 yd from the stand) or `pack-near` (another pack, an unclaimed patrol or a stranger is inside the 22 yd clearance, and the longest clear prefix was no path either). A `pack-near` event also carries `blocker` (`guid`, `entry`, `yd`: the hostile that stood in the way and how far it stood from the mob). |
 | `no-sight-after-approach` | The approach reached the pull's range but the line to the mob never cleared. |

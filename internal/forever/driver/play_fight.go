@@ -137,6 +137,23 @@ const (
 	PlayTankSightSpots   = 24
 )
 
+// closePullOnExit closes the open pull's record at the state that leaves it without a fight, so a later pull does not
+// close it as superseded with this exit's time nowhere in it. fought says the pull's pack was killed (the bots finished
+// it during the refusals): the pull then has its summary row. Otherwise the record is aborted with why, so the trace
+// still pairs its pull_start with a pull_end at the right time. The stale set and skull go with it; between pulls the
+// call is a no-op.
+func (p *playRun) closePullOnExit(why string, fought bool) {
+	if p.rec.CurrentPull() == nil {
+		return
+	}
+	p.skull, p.pullSet, p.pullGone = wire.GUID{}, p.pullSet[:0], p.pullGone[:0]
+	if fought {
+		p.rec.PullEnd(p.now(), 0)
+		return
+	}
+	p.rec.PullAbort(p.now(), why)
+}
+
 // pull is the pack in the way: the agent first walks to the plan's stand with the party beside it, then the skull goes
 // on the plan's kill order's entry in the pack (else on the unit nearest the agent), the cross on the nearest other
 // one, the agent selects the skull and orders the tank onto it, and the run waits for the pack to turn on the party.
@@ -222,6 +239,7 @@ func (p *playRun) pull(ctx context.Context) string {
 		if len(members) == 0 {
 			p.pulled[g.ID] = true
 			p.pack = -1
+			p.closePullOnExit("cleared", true)
 			return StateLegWalk
 		}
 		if attempt == 0 {
@@ -237,6 +255,7 @@ func (p *playRun) pull(ctx context.Context) string {
 	if len(members) == 0 {
 		p.pulled[g.ID] = true
 		p.pack = -1
+		p.closePullOnExit("cleared", true)
 		return StateLegWalk
 	}
 	if p.refusedOut {
@@ -261,6 +280,7 @@ func (p *playRun) pull(ctx context.Context) string {
 		if len(members) == 0 {
 			p.pulled[g.ID] = true
 			p.pack = -1
+			p.closePullOnExit("cleared", true)
 			return StateLegWalk
 		}
 		retrySkull, retryCross := p.skullAndCross(members)
@@ -321,6 +341,7 @@ func (p *playRun) pullStranger(ctx context.Context) string {
 	u, ok := unitByGUID(p.ports.World.Units(), guid)
 	if !ok || u.Dead || u.Friendly {
 		p.rec.Event(p.now(), "patrol_gone", map[string]any{"guid": guid.String()})
+		p.closePullOnExit("stranger-gone", ok && u.Dead)
 		p.stranger = wire.GUID{}
 		return StateLegWalk
 	}
@@ -340,6 +361,7 @@ func (p *playRun) pullStranger(ctx context.Context) string {
 		}
 		skull, ok := unitByGUID(p.ports.World.Units(), guid)
 		if !ok || skull.Dead || skull.Friendly {
+			p.closePullOnExit("stranger-gone", ok && skull.Dead)
 			p.stranger = wire.GUID{}
 			return StateLegWalk
 		}
@@ -398,6 +420,7 @@ func (p *playRun) giveUpStranger(u Unit, reason string) string {
 	})
 	p.strangerGaveUp[u.GUID] = true
 	p.stranger = wire.GUID{}
+	p.closePullOnExit("stranger", false)
 	return StateLegWalk
 }
 
@@ -412,6 +435,7 @@ func (p *playRun) giveBackEvader(u Unit) string {
 	})
 	p.strangerRetry[u.GUID] = p.now().Add(PlayEvadeWait)
 	p.stranger = wire.GUID{}
+	p.closePullOnExit("evade", false)
 	return StateLegWalk
 }
 
@@ -1114,6 +1138,7 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 			if !ok {
 				// Gone for good: dead (its kill is latched) or gone. The leg's walk judges it.
 				p.bossRun = false
+				p.closePullOnExit("boss-gone", p.bossKilled[b.Entry])
 				return StateLegWalk
 			}
 			p.bossGUID = bu.GUID
@@ -1121,6 +1146,7 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 			skull, cross = p.bossOrder(b, members)
 			if skull.GUID.IsZero() {
 				p.bossRun = false
+				p.closePullOnExit("boss-gone", p.bossKilled[b.Entry])
 				return StateLegWalk
 			}
 		}

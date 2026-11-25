@@ -865,6 +865,74 @@ func pullStartsOf(tf *trace.File, group int) (all, ofGroup []trace.Event) {
 	return all, ofGroup
 }
 
+// TestPlayRegroupJoinFightWritesARecordWithoutAnOpenPull: a set and skull left from a pull that a regroup aborted have
+// no open record, so joining the fight they belong to writes the joined fight's own record. Without it the fight ends
+// with no pull_end (a pull joined before its own pull start leaves no record), and its damage is in no summary row.
+//
+// Mutation this test catches: the in-hand set kept whenever it is non-empty (the aborted pull's stale set is taken as
+// "the fight's already", no pull_start is written, and the fight's end closes nothing).
+func TestPlayRegroupJoinFightWritesARecordWithoutAnOpenPull(t *testing.T) {
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		for _, b := range f.GoldenOwner.Bots {
+			b.Online, b.InParty = true, true
+		}
+		f.SpawnPacks()
+		if u, ok := f.UnitOf(11320); ok {
+			f.AggroUnit(u.GUID)
+		}
+	})
+	u, ok := rig.fake.UnitOf(11320)
+	if !ok {
+		t.Fatal("the plan's first pack has no unit in the view")
+	}
+	rec, err := NewPlayRecorder(t.TempDir(), "r-join", rig.route.Name, rig.route.Map, 0, rig.fake.Clock.Now(), nil)
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: DefaultPlayLimits(),
+		rec: rec, pulled: map[int]bool{}, pack: -1, start: rig.fake.Clock.Now()}
+	// The aborted pull's leftovers: a set and a skull, and no pull_start.
+	p.pullSet, p.skull = []wire.GUID{u.GUID}, u.GUID
+	if !p.joinFight() {
+		t.Fatal("the party was fighting a planned pack and the run did not join it")
+	}
+	if cur := rec.CurrentPull(); cur == nil || !cur.Joined {
+		t.Fatalf("the joined fight's pull record = %+v; want a joined record", cur)
+	}
+}
+
+// TestPlayRegroupJoinFightKeepsAnOpenPullsRecord: the same set with its own pull_start open is the pull's already: the
+// join adds no second record.
+func TestPlayRegroupJoinFightKeepsAnOpenPullsRecord(t *testing.T) {
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		for _, b := range f.GoldenOwner.Bots {
+			b.Online, b.InParty = true, true
+		}
+		f.SpawnPacks()
+		if u, ok := f.UnitOf(11320); ok {
+			f.AggroUnit(u.GUID)
+		}
+	})
+	u, ok := rig.fake.UnitOf(11320)
+	if !ok {
+		t.Fatal("the plan's first pack has no unit in the view")
+	}
+	rec, err := NewPlayRecorder(t.TempDir(), "r-join", rig.route.Name, rig.route.Map, 0, rig.fake.Clock.Now(), nil)
+	if err != nil {
+		t.Fatalf("recorder: %v", err)
+	}
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: DefaultPlayLimits(),
+		rec: rec, pulled: map[int]bool{}, pack: -1, start: rig.fake.Clock.Now()}
+	p.pullSet, p.skull = []wire.GUID{u.GUID}, u.GUID
+	rec.PullStart(rig.fake.Clock.Now(), PullRecord{Leg: "one", Group: 0, Entries: []uint32{11320}, Mobs: 1})
+	if !p.joinFight() {
+		t.Fatal("the party was fighting the pull's own pack and the run did not join it")
+	}
+	if cur := rec.CurrentPull(); cur == nil || cur.Joined {
+		t.Fatalf("the pull in hand = %+v; want its own record kept, not a joined one", cur)
+	}
+}
+
 // TestPlayRegroupJoinedFightMarksOnlyTheFoughtPack: the leader gathers for pack A while its party, 100 yd back, fights
 // pack B. The fight is armed from B's units, B dies, and only B is pulled: A was never fought, so the run pulls A
 // afterwards instead of walking past it. The joined fight has its own pull record, for B, marked joined.
@@ -1035,6 +1103,51 @@ func TestPlayRegroupPullRecordClosedOnAStall(t *testing.T) {
 			}
 			if !tc.aggro && len(starts) < 2 {
 				t.Fatalf("pull_start = %d; want the interrupted pull and its re-entry", len(starts))
+			}
+			if !tc.aggro {
+				// The aborted pull takes its orders back: the tank is told to follow (not left on its attack order,
+				// which would pull the pack during the recovery) and the marks are cleared.
+				abortAt := -1
+				for i, e := range tf.Events {
+					if e.Ev == "pull_end" && e.D["aborted"] == "regroup" {
+						abortAt = i
+					}
+				}
+				if abortAt < 0 {
+					t.Fatal("no pull_end closed the interrupted pull")
+				}
+				startAt := abortAt
+				for i := abortAt - 1; i >= 0; i-- {
+					if tf.Events[i].Ev == "pull_start" {
+						startAt = i
+						break
+					}
+				}
+				followed := map[string]bool{}
+				cleared := map[string]bool{}
+				// The recall orders and the clears are written before the pull_end: scan the aborted pull's own span.
+				for _, e := range tf.Events[startAt:abortAt] {
+					switch e.Ev {
+					case "order":
+						if e.D["verb"] == "follow" {
+							if bot, ok := e.D["bot"].(string); ok {
+								followed[bot] = true
+							}
+						}
+					case "raid_mark_clear":
+						if mark, ok := e.D["mark"].(string); ok {
+							cleared[mark] = true
+						}
+					}
+				}
+				for _, slot := range []string{"tank", "heal", "dps1", "dps2"} {
+					if !followed[slot] {
+						t.Fatalf("the aborted pull left %s on its order: follow events after the abort = %v", slot, followed)
+					}
+				}
+				if !cleared["skull"] || !cleared["cross"] {
+					t.Fatalf("the aborted pull left its marks out: cleared = %v", cleared)
+				}
 			}
 		})
 	}

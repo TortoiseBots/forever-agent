@@ -999,6 +999,26 @@ func playEventReasons(t *testing.T, res *Result, ev string) []string {
 	return out
 }
 
+// pullAbortedReasons is every open pull's own abort reason in the run's trace, in order: the early exits that end a
+// pull without a fight.
+func pullAbortedReasons(t *testing.T, res *Result) []string {
+	t.Helper()
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	var out []string
+	for _, e := range tf.Events {
+		if e.Ev != "pull_end" {
+			continue
+		}
+		if why, ok := e.D["aborted"].(string); ok && why != "" {
+			out = append(out, why)
+		}
+	}
+	return out
+}
+
 // TestPlayStrangerNoAnswerGoesOn: a patrol candidate no one answers (two orders, the unit never turns on the party)
 // is given up with the reason recorded, and the leg goes on to its boss; it does not end the run pull-failed (the
 // RFC run of 2026-11-24 ended there on a unit that was only a patrol candidate). The boss is pulled normally.
@@ -1024,6 +1044,10 @@ func TestPlayStrangerNoAnswerGoesOn(t *testing.T) {
 	}
 	if r := playEventReasons(t, res, "patrol_unpullable"); len(r) != 1 || r[0] != "no-answer" {
 		t.Fatalf("patrol_unpullable reasons = %v; want [no-answer]", r)
+	}
+	// The stranger's pull record is closed where the unit is given up, not left for the boss's pull to supersede.
+	if why := pullAbortedReasons(t, res); len(why) != 1 || why[0] != "stranger" {
+		t.Fatalf("aborted pulls = %v; want the given-up stranger's record closed as stranger", why)
 	}
 }
 
@@ -1072,6 +1096,9 @@ func TestPlayStrangerNotAttackableGoesOn(t *testing.T) {
 	}
 	if h := len(playEventReasons(t, res, "patrol_pull")); h != 1 {
 		t.Fatalf("patrol_pull events = %d; want one: the given-up unit is not held or pulled again", h)
+	}
+	if why := pullAbortedReasons(t, res); len(why) != 1 || why[0] != "stranger" {
+		t.Fatalf("aborted pulls = %v; want the given-up stranger's record closed as stranger", why)
 	}
 }
 

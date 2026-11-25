@@ -643,6 +643,28 @@ func TestAgentPullPackKilledInTheRefusalsWalksOn(t *testing.T) {
 	if !slices.Contains(res.States, StateLegWalk) {
 		t.Fatalf("states %v; want the leg walking on after the cleared pack", res.States)
 	}
+	// The pull the bots finished during the refusals is closed where it ended, not left for the next pull to close
+	// as superseded: its record has its summary row and its pull_end is not an abort.
+	if len(res.Summary.Pulls) != 1 {
+		t.Fatalf("summary pulls = %+v; want the cleared pull's row", res.Summary.Pulls)
+	}
+	tf, err := trace.Read(res.Trace)
+	if err != nil {
+		t.Fatalf("trace: %v", err)
+	}
+	ends := 0
+	for _, e := range tf.Events {
+		if e.Ev != "pull_end" {
+			continue
+		}
+		ends++
+		if why, ok := e.D["aborted"]; ok && why != "" {
+			t.Fatalf("the cleared pull's pull_end is aborted (%v); want it closed where its pack died", why)
+		}
+	}
+	if ends != 1 {
+		t.Fatalf("pull_end events = %d; want one for the cleared pull", ends)
+	}
 }
 
 // TestAgentPullBossKilledAsAnAddIsNoNeighbour: a plan boss dies as an add in an earlier pack's fight, and its corpse

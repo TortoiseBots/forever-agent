@@ -160,6 +160,26 @@ func TestWatchDecisionsFailureIsAWarning(t *testing.T) {
 	}
 }
 
+// TestWatchDecisionsBacksOffAHangingRead: a decisions read that fails every time (a module whose command hangs or
+// answers an error) spends its own bound on the first try, so the watch spaces the next tries out instead of paying it
+// on every status poll. A 30 s run at a 2 s poll would make about fifteen reads without the back-off.
+func TestWatchDecisionsBacksOffAHangingRead(t *testing.T) {
+	run, f := watchWithRecord(t, "r-watch")
+	run.cfg.PullDecisions = true
+	f.DecisionsErr = errors.New("the module did not answer")
+	f.ScriptRun(FakeRunScript{Steps: 12, Pulls: 3, ProgressEvery: 3 * time.Second, DoneAt: 30 * time.Second})
+	res := run.Watch(context.Background())
+	if res.Stop != "done" {
+		t.Fatalf("stop %q, want done", res.Stop)
+	}
+	if got := f.DecisionsCalls(); got > 6 {
+		t.Fatalf("%d decisions read(s) over a 30 s run with every read failing; want the back-off to space them", got)
+	}
+	if block := res.Summary.Decisions; block == nil || !strings.Contains(block.Note, "the pull failed") {
+		t.Fatalf("summary decisions %+v; want the failed read's warning", block)
+	}
+}
+
 // TestWatchDecisionsFinalReadBeforeTheStop: the watch reads the rows that arrived since its last incremental read
 // just before it stops the run. The fake erases the capture at the stop, so a read after it would lose them.
 func TestWatchDecisionsFinalReadBeforeTheStop(t *testing.T) {

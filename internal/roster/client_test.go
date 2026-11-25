@@ -472,6 +472,9 @@ func TestRosterWithoutAStatusRouteIsStillARoster(t *testing.T) {
 // bound and must not spend the timeout the caller gave the roster (5 s here) before the roster stands.
 func TestRosterDoesNotWaitOnAHangingStatusRoute(t *testing.T) {
 	release := make(chan struct{})
+	// The handler records when the client hung up: that is the read's own bound taking effect, before any scheduling
+	// on the roster's side, so the assertion is the 500 ms bound and not a loose upper limit.
+	var cancelled atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/bots":
@@ -479,8 +482,10 @@ func TestRosterDoesNotWaitOnAHangingStatusRoute(t *testing.T) {
 		case "/api/v1/status":
 			// A status route that hangs while the bots route is healthy: answer only when the client hangs up or the
 			// test is done.
+			start := time.Now()
 			select {
 			case <-r.Context().Done():
+				cancelled.Store(int64(time.Since(start)))
 			case <-release:
 			}
 		default:
@@ -491,9 +496,7 @@ func TestRosterDoesNotWaitOnAHangingStatusRoute(t *testing.T) {
 	defer close(release)
 
 	c := newTestClient(t, srv.URL, 5*time.Second)
-	start := time.Now()
 	r, err := c.Roster(context.Background())
-	waited := time.Since(start)
 	if err != nil {
 		t.Fatalf("Roster: %v", err)
 	}
@@ -503,10 +506,15 @@ func TestRosterDoesNotWaitOnAHangingStatusRoute(t *testing.T) {
 	if r.Heartbeat != nil {
 		t.Fatalf("heartbeat = %+v, want nil when the status route never answers", r.Heartbeat)
 	}
-	// heartbeatTimeout (500 ms) is the optional read's own bound; the roster's timeout here is 5 s, so a wait near 2 s
-	// would mean the bound swelled to seconds (the old assertion allowed it).
-	if waited > 2*heartbeatTimeout {
-		t.Fatalf("Roster waited %v on a status route that never answers: the optional heartbeat read must be bounded by heartbeatTimeout (%s), not by the caller's request timeout", waited, heartbeatTimeout)
+	// The server records its client's hang-up on its own clock; wait for that goroutine to store it.
+	deadline := time.Now().Add(2 * time.Second)
+	for cancelled.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	// heartbeatTimeout (500 ms) is the optional read's own bound; the roster's timeout is 5 s here. The status
+	// handler's own clock is the read's bound, so a wait near seconds cannot pass as scheduling slack.
+	if waited := time.Duration(cancelled.Load()); waited == 0 || waited > heartbeatTimeout+250*time.Millisecond {
+		t.Fatalf("the status read was cancelled after %v: the optional heartbeat read must be bounded by heartbeatTimeout (%s), not by the caller's request timeout", waited, heartbeatTimeout)
 	}
 }
 

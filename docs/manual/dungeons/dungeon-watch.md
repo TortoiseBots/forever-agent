@@ -157,8 +157,10 @@ With `--out` the watch writes:
   per line, oldest first. The summary's `decisions` block counts them (`rows`, `pages`, `bytes`, `skipped`,
   `page_bound`) or says why none came (`note`). A run that ends by itself loses the rows after the watch's last
   read, because the module erases its capture with the run: at most one poll's rows are missing, and the `note` says
-  so and names the last sequence read, or says that no row was read. A run this watch stops itself has no such loss:
-  it reads once more before the stop.
+  so and names the last sequence read, or says that no row was read. A failed or slow read widens the missing window
+  (the rows after the last good read go with the capture): after a failure the watch waits longer before its next try
+  (2 s, then 4 s, 8 s and so on up to a minute), so a hanging module costs one 30 s bound now and then, not one on
+  every status poll. A run this watch stops itself has no such loss: it reads once more before the stop.
 
 The report card (`card: ...`) names the verdict `CLEARED`, `STOPPED AT <leg/step> (<reason>)` or `PAUSED-STUCK AT
 <leg/step> (<pause reason>)`, or `FAILED (<reason>)`, plus the flags (re-pulled steps, member deaths, slow legs)

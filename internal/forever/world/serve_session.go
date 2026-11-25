@@ -397,21 +397,22 @@ func (s *session) walkEndedInATransfer(ctx context.Context) (*ServeWalkMap, erro
 
 // serveWalkPath plans and walks a route as one continuous movement.
 func (s *session) serveWalkPath(ctx context.Context, x, y, z float32) (ServePath, error) {
+	if s.mover == nil {
+		return ServePath{}, errors.New("world: no mover for the walk")
+	}
+	// A path walked right after a teleport that left the character in the air waits for the landing first (teleport
+	// answers at the fall's start), as an ordinary walk does. The wait comes before the plan: the route's start must
+	// be the ground the character lands on, not the spot in the air that Detour cannot place.
+	if err := s.waitFallLanded(ctx); err != nil {
+		return ServePath{}, err
+	}
 	path, err := s.servePath(x, y, z)
 	if err != nil {
 		return ServePath{}, err
 	}
-	if s.mover == nil {
-		return ServePath{}, errors.New("world: no mover for the walk")
-	}
 	switch path.Status {
 	case string(navmesh.RoutePartial), string(navmesh.RouteNone):
 		return ServePath{}, fmt.Errorf("walk_path: no full route to %.1f %.1f %.1f (%s)", x, y, z, path.Status)
-	}
-	// A path walked right after a teleport that left the character in the air waits for the landing first (teleport
-	// answers at the fall's start), as an ordinary walk does.
-	if err := s.waitFallLanded(ctx); err != nil {
-		return ServePath{}, err
 	}
 	disarm := s.armWalkTriggers(path.Points)
 	defer disarm()

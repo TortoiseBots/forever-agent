@@ -122,7 +122,10 @@ the combat log uses, written while the run lives: the watch reads the new rows a
 apart, and once more just before it stops the run. A run that was not watched by this watch cannot be read afterwards;
 its rows are in the module's own folder. A run that ends by itself is one poll ahead of the last read, and the module
 erases the capture with the end: the rows after the last one read are gone, so at most one poll's rows are missing,
-and the summary's `note` says so and names the last `seq` that was read, or says that no row was read. The summary's
+and the summary's `note` says so and names the last `seq` that was read, or says that no row was read. A read that
+fails or runs into its 30 s bound widens that window (the rows after the last good read go with the capture too): the
+watch spaces its next tries out after failures (2 s, then 4 s, 8 s and so on up to a minute), so a module that hangs
+on every read costs one bound now and then, not one on every status poll. The summary keeps the failure in `note`. The summary's
 `decisions` block counts them (`rows`, `pages`, `bytes`, `skipped`) or says why none came (`note`), and says
 `page_bound` when one read stopped at its own 25-page bound: the next read continues above the cursor then, so nothing
 is lost. A gap that the module's own window made (a watch that attaches to a run already past its 512 rows) is not

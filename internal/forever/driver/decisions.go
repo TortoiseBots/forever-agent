@@ -34,6 +34,24 @@ const decisionsPullTimeout = 30 * time.Second
 // from hammering the module, which has no rate limit on this read (the access check is its whole guard).
 const decisionsReadGap = 2 * time.Second
 
+// decisionsRetryMax bounds the wait after consecutive failed reads (a minute): a module that hangs spends the read's
+// whole decisionsPullTimeout, so a run of failures is spaced out (4 s, 8 s, 16 s, 32 s, then this) instead of costing
+// each status poll its bound. A good read clears the count.
+const decisionsRetryMax = time.Minute
+
+// decisionsRetryGap is how long the watch waits after failures consecutive failed decisions reads: the floor on none,
+// then doubling per failure up to decisionsRetryMax.
+func decisionsRetryGap(failures int) time.Duration {
+	d := decisionsReadGap
+	for range failures {
+		d *= 2
+		if d >= decisionsRetryMax {
+			return decisionsRetryMax
+		}
+	}
+	return d
+}
+
 // decisionsFinalTimeout bounds the watch's last decisions read, the one just before the stop: the rows that arrived
 // since the last poll are only readable while the run lives, and a slow read must not eat into the stop's own budget,
 // so it has this short bound of its own and the stop goes out when it ends.
@@ -237,6 +255,7 @@ func (r *Run) watchPullDecisions(ctx context.Context, w *watchRun, bound time.Du
 		// The note of the last failed read: a later good read clears it, so a summary with rows does not keep saying
 		// the pull failed.
 		w.decisionsFail = note
+		w.decisionsFailures++
 		if errors.Is(err, ErrLinkLost) || errors.Is(err, tbcmd.ErrNotSupported) {
 			// Nothing is sent after a lost link, and a module build does not gain the command mid-run: no later read
 			// goes out either.
@@ -249,6 +268,7 @@ func (r *Run) watchPullDecisions(ctx context.Context, w *watchRun, bound time.Du
 		r.logf("decisions: the reads answer again")
 	}
 	w.decisionsFail = ""
+	w.decisionsFailures = 0
 	if pull.Run != "" {
 		if w.runID == "" {
 			w.runID = pull.Run
