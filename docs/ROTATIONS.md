@@ -4,7 +4,7 @@
 > yet, and `forever-agent help` says so. The Turtle stack is listed in [docs/turtle/README.md](turtle/README.md).
 
 A rotation is the priority list of one class and spec for the agent's own character, as a JSON file the bot brain plays instead of the Go
-strategy it replaces. The full reference is [Rotation file format](okf/combat/reference-rotation-format.md); this is the short version, and the recipe to test a change.
+strategy it replaces. The full reference is [Rotation file format](manual/turtle/combat/reference-rotation-format.md); this is the short version, and the recipe to test a change.
 
 ## The format (version 1)
 
@@ -28,7 +28,7 @@ strategy it replaces. The full reference is [Rotation file format](okf/combat/re
   `stance`), `threat`, `alt`, and `when`.
 - `when` is a closed set of conditions, all of which must hold: state (`combat`, `rest`, `any`), mobs and distances, health and power percents, auras on the
   character or the mob (`self_aura`, `no_self_aura`, `self_aura_missing`, `mob_aura`, `no_mob_aura`, `mob_stacks_below`, `mobs_lacking_aura`), `moving`,
-  `stance`, `after` a dodge or an avoided hit, `combo_points_min`. The full list is in [Rotation file format](okf/combat/reference-rotation-format.md). An unknown field is an error.
+  `stance`, `after` a dodge or an avoided hit, `combo_points_min`. The full list is in [Rotation file format](manual/turtle/combat/reference-rotation-format.md). An unknown field is an error.
 
 Built in: `frost_mage`, `fire_mage`, `arcane_mage`, `shadow_priest`, `arms_warrior`, `fury_warrior`, `tank_warrior` (`turtle-agent rotation list`). Put your own
 files in a folder and name it `rotations_dir` in the settings; names must be new (a built-in name is refused).

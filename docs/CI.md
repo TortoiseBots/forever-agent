@@ -1,6 +1,6 @@
 # CI jobs
 
-The workflows under `.github/workflows/` run four checks beside the `test` gate.
+The workflows under `.github/workflows/` run the checks beside the `test` gate.
 
 ## Running CI on a branch without a PR
 
@@ -15,7 +15,7 @@ branch), as parallel jobs that end in one job named `test` (12 jobs a run, at mo
 
 | Job | What it runs |
 |---|---|
-| `lint` | `make fmt-check vet nocgo`, the shard scripts' self-tests, `make cross`, the differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50 passed sub-tests fails the step, so the table cannot go green without Python), `make tools-test` (the automatic label rules and the label sync), `staticcheck ./...` with the pinned release **2026.2.2**, then a cgo build |
+| `lint` | `make fmt-check vet nocgo` (gofmt, `go vet`, a no-cgo build), `make docs-check` (the manual under `docs/manual` as an OKF bundle, its command and method coverage and the docs-sync decision: `tools/verify_okf.py`, `tools/verify_docs_sync.py` and their tests), the shard scripts' self-tests, `make cross`, the differential table against the pinned `TortoiseBots/tortoise-trials` checkout (Python 3.12; a skip or fewer than 50 passed sub-tests fails the step, so the table cannot go green without Python), `make tools-test` (the automatic label rules and the label sync), `staticcheck ./...` with the pinned release **2026.2.2**, then a cgo build |
 | `race-shards` | `go test -race -count=1 -timeout 20m` for the whole module in 9 jobs, at most 6 running at once, matrix `group` (`cmd`, `world`, `rest`) x `shard` (`0`..`2`), see below |
 | `race-shards-check` | fails unless what the 3 shards of each group ran, together, is exactly the group's full list, each once |
 | `test` | `needs` all three jobs, runs with `if: always()` and fails unless every one of them succeeded; this is the check branch protection requires (a skipped or cancelled job fails it too). A draft PR skips every job, `test` included, as before |
@@ -80,6 +80,21 @@ if [ -n "$re" ]; then
     go test -race -count=1 -timeout 20m -run "$re" ./cmd/forever-agent
 fi
 ```
+
+## `docs-sync.yml` — the docs follow the code
+
+Runs on non-draft pull requests (`opened`, `synchronize`, `reopened`, `edited`, `ready_for_review`). It runs
+`tools/verify_docs_sync.py`, which reads `git diff --name-only BASE...HEAD` and the diff's added lines, and fails
+when the pull request changes `cmd/forever-agent/`, an `internal/forever/world/serve*_methods.go`, or adds a line that
+calls the flag package (`fs.String`, `fs.Bool`, `fs.Duration`, `fs.Var`, ...), and changes nothing under `docs/manual/`
+or `README.md`. The failure message names the trigger and points at `DOCS-SYNC.md`. A pull request with a truly
+user-invisible change opts out with a line in its body starting `Docs: not needed` (the `edited` trigger re-runs the
+job when the body gains or loses that line). The body reaches the script through `PR_BODY`, never on a command line,
+so shell syntax in a body is only text; the job's permissions are `contents: read` and `pull-requests: read`, and its
+one action is pinned to a commit SHA.
+
+The decision function is pure and unit-tested (`tools/test_verify_docs_sync.py`, run by `make docs-check`). The job is
+not part of the `test` gate: require `docs-sync` in branch protection next to `test` to make it blocking.
 
 ## `navmesh.yml` — the real map files
 

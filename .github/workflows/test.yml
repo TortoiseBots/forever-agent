@@ -79,6 +79,11 @@ jobs:
       - name: Python tool tests (labels)
         run: make tools-test
 
+      # The user manual (docs/manual) is an OKF v0.2 bundle: tools/verify_okf.py checks every page's frontmatter,
+      # every index and log file, every link and the privacy rules; its own tests run first (make docs-check).
+      - name: user manual (OKF bundle) check
+        run: make docs-check
+
       - name: differential table against the pinned reference
         timeout-minutes: 20
         run: |

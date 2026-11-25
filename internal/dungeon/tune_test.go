@@ -709,7 +709,7 @@ func TestJSONDiffArrays(t *testing.T) {
 
 // The live-tuning page's table lists every tunable with its unit, limits and default, as the code has them.
 func TestReadmeListsEveryTunable(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "okf", "dungeons", "live-tuning.md"))
+	b, err := os.ReadFile(filepath.Join("..", "..", "docs", "manual", "turtle", "dungeons", "live-tuning.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
