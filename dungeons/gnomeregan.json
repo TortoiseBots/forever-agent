@@ -3,7 +3,7 @@
   "name": "gnomeregan",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-24: the Launch Bay entry does not walk on the Forever map-90 tiles: the leg-3 via-to hop stops 21.7 yd short)",
   "map": 90,
   "entrance": {"x": -329.098, "y": -3.20722, "z": -152.851},
   "entrance_trigger": 324,
@@ -36,7 +36,8 @@
     "Needs: Explosive Charges (GO_EXPLOSIVE_CHARGE) to open the north and south cave-ins (GO_CAVE_IN_NORTH/SOUTH) on the way in",
     "Needs: Grubbis (7361) has no spawn row",
     "The Back Entrance (trigger 523) puts the party deep inside; this plan starts at the front.",
-    "Leg 3's lower-deck 6212/6232 pack at -738.7 659.8 -323.4 (the pre-short-route rows' pull group 15) is no pull of this route: from leg 3's own walk the only way to it is the 265 yd lower-deck loop, which crosses the leg's -734.65 709.46 and -691.75 720.44 pulls and the packs at -724 698 and -706 693 this route drops, and the corridor above has no line to it (a navmesh ray hits 5 yd out, so the tank has no shot from there)."
+    "Leg 3's lower-deck 6212/6232 pack at -738.7 659.8 -323.4 (the pre-short-route rows' pull group 15) is no pull of this route: from leg 3's own walk the only way to it is the 265 yd lower-deck loop, which crosses the leg's -734.65 709.46 and -691.75 720.44 pulls and the packs at -724 698 and -706 693 this route drops, and the corridor above has no line to it (a navmesh ray hits 5 yd out, so the tank has no shot from there).",
+    "Forever check (2026-11-24, issue #223 batch 1, ForeverCore world DB, tools/dungeongen/export-forever.sh map 90: 404 normal spawns): plan-export --forever writes the rows (5 legs, 102 steps, 79 pulls, 19 moves, 4 bosses, 167 units) and refuses no field. No stand was moved: the 4 units the core has no spawn of within the group's radius are left at the 1.12 export's spots (6207 31.2 yd, 6211 35.0 yd, 6230 42.0 yd, and the 6212/6232 pack's 6232 21.6 yd away and 12.7 yd below the deck) rather than guessed across a floor or onto a pack the short route drops (the 6211 spot's nearest core spawn is 4.9 yd from the dropped pack at -571 115 -202). probe --forever: 4 MISSING units, 2 bad segments (78 ok, 21 warn) - the Crowd Pummeler platform to the Launch Bay: the boss row to leg 3's first via stops 28.9 yd short (multi-floor x,y) and the via-to hop 21.7 yd; forever_status refused until a Forever mapping walk sets the Launch Bay entry. plan-check --forever: 163 findings (62 fail: edge 42, ledge 5, short hop 17, aggro 2, patrol 15, hop_len 1, climb 9) plus 72 joiners; trash-check: 101 segments, 58 danger, 21 patrol, 17 own."
   ],
   "legs": [
     {

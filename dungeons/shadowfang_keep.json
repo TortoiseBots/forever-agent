@@ -3,7 +3,7 @@
   "name": "shadowfang_keep",
   "kind": "dungeon",
   "status": "live-checked",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-24: plan-export refuses the courtyard door's gossip step, the Turtle-only Sever/Prelate Ironmane/Mistblade Rippers have no ForeverCore spawn, and the baron hall's packs stand 34.6-99.9 yd from the keep's ForeverCore spawns)",
   "team": "horde",
   "map": 33,
   "entrance": {"x": -228.191, "y": 2111.41, "z": 76.8904},
@@ -34,7 +34,8 @@
     "Fix round 2026-10-23 (r25 shadowfang_keep slot5): leg 2's step-39 pull (one row of 12 court units at radius 22.1) is two pulls of three with their own stands and the rat taken out, and the walk up to the upper court goes through the stair's real top as approach points (see the baron_silverlaine leg). Legs 0-1 and 3-9 are unchanged from the 20261023180000 export.",
     "Not in the plan: Alliance parties open the courtyard cells through Ashcrombe (3850, gossip option 0, at -240.904 2122.55 81.2629) instead of Deathstalker Adamant (3849), and the schema has no team-specific step form (team gates only a pull group or a boss), so the courtyard_door leg carries Adamant's gossip alone; an Alliance run needs a second plan or a team field on gossip, plus AiPlayerbot.BotGossipNpcs += 3849,3850 (INTERACTIONS-VERIFIED-2026-10-24).",
     "Turtle adds Sever (14682), Prelate Ironmane (61969) and a second Arugal row (10000) that are not legs.",
-    "Fix round 2026-10-22 (PREP-SFK census): cc_priority = the Shadowfang Darksouls (3855, they shield themselves in shadow on aggro), the Spectral Clerics (61970, the court's casters) and the intro Arugal (10000, a 26 elite with 6510 hp that stands in the pull beside Odo's yard); all three have mechanic_immune_mask 0. No fleers in the legs of this file (only Ashcrombe 3850, a friendly, and Wolfguard Worg 5058, leg 6) and no cc_always/kill_first: no trash stuns the party and Springvale heals his own guards, but he is the pull target himself."
+    "Fix round 2026-10-22 (PREP-SFK census): cc_priority = the Shadowfang Darksouls (3855, they shield themselves in shadow on aggro), the Spectral Clerics (61970, the court's casters) and the intro Arugal (10000, a 26 elite with 6510 hp that stands in the pull beside Odo's yard); all three have mechanic_immune_mask 0. No fleers in the legs of this file (only Ashcrombe 3850, a friendly, and Wolfguard Worg 5058, leg 6) and no cc_always/kill_first: no trash stuns the party and Springvale heals his own guards, but he is the pull target himself.",
+    "Forever check (2026-11-24, issue #223 batch 1, ForeverCore world DB, tools/dungeongen/export-forever.sh map 33: 147 normal spawns): the Turtle-only members Sever (14682), Prelate Ironmane (61969) and the Mistblade Rippers (61970) stay in the plan because the Turtle stack needs them; the core has no spawn of them on map 33, so this plan is refused for Forever. plan-export --forever refuses the plan on legs[4].steps[0].gossip anyway - the module has no gossip row - so no rows are written; probe --forever was not run (nothing exported); plan-check --forever: 269 findings (74 fail: off-floor 8, edge 88, ledge 47, short hop 54, patrol 1, climb 17) plus 54 joiners; 3 Rat (4075) members and 18 Wolfguard/Darksoul positions have no core spawn within their radius (the baron hall's layout differs by 34.6 to 99.9 yd)."
   ],
   "legs": [
     {

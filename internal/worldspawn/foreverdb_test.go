@@ -259,18 +259,24 @@ func exportScript(t *testing.T) string {
 // starts with SELECT, and no write verb appears anywhere.
 func TestExportScriptSelectsOnly(t *testing.T) {
 	script := exportScript(t)
-	var mariadb string
+	var clientLine string
 	for _, line := range strings.Split(script, "\n") {
-		if strings.Contains(line, "exec mariadb") {
-			mariadb = line
+		if strings.Contains(line, "docker exec -i $ctr") {
+			clientLine = line
 			break
 		}
 	}
-	if mariadb == "" {
-		t.Fatal("no mariadb command line: query() is gone")
+	if clientLine == "" {
+		t.Fatal("no docker exec line: query() is gone")
 	}
-	if !strings.Contains(mariadb, "--init-command=") || !strings.Contains(mariadb, "SET SESSION TRANSACTION READ ONLY") {
-		t.Fatalf("the mariadb command line does not open a read-only session: %q", mariadb)
+	if !strings.Contains(clientLine, "mysql") || !strings.Contains(clientLine, "mariadb") {
+		t.Fatalf("the client line names neither mysql nor mariadb: %q", clientLine)
+	}
+	if !strings.Contains(clientLine, "MYSQL_ROOT_PASSWORD") || !strings.Contains(clientLine, "MARIADB_ROOT_PASSWORD") {
+		t.Fatalf("the client line does not expand the image's own root password variable: %q", clientLine)
+	}
+	if !strings.Contains(clientLine, "--init-command=") || !strings.Contains(clientLine, "SET SESSION TRANSACTION READ ONLY") {
+		t.Fatalf("the client line does not open a read-only session: %q", clientLine)
 	}
 	if write := regexp.MustCompile(`\b(?i:insert|update|delete|drop)\b`).FindString(script); write != "" {
 		t.Fatalf("the script contains the write verb %q", write)
@@ -297,8 +303,8 @@ func TestExportScriptSelectsOnly(t *testing.T) {
 		}
 		queries++
 	}
-	if queries != 8 {
-		t.Errorf("%d queries, want the six table blocks, the orphan count and the --all map list (portals.tsv is a header)", queries)
+	if queries != 9 {
+		t.Errorf("%d queries, want the six table blocks, the orphan count and the two --all map-list forms (portals.tsv is a header)", queries)
 	}
 	for _, file := range []string{"creatures.tsv", "groups.tsv", "movement.tsv", "movement_template.tsv", "gameobjects.tsv", "entrances.tsv", "portals.tsv"} {
 		if !strings.Contains(script, `> "$tmp/`+file+`"`) {
@@ -327,16 +333,22 @@ func TestExportScriptOneTuningRowPerID(t *testing.T) {
 // summary, and the phase behaviour is written down.
 func TestExportScriptNormalSpawnsAndMissingTemplates(t *testing.T) {
 	script := exportScript(t)
-	if !strings.Contains(script, `normal="FIND_IN_SET('0', REPLACE(c.spawnDifficulties, ' ', '')) > 0"`) {
+	if !strings.Contains(script, `normal="FIND_IN_SET('$diff', REPLACE(c.spawnDifficulties, ' ', '')) > 0"`) {
 		t.Error("the normal-difficulty filter is not defined")
 	}
-	if !strings.Contains(script, "SELECT DISTINCT c.map FROM creature c WHERE FIND_IN_SET('0', REPLACE(c.spawnDifficulties, ' ', '')) > 0") {
-		t.Error("the --all map list does not use the normal-difficulty filter")
+	if !strings.Contains(script, `diff=${DUNGEONGEN_DIFFICULTY:-1}`) {
+		t.Error("the difficulty id does not default to 1 (DIFFICULTY_NORMAL)")
+	}
+	if !strings.Contains(script, "SELECT DISTINCT c.map, -1, $diff FROM creature c WHERE FIND_IN_SET('$diff', REPLACE(c.spawnDifficulties, ' ', '')) > 0") {
+		t.Error("the explicit --all map list does not use the pinned difficulty filter")
+	}
+	if !strings.Contains(script, "SELECT c.map, IF(it.map IS NULL, 0, 1), GROUP_CONCAT") {
+		t.Error("the default --all map list does not resolve each map's class from instance_template")
 	}
 	if n := strings.Count(script, "$normal"); n != 5 {
 		t.Errorf("the normal-difficulty filter is used in %d creature queries, want 5 (the four blocks and the orphan count)", n)
 	}
-	if !strings.Contains(script, "FIND_IN_SET('0', REPLACE(g.spawnDifficulties, ' ', '')) > 0") {
+	if !strings.Contains(script, "FIND_IN_SET('$diff', REPLACE(g.spawnDifficulties, ' ', '')) > 0") {
 		t.Error("the gameobject query does not filter spawnDifficulties")
 	}
 	if !strings.Contains(script, "LEFT JOIN creature_template t ON t.entry = c.id") {
@@ -409,6 +421,26 @@ func TestExportScriptRejectsUnsafeEnv(t *testing.T) {
 	}
 }
 
+// TestExportScriptRejectsABadDifficulty: the difficulty id goes into the SQL filter, so anything but a number is
+// refused before docker runs.
+func TestExportScriptRejectsABadDifficulty(t *testing.T) {
+	dir := t.TempDir()
+	bin, called := writeStubDocker(t, dir, 0)
+	cmd := exec.Command("bash", filepath.Join("..", "..", "tools", "dungeongen", "export-forever.sh"), "700", filepath.Join(dir, "out"))
+	cmd.Env = scriptEnv(t, bin, map[string]string{"DUNGEONGEN_DIFFICULTY": "1) OR 1=1"})
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatal("the script accepted a difficulty that is not a number")
+	}
+	if !strings.Contains(stderr.String(), "DUNGEONGEN_DIFFICULTY") {
+		t.Errorf("the error does not name DUNGEONGEN_DIFFICULTY: %q", stderr.String())
+	}
+	if _, err := os.Stat(called); err == nil {
+		t.Error("docker was invoked with the unsafe value")
+	}
+}
+
 // TestExportScriptKeepsPreviousExportOnFailure: files are staged in a sibling directory and moved into place only after
 // every query finished, so a failed query leaves the previous export untouched instead of a mixed generation.
 func TestExportScriptKeepsPreviousExportOnFailure(t *testing.T) {
@@ -456,9 +488,10 @@ func writeAllStubDocker(t *testing.T, dir, maps, failMap string) string {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	body := "#!/bin/sh\nsql=$(cat)\n" +
+	// Every call logs its difficulty; --all now names each map's own (1 for an instance, 0 for open world).
+	body := "#!/bin/sh\nprintf '%s\\n' \"$DUNGEONGEN_DIFFICULTY\" >> " + filepath.Join(dir, "diffs") + "\nsql=$(cat)\n" +
 		"case \"$sql\" in\n" +
-		"  *'DISTINCT c.map'*) printf '" + maps + "';;\n"
+		"  *'DISTINCT c.map'*|*'GROUP BY c.map'*) printf '" + maps + "';;\n"
 	if failMap != "" {
 		body += "  *'c.map = " + failMap + " '*) exit 1;;\n"
 	}
@@ -469,18 +502,29 @@ func writeAllStubDocker(t *testing.T, dir, maps, failMap string) string {
 	return bin
 }
 
-// TestExportScriptAllWritesEveryMap: --all lists the maps with a normal spawn and writes <root>/map<N> for each, the
-// layout the plan tools read.
+// TestExportScriptAllWritesEveryMap: --all lists every map with a spawn and its own difficulty, and writes
+// <root>/map<N> for each, the layout the plan tools read.
 func TestExportScriptAllWritesEveryMap(t *testing.T) {
 	dir := t.TempDir()
-	bin := writeAllStubDocker(t, dir, `36\n389\n700\n`, "")
+	// 34: a normal dungeon (1). 1: open world (mode 0) with a stray difficulty-1 row: the class wins, so the child
+	// runs at 0. 700: an instance whose rows use 1 and 9, exported at the lower (1). 409: a classic raid (9).
+	bin := writeAllStubDocker(t, dir, `34\t1\t1\n1\t0\t0,1\n700\t1\t1,9\n409\t1\t9\n`, "")
 	root := filepath.Join(dir, "world")
+	// The previous root already has the open-world map: a refresh that discovered maps by one global difficulty
+	// dropped it, so this asserts it is rewritten rather than deleted.
+	if err := os.MkdirAll(filepath.Join(root, "map1"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "map1", "creatures.tsv"), []byte("previous\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cmd := exec.Command("bash", filepath.Join("..", "..", "tools", "dungeongen", "export-forever.sh"), "--all", root)
 	cmd.Env = scriptEnv(t, bin, nil)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("--all: %v\n%s", err, out)
 	}
-	for _, m := range []string{"36", "389", "700"} {
+	want := []string{"1", "34", "409", "700"}
+	for _, m := range want {
 		for _, f := range []string{"creatures.tsv", "groups.tsv", "movement.tsv", "gameobjects.tsv"} {
 			if _, err := os.Stat(filepath.Join(root, "map"+m, f)); err != nil {
 				t.Errorf("map %s: %v", m, err)
@@ -488,8 +532,23 @@ func TestExportScriptAllWritesEveryMap(t *testing.T) {
 		}
 	}
 	entries, _ := os.ReadDir(root)
-	if len(entries) != 3 {
-		t.Errorf("%d entries in the root, want 3 map folders", len(entries))
+	if len(entries) != len(want) {
+		t.Errorf("%d entries in the root, want %d map folders", len(entries), len(want))
+	}
+	diffs, err := os.ReadFile(filepath.Join(dir, "diffs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 0 proves the open-world map's class wins over its stray 1 row; 9 proves the raid is exported at its own id
+	// instead of an empty difficulty-1 folder.
+	for _, d := range []string{"0\n", "9\n"} {
+		if !strings.Contains(string(diffs), d) {
+			t.Errorf("no child export ran at difficulty %q: %q", strings.TrimSpace(d), diffs)
+		}
+	}
+	b, err := os.ReadFile(filepath.Join(root, "map1", "creatures.tsv"))
+	if err != nil || strings.Contains(string(b), "previous") {
+		t.Errorf("map1 = %q, %v: the open-world map of the previous root was not rewritten", b, err)
 	}
 }
 
@@ -497,7 +556,7 @@ func TestExportScriptAllWritesEveryMap(t *testing.T) {
 // and publishes nothing: the previous root is byte-identical (no hybrid generation), and no staging folder is left.
 func TestExportScriptAllKeepsThePreviousRootOnFailure(t *testing.T) {
 	dir := t.TempDir()
-	bin := writeAllStubDocker(t, dir, `36\n389\n700\n`, "389")
+	bin := writeAllStubDocker(t, dir, `36\t1\t1\n389\t1\t1\n700\t1\t1\n`, "389")
 	root := filepath.Join(dir, "world")
 	if err := os.MkdirAll(filepath.Join(root, "map36"), 0o755); err != nil {
 		t.Fatal(err)
@@ -529,11 +588,39 @@ func TestExportScriptAllKeepsThePreviousRootOnFailure(t *testing.T) {
 	}
 }
 
+// TestExportScriptAllStopsOnAnInstanceWithoutADifficulty: an instance map whose spawn rows are all difficulty 0 has no
+// honest export; the run stops, names it, and leaves the previous root byte-identical instead of publishing an empty
+// or guessed generation.
+func TestExportScriptAllStopsOnAnInstanceWithoutADifficulty(t *testing.T) {
+	dir := t.TempDir()
+	bin := writeAllStubDocker(t, dir, `700\t1\t0\n`, "")
+	root := filepath.Join(dir, "world")
+	if err := os.MkdirAll(filepath.Join(root, "map700"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(root, "map700", "creatures.tsv")
+	if err := os.WriteFile(old, []byte("previous\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("bash", filepath.Join("..", "..", "tools", "dungeongen", "export-forever.sh"), "--all", root)
+	cmd.Env = scriptEnv(t, bin, nil)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatal("--all exported an instance with no nonzero spawn difficulty")
+	}
+	if !strings.Contains(string(out), "map 700") {
+		t.Errorf("the error does not name map 700: %s", out)
+	}
+	if b, err := os.ReadFile(old); err != nil || string(b) != "previous\n" {
+		t.Errorf("map700 = %q, %v, want the previous root untouched", b, err)
+	}
+}
+
 // TestExportScriptAllDropsMapsTheDatabaseNoLongerLists: a rerun replaces the whole root, so a map folder of an earlier
 // export that the database no longer lists is gone and the listed maps carry the new files.
 func TestExportScriptAllDropsMapsTheDatabaseNoLongerLists(t *testing.T) {
 	dir := t.TempDir()
-	bin := writeAllStubDocker(t, dir, `36\n`, "")
+	bin := writeAllStubDocker(t, dir, `36\t1\t1\n`, "")
 	root := filepath.Join(dir, "world")
 	for _, m := range []string{"map36", "map999"} {
 		if err := os.MkdirAll(filepath.Join(root, m), 0o755); err != nil {
@@ -574,5 +661,102 @@ func TestExportScriptAllRejectsBadArgs(t *testing.T) {
 	cmd.Env = scriptEnv(t, bin, nil)
 	if err := cmd.Run(); err == nil {
 		t.Error("--all with no maps succeeded")
+	}
+}
+
+// TestForeverDBObjects: the export's gameobjects.tsv is read into World.Objects, the list the plan tools' object lint
+// checks a door, lever or chest step against; without the file the load says so in a note and the list stays empty.
+func TestForeverDBObjects(t *testing.T) {
+	w, _, err := LoadForeverDB(foreverExport, 700)
+	if err != nil {
+		t.Fatalf("LoadForeverDB: %v", err)
+	}
+	if len(w.Objects) != 2 {
+		t.Fatalf("%d objects, want the fixture's 2: %+v", len(w.Objects), w.Objects)
+	}
+	if o := w.Objects[0]; o.GUID != 900 || o.Entry != 16400 || o.Pos.X != 1 || o.Pos.Y != 2 || o.Pos.Z != 3 {
+		t.Errorf("object 0 = %+v, want guid 900 entry 16400 at 1 2 3", o)
+	}
+	dir := t.TempDir()
+	for _, f := range []string{"creatures.tsv", "groups.tsv"} {
+		b, err := os.ReadFile(filepath.Join(foreverExport, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	wn, notes, err := LoadForeverDB(dir, 700)
+	if err != nil {
+		t.Fatalf("LoadForeverDB without gameobjects.tsv: %v", err)
+	}
+	if len(wn.Objects) != 0 {
+		t.Errorf("%d objects without the file, want none", len(wn.Objects))
+	}
+	found := false
+	for _, n := range notes {
+		if strings.Contains(n, "gameobjects.tsv") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no note names the missing gameobjects.tsv: %v", notes)
+	}
+}
+
+// TestExportScriptUsesTheMapDifficultyForTemplateRows: the spawns are selected by the map's difficulty
+// (DUNGEONGEN_DIFFICULTY), so the creature_template_difficulty row that supplies ContentTuningID must be the same
+// difficulty. The core reads GetCreatureDifficulty (Creature.cpp:510, the map's difficulty) and falls back through
+// Difficulty.db2's chain, so a join fixed at DIFFICULTY_NONE (0) reads another row and exports the wrong level; the
+// 0 fallback is valid only for the normal (1) map. The test runs the script with a dungeon id (1) and a raid id (9)
+// and reads the SQL that reached the client: no database is available in CI, so the SQL is checked, not executed.
+func TestExportScriptUsesTheMapDifficultyForTemplateRows(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	queries := filepath.Join(dir, "queries")
+	// The docker stub records the SQL the script pipes in, and succeeds with no rows: every file then holds its
+	// header and the script publishes the generation.
+	stub := "#!/bin/sh\n{ echo \"=== query $DUNGEONGEN_DIFFICULTY\"; cat; } >> " + queries + "\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(stub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, diff := range []string{"1", "9"} {
+		cmd := exec.Command("bash", filepath.Join("..", "..", "tools", "dungeongen", "export-forever.sh"), "700", filepath.Join(dir, "map"+diff))
+		cmd.Env = scriptEnv(t, bin, map[string]string{"DUNGEONGEN_DIFFICULTY": diff})
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("difficulty %s: %v", diff, err)
+		}
+	}
+	b, err := os.ReadFile(queries)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, diff := range []string{"1", "9"} {
+		var q string
+		for _, block := range strings.Split(string(b), "=== query ") {
+			if strings.HasPrefix(block, diff+"\n") && strings.Contains(block, "FROM creature c") && !strings.Contains(block, "COUNT(*)") {
+				q = block
+				break
+			}
+		}
+		if q == "" {
+			t.Fatalf("no creatures query for difficulty %s in:\n%s", diff, b)
+		}
+		if !strings.Contains(q, "creature_template_difficulty d ON d.Entry = c.id AND d.DifficultyID = "+diff) {
+			t.Errorf("difficulty %s: the level join does not use the map's difficulty:\n%s", diff, q)
+		}
+		if !strings.Contains(q, "creature_template_difficulty df ON df.Entry = c.id AND df.DifficultyID = 0 AND d.Entry IS NULL AND "+diff+" = 1") {
+			t.Errorf("difficulty %s: the difficulty-0 row is not gated to the normal (1) fallback:\n%s", diff, q)
+		}
+		if !strings.Contains(q, "COALESCE(d.ContentTuningID, df.ContentTuningID)") {
+			t.Errorf("difficulty %s: the tuning id does not prefer the map's row:\n%s", diff, q)
+		}
+		if !strings.Contains(q, "FIND_IN_SET('"+diff+"', REPLACE(c.spawnDifficulties, ' ', ''))") {
+			t.Errorf("difficulty %s: the spawn filter did not expand the same id:\n%s", diff, q)
+		}
 	}
 }
