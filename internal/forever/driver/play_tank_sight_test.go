@@ -499,3 +499,30 @@ func TestPlayTankSightBudgetIsOnePerPull(t *testing.T) {
 		t.Fatalf("%d sight queries in one pull; want at most the one budget of %d", n, PlayTankSightSpots)
 	}
 }
+
+// TestPlayTankSightSamplesDoNotMoveTheApproachBaseline: the sight search reads other packs' clearance with a baseline
+// of its own. Its path starts at the TANK, and keeping the tank's distances in the agent approach's baseline would let
+// a later approach walk nearer a pack than the agent's own stand allowed (a tank farther away would drop a baseline
+// the agent is still inside). A sight sample build is read-only toward that state.
+func TestPlayTankSightSamplesDoNotMoveTheApproachBaseline(t *testing.T) {
+	near := Unit{GUID: fightGUID(7), Entry: 11322, Pos: Vec3{0, 10, 0}}
+	far := Unit{GUID: fightGUID(8), Entry: 11322, Pos: Vec3{0, 100, 0}}
+	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) {
+		f.AddUnit(near)
+		f.AddUnit(far)
+	})
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports}
+	p.pullStand = Vec3{0, 0, 0}
+	// The agent's own approach stood 15 yd from the near hostile (inside its clearance) and 4 yd from the far one.
+	p.approachBase = map[wire.GUID]float64{near.GUID: 15, far.GUID: 4}
+	skull := Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{40, 22, 0}}
+	// The tank's path starts at (0,0): 10 yd from the near hostile (inside the clearance, nearer than the agent) and
+	// 100 yd from the far one (outside it).
+	p.tankSightSamples(0, []Vec3{{0, 0, 0}, {40, 22, 0}}, skull)
+	if got := p.approachBase[near.GUID]; got != 15 {
+		t.Fatalf("the agent's baseline for the near hostile is %.1f yd; want its own 15 untouched by the tank's 10", got)
+	}
+	if got, ok := p.approachBase[far.GUID]; !ok || got != 4 {
+		t.Fatalf("the agent's baseline for the far hostile is %.1f yd (held %v); want its own 4 kept", got, ok)
+	}
+}

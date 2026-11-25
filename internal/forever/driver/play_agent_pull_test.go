@@ -1492,7 +1492,7 @@ func TestPackOnPathMeasuresFromThePullsFirstPlan(t *testing.T) {
 	if base >= PlayAgentApproachPackYd {
 		t.Fatalf("the test's hostile stands %.1f yd from the start; want it inside the %v yd clearance", base, PlayAgentApproachPackYd)
 	}
-	if _, _, blocked := p.packOnPath(-1, skull, []Vec3{livePullSelf, skull}, 0); !blocked {
+	if _, _, blocked := p.packOnPath(-1, skull, []Vec3{livePullSelf, skull}, 0, p.approachBase); !blocked {
 		t.Fatal("the path toward the skull did not block on the hostile inside the start's clearance")
 	}
 	if got := p.approachBase[fightGUID(40)]; got != base {
@@ -1506,7 +1506,7 @@ func TestPackOnPathMeasuresFromThePullsFirstPlan(t *testing.T) {
 		livePullSelf[1] + (hostile[1]-livePullSelf[1])*step,
 		livePullSelf[2] + (hostile[2]-livePullSelf[2])*step,
 	}
-	at, _, blocked := p.packOnPath(-1, skull, []Vec3{near, skull}, 0)
+	at, _, blocked := p.packOnPath(-1, skull, []Vec3{near, skull}, 0, p.approachBase)
 	if !blocked {
 		t.Fatal("the second plan did not block")
 	}
@@ -1534,7 +1534,7 @@ func TestPackOnPathForgetsTheStartInsideOnceOutside(t *testing.T) {
 		approachBase: map[wire.GUID]float64{}}
 	target := Vec3{0, 0, 200}
 	// Pass 1 stands 8 yd from the hostile (inside the clearance) and its path walks away and out: the base is recorded.
-	if _, _, blocked := p.packOnPath(-1, target, []Vec3{{8, 0, 0}, target}, 0); blocked {
+	if _, _, blocked := p.packOnPath(-1, target, []Vec3{{8, 0, 0}, target}, 0, p.approachBase); blocked {
 		t.Fatal("the first plan blocked although its path walks away from the hostile")
 	}
 	if got := p.approachBase[fightGUID(43)]; got != 8 {
@@ -1542,7 +1542,7 @@ func TestPackOnPathForgetsTheStartInsideOnceOutside(t *testing.T) {
 	}
 	// Pass 2 starts 35 yd away (outside the clearance) and its path passes the hostile at 7.5 yd: the block is the
 	// plain radius' entry at 13 yd along, not the recorded 7.5 yd radius' entry at 27.5 yd along.
-	at, _, blocked := p.packOnPath(-1, target, []Vec3{{35, 0, 0}, {7.5, 0, 0}, {7.5, -40, 0}}, 0)
+	at, _, blocked := p.packOnPath(-1, target, []Vec3{{35, 0, 0}, {7.5, 0, 0}, {7.5, -40, 0}}, 0, p.approachBase)
 	if !blocked {
 		t.Fatal("the second plan did not block on a path that passes the hostile at 7.5 yd")
 	}
@@ -1570,7 +1570,7 @@ func TestPackOnPathForgetsAHostilesBaselineWhileItIsOutOfView(t *testing.T) {
 	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults(),
 		approachBase: map[wire.GUID]float64{}}
 	target := Vec3{0, 0, 200}
-	if _, _, blocked := p.packOnPath(-1, target, []Vec3{{8, 0, 0}, target}, 0); blocked {
+	if _, _, blocked := p.packOnPath(-1, target, []Vec3{{8, 0, 0}, target}, 0, p.approachBase); blocked {
 		t.Fatal("the first plan blocked although its path walks away from the hostile")
 	}
 	if got := p.approachBase[fightGUID(45)]; got != 8 {
@@ -1578,14 +1578,14 @@ func TestPackOnPathForgetsAHostilesBaselineWhileItIsOutOfView(t *testing.T) {
 	}
 	// The hostile drops out of the view while the agent is away from it: the plan cannot see it, and its baseline goes.
 	rig.fake.RemoveUnit(fightGUID(45))
-	_, _, _ = p.packOnPath(-1, target, []Vec3{{35, 0, 0}, target}, 0)
+	_, _, _ = p.packOnPath(-1, target, []Vec3{{35, 0, 0}, target}, 0, p.approachBase)
 	if _, ok := p.approachBase[fightGUID(45)]; ok {
 		t.Fatal("the baseline of a hostile the view no longer carries survived")
 	}
 	// It reappears with the agent 20 yd away: the path blocks at that start's own clearance (19.5 yd), not at a stale
 	// 7.5 yd one 12.5 yd along.
 	rig.fake.AddUnit(Unit{GUID: fightGUID(45), Entry: 11975, Pos: hostile})
-	at, _, blocked := p.packOnPath(-1, target, []Vec3{{20, 0, 0}, {7.5, 0, 0}, {7.5, -40, 0}}, 0)
+	at, _, blocked := p.packOnPath(-1, target, []Vec3{{20, 0, 0}, {7.5, 0, 0}, {7.5, -40, 0}}, 0, p.approachBase)
 	if !blocked {
 		t.Fatal("the reappeared hostile's path did not block")
 	}

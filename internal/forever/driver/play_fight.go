@@ -761,7 +761,10 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 func (p *playRun) tankSightSamples(group int, points []Vec3, u Unit) ([]Vec3, Unit) {
 	cut := math.Inf(1)
 	var blocker Unit
-	if enter, b, blocked := p.packOnPath(group, u.Pos, points, 0); blocked {
+	// The sample build reads the clearance with a baseline of its own: the path starts at the TANK, and writing the
+	// tank's distances into the agent approach's baseline would let a later approach walk nearer a pack than the agent's
+	// own stand allowed (the sight search is read-only toward that state).
+	if enter, b, blocked := p.packOnPath(group, u.Pos, points, 0, nil); blocked {
 		cut, blocker = math.Max(0, enter-PlayAgentPullMarginYd), b
 	}
 	out := make([]Vec3, 0, len(points))
@@ -2006,7 +2009,7 @@ func (p *playRun) agentApproachPoint(group int, at Vec3) (Vec3, []Vec3, string, 
 	if dist3(p.pullStand, to) > PlayAgentApproachPastYd {
 		return Vec3{}, nil, "past-stand", Unit{}, 0, false
 	}
-	if enterAt, blocker, blocked := p.packOnPath(group, at, route.Points, stop); blocked {
+	if enterAt, blocker, blocked := p.packOnPath(group, at, route.Points, stop, p.approachBase); blocked {
 		blockerYd := dist3(blocker.Pos, at)
 		clear := enterAt - PlayAgentPullMarginYd
 		if clear <= PlayArriveYd {
@@ -2021,8 +2024,10 @@ func (p *playRun) agentApproachPoint(group int, at Vec3) (Vec3, []Vec3, string, 
 	return to, pathPrefix(route.Points, walked), "", Unit{}, 0, true
 }
 
-// packOnPath reports the first live hostile the approach's walked path comes within PlayAgentApproachPackYd of, and
-// how far along that path the walk first reaches it: the walk would draw that pack into the fight with the pull. The
+// packOnPath reports the first live hostile the path comes within PlayAgentApproachPackYd of, and how far along that
+// path the walk first reaches it: the walk would draw that pack into the fight with the pull. base is where each
+// hostile's start-inside distance is kept: the agent approach passes its own map (kept across its re-plans), and a
+// caller whose path starts somewhere else passes nil for a map of its own, so it cannot move the agent's baseline. The
 // path is the navmesh polyline from the agent to the mob, walked from its start to stop yd short of its end. The units
 // are the view's: any live hostile the pull is not taking - another pack of the plan, a patrol no plan group claims,
 // a stranger - but not one already fighting the party, not one within PlayAssistYd of the skull (that is the pull's own
@@ -2031,7 +2036,10 @@ func (p *playRun) agentApproachPoint(group int, at Vec3) (Vec3, []Vec3, string, 
 // already stands inside a hostile's clearance, the path blocks only where it comes nearer to that hostile than the
 // agent stands now (less PlayAgentApproachStartEpsYd); outside it the clearance is the plain radius. A pack the view
 // does not carry is unknown and blocks nothing.
-func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64) (float64, Unit, bool) {
+func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64, base map[wire.GUID]float64) (float64, Unit, bool) {
+	if base == nil {
+		base = map[wire.GUID]float64{}
+	}
 	limit := pathLength(points) - stop
 	if limit <= 0 {
 		return 0, Unit{}, false
@@ -2075,17 +2083,14 @@ func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64
 		radius := PlayAgentApproachPackYd
 		here := dist3(points[0], u.Pos)
 		if here < radius {
-			if base, ok := p.approachBase[u.GUID]; ok {
-				here = base
+			if kept, ok := base[u.GUID]; ok {
+				here = kept
 			} else {
-				if p.approachBase == nil {
-					p.approachBase = map[wire.GUID]float64{}
-				}
-				p.approachBase[u.GUID] = here
+				base[u.GUID] = here
 			}
 			radius = here - PlayAgentApproachStartEpsYd
 		} else {
-			delete(p.approachBase, u.GUID)
+			delete(base, u.GUID)
 		}
 		if radius <= 0 {
 			continue
@@ -2097,7 +2102,7 @@ func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64
 	// A hostile the view no longer carries is unknown: its remembered distance goes with it, so a later sighting cannot
 	// reuse a baseline taken before the walk left the clearance (the unit dropped out of sight in between, and no pass
 	// looked at it to drop the value).
-	for g := range p.approachBase {
+	for g := range base {
 		present := false
 		for _, u := range units {
 			if u.GUID == g {
@@ -2106,7 +2111,7 @@ func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64
 			}
 		}
 		if !present {
-			delete(p.approachBase, g)
+			delete(base, g)
 		}
 	}
 	if math.IsInf(best, 1) {
