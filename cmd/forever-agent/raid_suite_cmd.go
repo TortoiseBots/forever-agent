@@ -167,6 +167,9 @@ type raidSuite struct {
 	// fworld is the slots table a `--forever` suite resolves its entries against and holds their leases in (nil
 	// without --forever).
 	fworld *autoForeverWorld
+	// holder is this invocation's lease holder: the process and its start instant, so two suites running one plan
+	// never share a holder name and cannot adopt each other's lease.
+	holder string
 	stdout io.Writer
 	stderr io.Writer
 }
@@ -193,7 +196,8 @@ func raidSuiteCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	if code != exitOK {
 		return code
 	}
-	s := &raidSuite{o: o, history: slots.ExpandTilde(o.history), stdout: stdout, stderr: stderr}
+	s := &raidSuite{o: o, history: slots.ExpandTilde(o.history), stdout: stdout, stderr: stderr,
+		holder: fmt.Sprintf("raid-suite-%d-%d", os.Getpid(), time.Now().UnixNano())}
 	if o.dryRun {
 		for _, e := range entries {
 			fmt.Fprintln(stdout, s.dryLine(e))
@@ -610,7 +614,7 @@ func (s *raidSuite) walkForever(ctx context.Context, e raidSuiteEntry, prep raid
 		rep.Verdict, rep.Reason = suiteSkipped, "interrupted"
 		return false
 	}
-	target := raidwalk.AutoTarget{ID: e.Plan, Server: e.Server, Slot: e.Slot, Holder: "raid-suite-" + e.Plan, Args: args}
+	target := raidwalk.AutoTarget{ID: e.Plan, Server: e.Server, Slot: e.Slot, Holder: s.holder, Args: args}
 	f, err := s.fworld.resolve(target)
 	if err != nil {
 		rep.Verdict, rep.Reason = suiteRefused, err.Error()

@@ -411,3 +411,30 @@ func TestRaidSuiteForeverWatchPanicReleasesTheLease(t *testing.T) {
 		t.Fatalf("the slot is not free after the panic: %v", err)
 	}
 }
+
+// TestRaidSuiteForeverHolderIsPerInvocation: a lease held in the name the plan alone would give ("raid-suite-<plan>")
+// belongs to another suite, and this one refuses the slot instead of renewing it as its own. Two suites on one plan
+// and slot therefore never share an account.
+func TestRaidSuiteForeverHolderIsPerInvocation(t *testing.T) {
+	rig := newRaidForeverRig(t)
+	slotsPath := raidForeverSlots(t)
+	store := raidForeverStore(t, slotsPath)
+	const other = "raid-suite-onyxias_lair"
+	if _, err := store.Acquire("fv1", "2", false, other, autoForeverLeaseTTL); err != nil {
+		t.Fatal(err)
+	}
+	_, rep, stderr := raidForeverRun(t, slotsPath, raidForeverEntry())
+	if len(rep.Raids) != 1 || rep.Raids[0].Verdict != suiteRefused {
+		t.Fatalf("report = %+v; want the slot refused (stderr %q)", rep.Raids, stderr)
+	}
+	if len(rig.args) != 0 || len(rig.setups) != 0 {
+		t.Fatalf("a watch ran on another suite's lease: setups %v, watches %v", rig.setups, rig.args)
+	}
+	l, err := store.Get("fv1", "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l == nil || l.Holder != other {
+		t.Fatalf("the other suite's lease = %+v; want it left alone", l)
+	}
+}
