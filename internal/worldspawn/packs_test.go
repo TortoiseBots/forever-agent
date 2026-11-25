@@ -148,3 +148,51 @@ func TestPacksPatrolAndPooled(t *testing.T) {
 		t.Errorf("packs 70/71 marked pooled without a pool")
 	}
 }
+
+// TestPackIndexPinsTheLinkFlags: PackIndex is the plan check's link oracle, and it holds the pack rules Packs does — a
+// group links only when its rows aggro together, a creature_linking edge only with an aggro flag — plus one reading for
+// an export with no group_flags column at all, where the leader rows are the only evidence of a group.
+func TestPackIndexPinsTheLinkFlags(t *testing.T) {
+	aggroGroup := &World{Spawns: []Spawn{
+		{GUID: 1, Faction: 14, GroupLeader: 1, GroupFlags: AggroTogether},
+		{GUID: 2, Faction: 14, GroupLeader: 1, GroupFlags: AggroTogether},
+		{GUID: 3, Faction: 14},
+	}}
+	idx := aggroGroup.PackIndex()
+	if idx[1] != idx[2] {
+		t.Fatal("an AGGRO_TOGETHER group's members are not one set")
+	}
+	if idx[1] == idx[3] {
+		t.Fatal("a spawn outside the group is in it")
+	}
+
+	formation := &World{Spawns: []Spawn{
+		{GUID: 10, Faction: 14, GroupLeader: 10, GroupFlags: FormationMove},
+		{GUID: 11, Faction: 14, GroupLeader: 10, GroupFlags: FormationMove},
+	}}
+	if idx := formation.PackIndex(); idx[10] == idx[11] {
+		t.Fatal("a formation-only group is one set")
+	}
+
+	links := &World{
+		Spawns: []Spawn{{GUID: 20, Faction: 14}, {GUID: 21, Faction: 14}, {GUID: 22, Faction: 14}},
+		Links:  []Link{{Slave: 21, Master: 20, Flag: 0x0100}, {Slave: 22, Master: 21, Flag: linkAggro}},
+	}
+	idx = links.PackIndex()
+	if idx[20] == idx[21] {
+		t.Fatal("a link without an aggro flag is one set")
+	}
+	if idx[21] != idx[22] {
+		t.Fatal("an aggro link is two sets")
+	}
+
+	// No group_flags anywhere: the leader rows are the whole group record.
+	bare := &World{Spawns: []Spawn{{GUID: 30, Faction: 14, GroupLeader: 30}, {GUID: 31, Faction: 14, GroupLeader: 30}, {GUID: 32, Faction: 14}}}
+	idx = bare.PackIndex()
+	if idx[30] != idx[31] {
+		t.Fatal("a leader-only export's group rows are not one set")
+	}
+	if idx[30] == idx[32] {
+		t.Fatal("a leader-only export links a spawn outside its groups")
+	}
+}

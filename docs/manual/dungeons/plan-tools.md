@@ -93,8 +93,9 @@ avoid box`, `server unreachable` (the server's own query refuses the hop), `hop 
 point is within 3 yd of the one before, so the run never sends the move) and `key` (a keyed object without its
 item, or an item nothing provides). Warnings are `needless direct`, `estimated patrol period` and `pack spread` (a
 pull group whose members stand more than 20 yd apart, `PackSpreadYd`, on spawns the world data does not link as one
-pack: `creature_groups` is what links a real pack, and no stand is in the sight of both, so the tank may refuse the far
-member — split the group, or keep it on purpose and read the warning as the price of one planned pull). `pack spread`
+pack: a `creature_groups` group that aggros together, or a `creature_linking` edge with an aggro flag, is what links a
+real pack — a formation-only group and a plain link are not one — and no stand is in the sight of both, so the tank may
+refuse the far member. Split the group, or keep it on purpose and read the warning as the price of one planned pull). `pack spread`
 reads the world export like the aggro lints, so a map without one is not judged. None of the three fails the plan. Hops the plan
 exempts with `check_skip` are listed with the plan's reason.
 

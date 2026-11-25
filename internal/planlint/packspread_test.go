@@ -40,6 +40,39 @@ func TestPackLinkOracle(t *testing.T) {
 	if PackLinkOracle(nil) != nil {
 		t.Fatal("no world export gave an oracle")
 	}
+
+	// A formation-only group does not wake together: its far members are no pack, and the warning must stand.
+	formLeader := worldspawn.Spawn{GUID: 10, Entry: 100, Faction: 14, Pos: dungeon.Point{X: 0}, GroupLeader: 10, GroupFlags: worldspawn.FormationMove}
+	formMate := worldspawn.Spawn{GUID: 11, Entry: 100, Faction: 14, Pos: dungeon.Point{X: 40}, GroupLeader: 10, GroupFlags: worldspawn.FormationMove}
+	// A creature_linking edge without an aggro flag wakens nothing a pull shares; one with it does.
+	plain := worldspawn.Spawn{GUID: 12, Entry: 100, Faction: 14, Pos: dungeon.Point{X: 80}}
+	aggro := worldspawn.Spawn{GUID: 13, Entry: 100, Faction: 14, Pos: dungeon.Point{X: 120}}
+	flagged := &worldspawn.World{Map: 1, Spawns: []worldspawn.Spawn{formLeader, formMate, plain, aggro},
+		Links: []worldspawn.Link{{Slave: 12, Master: 10, Flag: 0x0100}, {Slave: 13, Master: 12, Flag: 0x0001}}}
+	lf := PackLinkOracle(flagged)
+	if lf(at(0), at(40)) {
+		t.Fatal("a formation-only group is one pack")
+	}
+	if !lf(at(80), at(120)) {
+		t.Fatal("an aggro link is no pack")
+	}
+	if lf(at(0), at(80)) {
+		t.Fatal("a link without an aggro flag is one pack")
+	}
+
+	// An older export with no group_flags column at all names only who leads whom: the leader rows are the group.
+	bare := &worldspawn.World{Map: 1, Spawns: []worldspawn.Spawn{
+		{GUID: 20, Entry: 100, Faction: 14, Pos: dungeon.Point{X: 0}, GroupLeader: 20},
+		{GUID: 21, Entry: 100, Faction: 14, Pos: dungeon.Point{X: 30}, GroupLeader: 20},
+		{GUID: 22, Entry: 100, Faction: 14, Pos: dungeon.Point{X: 200}},
+	}}
+	lb := PackLinkOracle(bare)
+	if !lb(at(0), at(30)) {
+		t.Fatal("the leader-only export's own group rows are no pack")
+	}
+	if lb(at(0), at(200)) {
+		t.Fatal("a spawn outside any leader row is one pack")
+	}
 }
 
 // TestPackSpreadOverEveryPlan prints the packs the plan check flags in every plan whose map has a world export in the
