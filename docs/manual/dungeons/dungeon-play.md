@@ -181,9 +181,10 @@ the module's read-only `.tb los` query — the one line of the player run's comm
   where the path first enters **another pack's clearance** (`PlayAgentApproachPackYd`, the fallback approach's own
   rule: the pull's own units, the party's pets and critters are not counted; the blocker is recorded, see below). Each
   sample is asked as a spot on the ground with the eye at 2 yd above it (`PlayLosEyeYd`); the agent walks to the first
-  sample the server clears and then steps **forward** along the path from the sample nearest its own stand
-  (`PlayAgentLeadYd` a step, the path's last sample ahead when less is left) until the tank itself sees the unit — the
-  step never goes back toward the tank, which is what run 4 did for every try.
+  sample **ahead of its own stand** (the sample nearest it, never one behind it toward the tank) that the server
+  clears, and then steps forward along the path (`PlayAgentLeadYd` a step, the path's last sample ahead when less is
+  left) until the tank itself sees the unit — neither step ever goes back toward the tank, which is what run 4 did for
+  every try.
 - **One sight budget a pull**: at most 24 queries (`PlayTankSightSpots`) and 60 s (`PlayTankSightTime`) from the
   first look cover the skull pick, the stand walk and the search after **every** tank refusal together, and the
   refusal path's own 90 s (`PlayRefuseTime` from the first refusal) caps what is left. Spent, the pull goes on as it

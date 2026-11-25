@@ -689,7 +689,11 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 	}
 	stand := Vec3{}
 	walked := false
-	for _, at := range samples {
+	// The scan starts at the sample nearest the agent's own stand, never at the tank's first one: a spot behind the
+	// agent that clears (it stands between the agent and the tank) would walk the leader BACK toward the tank, which is
+	// the live failure the lead step fixed.
+	near := nearestSample(samples, p.self)
+	for _, at := range samples[max(near, 0):] {
 		// The budget is read before every query: a long, wholly blocked path is no unbounded loop.
 		if !budget.take(p.now()) {
 			return false, true

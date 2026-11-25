@@ -526,3 +526,51 @@ func TestPlayTankSightSamplesDoNotMoveTheApproachBaseline(t *testing.T) {
 		t.Fatalf("the agent's baseline for the far hostile is %.1f yd (held %v); want its own 4 kept", got, ok)
 	}
 }
+
+// TestPlayTankSightStandStartsAtTheAgent: the stand scan looks forward from the sample nearest the agent's own stand.
+// A spot that clears BEHIND the agent (it stands between the agent and the trailing tank) must not walk the leader
+// back toward the tank: that is the same backward step the lead loop was fixed for, taken before the loop even runs.
+func TestPlayTankSightStandStartsAtTheAgent(t *testing.T) {
+	skull := fightGUID(1)
+	// The server clears a spot only from y >= 2: the trailing tank (y 0) is blind, and so is the path's start, but the
+	// samples from 2 yd up clear — the first of them still behind the agent, which stands on the plan's stand at y 5.
+	sight := func(from, to Vec3) bool { return dist3(to, Vec3{42, 22, 0}) > 1 || from[1] >= 2 }
+	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: skull, Entry: 11320, Pos: Vec3{42, 22, 0}})
+		f.SpawnBosses()
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		f.TrailYd = PlayTankBesideYd
+		f.SrvSight, f.ModuleSight = sight, sight
+	})
+	rig.ports.ServerSight, rig.ports.Refusals = rig.fake, rig.fake
+	rig.cfg.Out = t.TempDir()
+	looks := recordTankLooks(rig.fake)
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		dumpPlay(t, rig)
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 0 {
+		t.Fatalf("%d fallback pulls; want none", n)
+	}
+	ev := playEvents(t, rig)["pull_sight_stand"]
+	if ev.Ev == "" {
+		t.Fatal("the pull recorded no pull_sight_stand event")
+	}
+	if len(*looks) == 0 {
+		t.Fatal("the tank was never looked at")
+	}
+	x, _ := ev.D["x"].(float64)
+	y, _ := ev.D["y"].(float64)
+	z, _ := ev.D["z"].(float64)
+	stand, tank := Vec3{float32(x), float32(y), float32(z)}, (*looks)[0]
+	if d, own := dist3(stand, tank), dist3(Vec3{40, 5, 0}, tank); d < own-0.01 {
+		dumpPlay(t, rig)
+		t.Fatalf("the search's stand %v stands %.1f yd from the tank at %v; the agent's own stand is %.1f yd away: the scan walked back toward the tank", stand, d, tank, own)
+	}
+	for i := 1; i < len(*looks); i++ {
+		if (*looks)[i][1] < (*looks)[i-1][1]-0.01 {
+			t.Fatalf("the tank's look %d was from %v after %v; the search moved it back", i, (*looks)[i], (*looks)[i-1])
+		}
+	}
+}
