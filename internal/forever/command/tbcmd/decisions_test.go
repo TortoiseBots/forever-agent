@@ -1,0 +1,278 @@
+package tbcmd
+
+// The decisions read: the module's bounded, paged answer of a run's decision rows, the strict parse of every record,
+// the pager's cursor and its own bound, and the refusals that end it. The lines copy the command's documented shape
+// (a header record, one row per line, then the end marker), never a capture.
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/pjerra/forever-agent/internal/forever/command"
+)
+
+func decisionsHeader(count, since, next int, more string) string {
+	return fmt.Sprintf("decisions run=r-20261124T190001-a1b2 lead=Tankbot plan=ragefire_chasm capture=cap-7 "+
+		"count=%d since=%d next=%d more=%s #T", count, since, next, more)
+}
+
+func decisionRow(seq int) string {
+	return fmt.Sprintf("decision seq=%d t=%d dt=200 state=running phase=walk step=3 record=tick "+
+		"order=attack%%20the%%20skull note=all%%20good say= #T", seq, 1764000000000+seq*200)
+}
+
+func decisionsEnd(count, next int, more string) string {
+	return fmt.Sprintf("run-end count=%d records=%d verb=decisions lead=Tankbot next=%d more=%s #T",
+		count, count, next, more)
+}
+
+func TestRunDecisionsEveryKey(t *testing.T) {
+	row := "decision seq=6 t=1764000001200 dt=200 state=paused phase=wait step=17 record=stub " +
+		"order=attack%20the%20skull note=refused%3A%20revive%20party say=hold%20on trunc=yes future_key=a%23b #T"
+	r := oneReply("run-begin #T", decisionsHeader(1, 5, 6, "no"), row, decisionsEnd(2, 6, "no"))
+	page, err := NewClient(r).RunDecisions(context.Background(), "Tankbot", 5, true, 0)
+	if err != nil {
+		t.Fatalf("RunDecisions: %v", err)
+	}
+	if want := ".tb run decisions Tankbot since=5 limit=200"; r.seen[0] != want {
+		t.Fatalf("line %q, want %q", r.seen[0], want)
+	}
+	h := page.Header
+	if h.Run != "r-20261124T190001-a1b2" || h.Lead != "Tankbot" || h.Plan != "ragefire_chasm" ||
+		h.Capture != "cap-7" || h.Count != 1 || h.Since != 5 || h.Next != 6 || h.More {
+		t.Fatalf("header: %+v", h)
+	}
+	if len(page.Rows) != 1 {
+		t.Fatalf("%d row(s)", len(page.Rows))
+	}
+	d := page.Rows[0]
+	if d.Seq != 6 || d.T != 1764000001200 || d.DT != 200 || d.State != "paused" || d.Phase != "wait" || d.Step != 17 {
+		t.Fatalf("row: %+v", d)
+	}
+	if d.Record != "stub" || !d.Trunc || d.Order != "attack the skull" || d.Note != "refused: revive party" || d.Say != "hold on" {
+		t.Fatalf("row text: %+v", d)
+	}
+	if d.Extra["future_key"] != "a#b" {
+		t.Fatalf("extra key kept as %q", d.Extra["future_key"])
+	}
+}
+
+func TestRunDecisionsWithoutSince(t *testing.T) {
+	r := oneReply("run-begin #T", decisionsHeader(0, 0, 0, "no"), decisionsEnd(1, 0, "no"))
+	if _, err := NewClient(r).RunDecisions(context.Background(), "r-20261124T190001-a1b2", 0, false, 25); err != nil {
+		t.Fatalf("RunDecisions: %v", err)
+	}
+	if want := ".tb run decisions r-20261124T190001-a1b2 limit=25"; r.seen[0] != want {
+		t.Fatalf("line %q, want %q", r.seen[0], want)
+	}
+}
+
+// TestPullDecisionsPages follows the cursor: every call names the next= of the one before, the rows arrive oldest
+// first, and the pull stops on more=no.
+func TestPullDecisionsPages(t *testing.T) {
+	runner := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		switch {
+		case !strings.Contains(line, "since="):
+			return reply(o, "run-begin #T", decisionsHeader(2, 0, 2, "yes"), decisionRow(1), decisionRow(2),
+				decisionsEnd(3, 2, "yes")), nil
+		case strings.Contains(line, "since=2"):
+			return reply(o, "run-begin #T", decisionsHeader(1, 2, 3, "no"), decisionRow(3),
+				decisionsEnd(2, 3, "no")), nil
+		}
+		return reply(o, "error code=bad-argument cmd=run #T"), nil
+	}}
+	pull, err := NewClient(runner).PullDecisions(context.Background(), "Tankbot", 0, false, 0)
+	if err != nil {
+		t.Fatalf("PullDecisions: %v", err)
+	}
+	if len(runner.seen) != 2 {
+		t.Fatalf("%d call(s): %v", len(runner.seen), runner.seen)
+	}
+	if want := ".tb run decisions Tankbot limit=200"; runner.seen[0] != want {
+		t.Fatalf("first line %q, want %q", runner.seen[0], want)
+	}
+	if want := ".tb run decisions Tankbot since=2 limit=200"; runner.seen[1] != want {
+		t.Fatalf("second line %q, want %q", runner.seen[1], want)
+	}
+	if len(pull.Rows) != 3 || pull.Rows[0].Seq != 1 || pull.Rows[2].Seq != 3 {
+		t.Fatalf("rows: %+v", pull.Rows)
+	}
+	if pull.Pages != 2 || pull.Truncated || pull.Run != "r-20261124T190001-a1b2" || pull.Capture != "cap-7" {
+		t.Fatalf("pull: %+v", pull)
+	}
+}
+
+// TestPullDecisionsBound: a module that always says more stops the pull at its own page bound, and says so.
+func TestPullDecisionsBound(t *testing.T) {
+	calls := 0
+	runner := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		calls++
+		seq := calls
+		return reply(o, "run-begin #T", decisionsHeader(1, seq-1, seq, "yes"), decisionRow(seq),
+			decisionsEnd(2, seq, "yes")), nil
+	}}
+	pull, err := NewClient(runner).PullDecisions(context.Background(), "Tankbot", 0, false, 0)
+	if err != nil {
+		t.Fatalf("PullDecisions: %v", err)
+	}
+	if calls != decisionsMaxPages {
+		t.Fatalf("%d call(s), want the bound %d", calls, decisionsMaxPages)
+	}
+	if len(pull.Rows) != decisionsMaxPages || !pull.Truncated || pull.Note == "" {
+		t.Fatalf("pull: %d row(s), truncated=%v, note=%q", len(pull.Rows), pull.Truncated, pull.Note)
+	}
+}
+
+// TestPullDecisionsNoProgress: a page that brings no row while more=yes does not loop forever.
+func TestPullDecisionsNoProgress(t *testing.T) {
+	runner := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		return reply(o, "run-begin #T", decisionsHeader(0, 4, 4, "yes"), decisionsEnd(1, 4, "yes")), nil
+	}}
+	pull, err := NewClient(runner).PullDecisions(context.Background(), "Tankbot", 4, true, 0)
+	if err != nil {
+		t.Fatalf("PullDecisions: %v", err)
+	}
+	if len(runner.seen) != 1 || len(pull.Rows) != 0 || pull.Note == "" {
+		t.Fatalf("%d call(s), %d row(s), note %q", len(runner.seen), len(pull.Rows), pull.Note)
+	}
+}
+
+// TestPullDecisionsRepeatedPage: a module that ignores since= and sends the same rows again is refused, never read
+// as a second page of older rows.
+func TestPullDecisionsRepeatedPage(t *testing.T) {
+	runner := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		return reply(o, "run-begin #T", decisionsHeader(1, 0, 1, "yes"), decisionRow(1),
+			decisionsEnd(2, 1, "yes")), nil
+	}}
+	pull, err := NewClient(runner).PullDecisions(context.Background(), "Tankbot", 0, false, 0)
+	if !errors.Is(err, ErrBadReport) {
+		t.Fatalf("err = %v, want ErrBadReport for a repeated page", err)
+	}
+	if len(pull.Rows) != 1 {
+		t.Fatalf("%d row(s) before the refusal, want 1", len(pull.Rows))
+	}
+}
+
+// TestDecisionsTruncatedAnswer: a reply that lost its end marker is not a page, however many rows it carried.
+func TestDecisionsTruncatedAnswer(t *testing.T) {
+	runner := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		rep := reply(o, "run-begin #T", decisionsHeader(1, 0, 1, "no"), decisionRow(1))
+		rep.Complete = false
+		return rep, nil
+	}}
+	if _, err := NewClient(runner).RunDecisions(context.Background(), "Tankbot", 0, false, 0); !errors.Is(err, ErrBadReport) {
+		t.Fatalf("err = %v, want ErrBadReport", err)
+	}
+}
+
+// TestDecisionsRefusals: each documented refusal code ends the read with its own code, and a module build without
+// the command is the sentinel, never a refusal.
+func TestDecisionsRefusals(t *testing.T) {
+	for _, code := range []string{"capture-off", "no-capture", "no-run", "bad-argument", "unexpected-argument"} {
+		r := oneReply("error code=" + code + " cmd=run msg=no #T")
+		_, err := NewClient(r).RunDecisions(context.Background(), "Tankbot", 0, false, 0)
+		var refused *DecisionsRefusal
+		if !errors.As(err, &refused) || refused.Code != code {
+			t.Fatalf("code %s: err = %v", code, err)
+		}
+	}
+	for _, code := range []string{"unknown-verb", "unsupported", "invalid", "engine-not-built"} {
+		r := oneReply("error code=" + code + " cmd=run #T")
+		_, err := NewClient(r).RunDecisions(context.Background(), "Tankbot", 0, false, 0)
+		if !errors.Is(err, ErrNotSupported) {
+			t.Fatalf("code %s: err = %v, want ErrNotSupported", code, err)
+		}
+		if !strings.Contains(err.Error(), "not supported by this module build") {
+			t.Fatalf("code %s: err text %q", code, err)
+		}
+	}
+}
+
+// TestDecisionsMalformedRecord: every strictness rule of the shape refuses instead of filling a zero.
+func TestDecisionsMalformedRecord(t *testing.T) {
+	cases := map[string][]string{
+		"missing capture": {"run-begin #T",
+			"decisions run=r-1 lead=Tankbot plan=ragefire_chasm count=0 since=0 next=0 more=no #T",
+			decisionsEnd(1, 0, "no")},
+		"missing phase": {"run-begin #T", decisionsHeader(1, 0, 1, "no"),
+			"decision seq=1 t=1764000000000 dt=200 state=running step=3 record=tick order= note= say= #T",
+			decisionsEnd(2, 1, "no")},
+		"unknown state": {"run-begin #T", decisionsHeader(1, 0, 1, "no"),
+			"decision seq=1 t=1764000000000 dt=200 state=idle phase=walk step=3 record=tick order= note= say= #T",
+			decisionsEnd(2, 1, "no")},
+		"unknown record": {"run-begin #T", decisionsHeader(1, 0, 1, "no"),
+			"decision seq=1 t=1764000000000 dt=200 state=running phase=walk step=3 record=ok order= note= say= #T",
+			decisionsEnd(2, 1, "no")},
+		"trunc=no": {"run-begin #T", decisionsHeader(1, 0, 1, "no"),
+			"decision seq=1 t=1764000000000 dt=200 state=running phase=walk step=3 record=tick order= note= say= trunc=no #T",
+			decisionsEnd(2, 1, "no")},
+		"repeated seq": {"run-begin #T", decisionsHeader(2, 0, 2, "no"), decisionRow(1), decisionRow(1),
+			decisionsEnd(3, 2, "no")},
+		"wrong count": {"run-begin #T", decisionsHeader(1, 0, 1, "no"), decisionRow(1), decisionsEnd(5, 1, "no")},
+		"a split row": {"run-begin #T", decisionsHeader(1, 0, 1, "no"),
+			"decision seq=1 t=1764000000000 dt=200 state=running phase=walk step=3 record=tick order= note= say= #T",
+			"decision+ seq=1 say=more #T", decisionsEnd(3, 1, "no")},
+		"no header": {"run-begin #T", decisionRow(1), decisionsEnd(2, 1, "no")},
+	}
+	for name, lines := range cases {
+		r := oneReply(lines...)
+		_, err := NewClient(r).RunDecisions(context.Background(), "Tankbot", 0, false, 0)
+		if err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// TestDecisionsTarget: the word names a leader or a run id, so a space, '#' or '=' never reaches the line.
+func TestDecisionsTarget(t *testing.T) {
+	for _, bad := range []string{"", "Tank bot", "Tank#1", "Tank=1", "a\tb"} {
+		r := oneReply("run-begin #T", decisionsHeader(0, 0, 0, "no"), decisionsEnd(1, 0, "no"))
+		if _, err := NewClient(r).RunDecisions(context.Background(), bad, 0, false, 0); err == nil {
+			t.Errorf("target %q was accepted", bad)
+		}
+		if len(r.seen) != 0 {
+			t.Errorf("target %q sent %v", bad, r.seen)
+		}
+	}
+}
+
+// TestDecisionsLimitClamp: the call never asks for more rows than the command allows.
+func TestDecisionsLimitClamp(t *testing.T) {
+	for _, c := range []struct {
+		in   int
+		want string
+	}{{0, "limit=200"}, {-5, "limit=200"}, {1, "limit=1"}, {200, "limit=200"}, {5000, "limit=200"}} {
+		r := oneReply("run-begin #T", decisionsHeader(0, 0, 0, "no"), decisionsEnd(1, 0, "no"))
+		if _, err := NewClient(r).RunDecisions(context.Background(), "Tankbot", 0, false, c.in); err != nil {
+			t.Fatalf("limit %d: %v", c.in, err)
+		}
+		if !strings.HasSuffix(r.seen[0], " "+c.want) {
+			t.Fatalf("limit %d: line %q, want %s", c.in, r.seen[0], c.want)
+		}
+	}
+}
+
+// TestDecisionRowJSON keeps the documented keys, their types and an unknown key the module added.
+func TestDecisionRowJSON(t *testing.T) {
+	r := oneReply("run-begin #T", decisionsHeader(1, 0, 1, "no"),
+		"decision seq=6 t=1764000001200 dt=200 state=running phase=walk step=3 record=tick order=skull note=n say= "+
+			"trunc=yes future_key=a%23b #T", decisionsEnd(2, 1, "no"))
+	page, err := NewClient(r).RunDecisions(context.Background(), "Tankbot", 0, false, 0)
+	if err != nil {
+		t.Fatalf("RunDecisions: %v", err)
+	}
+	b, err := page.Rows[0].JSON()
+	if err != nil {
+		t.Fatalf("JSON: %v", err)
+	}
+	for _, want := range []string{`"seq":6`, `"t":1764000001200`, `"dt":200`, `"state":"running"`,
+		`"phase":"walk"`, `"step":3`, `"record":"tick"`, `"order":"skull"`, `"note":"n"`, `"say":""`,
+		`"trunc":true`, `"future_key":"a#b"`} {
+		if !strings.Contains(string(b), want) {
+			t.Errorf("row JSON %s lacks %s", b, want)
+		}
+	}
+}

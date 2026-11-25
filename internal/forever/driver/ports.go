@@ -93,6 +93,9 @@ type Commander interface {
 	// through the one send function and its gate.
 	RunStatus(ctx context.Context, leader string) (tbcmd.RunReport, error)
 	RunEvents(ctx context.Context, leader string, since int, hasSince bool) (tbcmd.RunEventsReport, error)
+	// RunDecisions reads the decision rows of the run this commander addresses (its leader, or the run the session
+	// leads), paged and bounded by the typed layer. It is a read, like the two above.
+	RunDecisions(ctx context.Context) (tbcmd.DecisionsPull, error)
 	// CommanderStatus reads a commander's binding card (`.tb commander status <name>`, every card for an empty
 	// name): a read, never an order. Each bound bot's record carries the module's own guid of it, which a watch
 	// needs because its observer is neither in the party nor, as a rule, in view of it. A raid watch also reads the

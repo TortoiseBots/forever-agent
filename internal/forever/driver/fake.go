@@ -180,12 +180,13 @@ type Fake struct {
 	// RefuseActions answers that action with the module's error line of this code.
 	RefuseActions map[ActionKind]string
 
-	stateCalls  int
-	statusCalls int
-	orderSnap   *tbcmd.StateReport
-	whole       bool
-	wipeFlag    bool
-	stops       int
+	stateCalls    int
+	statusCalls   int
+	decisionCalls int
+	orderSnap     *tbcmd.StateReport
+	whole         bool
+	wipeFlag      bool
+	stops         int
 	// DistMissingAt makes that state call (1-based) leave every dm key out.
 	DistMissingAt int
 	// StaleAt makes that state call a report taken before the last order: it returns the snapshot the fake took when
@@ -251,6 +252,11 @@ type Fake struct {
 	DropOn string
 	// FailEvents answers every event read with this error (a read that fails while the status read answers).
 	FailEvents error
+	// Decisions are the rows the fake module answers a decisions read with, DecisionsErr the failure it answers
+	// instead and DecisionsUnsupported a build without the command (tbcmd.ErrNotSupported).
+	Decisions            []tbcmd.DecisionRow
+	DecisionsErr         error
+	DecisionsUnsupported bool
 	// OutOfView is the watch's usual observer: neither in the party nor in view of it, so PlayerGUID answers no
 	// member. The binding card still names every bound bot by its counter.
 	OutOfView bool
@@ -1258,6 +1264,31 @@ func (f *Fake) RunEvents(ctx context.Context, leader string, since int, hasSince
 	}
 	return out, nil
 }
+
+// RunDecisions answers the run's scripted decision rows: every row the test set, or the scripted failure. A module
+// without the command is DecisionsUnsupported.
+func (f *Fake) RunDecisions(ctx context.Context) (tbcmd.DecisionsPull, error) {
+	f.decisionCalls++
+	if err := ctxErr(ctx); err != nil {
+		return tbcmd.DecisionsPull{}, err
+	}
+	if f.CallDelay > 0 {
+		f.Clock.Advance(f.CallDelay)
+	}
+	if err := f.linkErr(); err != nil {
+		return tbcmd.DecisionsPull{}, err
+	}
+	if f.DecisionsUnsupported {
+		return tbcmd.DecisionsPull{}, fmt.Errorf("%w: the fake module has no run decisions command", tbcmd.ErrNotSupported)
+	}
+	if f.DecisionsErr != nil {
+		return tbcmd.DecisionsPull{}, f.DecisionsErr
+	}
+	return tbcmd.DecisionsPull{Run: "r-fake", Rows: append([]tbcmd.DecisionRow(nil), f.Decisions...), Pages: 1}, nil
+}
+
+// DecisionsCalls is how many decisions reads the fake answered.
+func (f *Fake) DecisionsCalls() int { return f.decisionCalls }
 
 // Acted is every setup action the fake answered, in order.
 func (f *Fake) Acted() []Action { return append([]Action(nil), f.acted...) }

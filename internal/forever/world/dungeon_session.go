@@ -110,6 +110,17 @@ func (c *dungeonCommander) RunEvents(ctx context.Context, leader string, since i
 	return rep, dungeonPortErr(err)
 }
 
+// RunDecisions reads the decision rows of the run this commander addresses: the leader it was built for (a watch) or
+// the character's own run (a player run). A command channel whose permission was never confirmed, or that lost it,
+// is the driver's own sentinel: the read never went out, so it is not a module refusal.
+func (c *dungeonCommander) RunDecisions(ctx context.Context) (tbcmd.DecisionsPull, error) {
+	pull, err := c.client.PullDecisions(ctx, c.tank, 0, false, 0)
+	if errors.Is(err, errCommandNotConfirmed) || errors.Is(err, command.ErrNoPermission) {
+		return pull, driver.ErrDecisionsNoPermission
+	}
+	return pull, dungeonPortErr(err)
+}
+
 // Run is the one function in this package that reaches the command channel. The module's typed client is built over
 // this transport and builds every line from typed arguments (the reports, the orders, the setup actions); nothing
 // else here names the command session, so no call site can send a command line of its own.

@@ -273,6 +273,11 @@ type PlayConfig struct {
 	RunID string
 	// Limits overrides the run's timeouts; the zero value takes DefaultPlayLimits.
 	Limits PlayLimits
+	// PullDecisions asks the module for the run's decision rows once the run has ended and writes them beside the
+	// record as <run_id>.decisions.jsonl (--decisions-pull). Off by default; a failed pull is a warning in the
+	// summary and never fails the run. A player-led run usually reads none: the module answers no-capture, and a
+	// player account's command channel is not confirmed for `.tb` reads.
+	PullDecisions bool
 }
 
 // PlayPorts are the run's ways out: the bot module, the group it leads, its own character, and the commander's world,
@@ -293,6 +298,9 @@ type PlayPorts struct {
 	// refuses ("I dont see my rti attack target") is read at once and the pull steps in toward the skull and orders
 	// again; with none, a refused order waits out the pull window as before.
 	Refusals Refusals
+	// Decisions is the module's decision read, optional: with it and PlayConfig.PullDecisions the run pulls the
+	// module's rows of its run once it has ended.
+	Decisions Decisions
 }
 
 // playRun is one player run's machine. It is strictly sequential: one goroutine owns every port call.
@@ -511,8 +519,28 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 	}
 	p.cleanup(ctx)
 	p.states = append(p.states, StateStop)
+	p.pullDecisions(ctx)
 	p.finish()
 	return p.result()
+}
+
+// pullDecisions reads the module's decision rows of the player's run once it has ended, when the config asks for it.
+// It is the same read a watch makes, through the decisions port; the run is player-led, so the module usually answers
+// no-capture (its rows are in the module's own folder) and a player account's command channel is not confirmed for a
+// `.tb` line. Either way the failure is one warning in the summary, and the run's own outcome stands.
+func (p *playRun) pullDecisions(ctx context.Context) {
+	if !p.cfg.PullDecisions || p.ports.Decisions == nil || p.rec == nil {
+		return
+	}
+	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), decisionsPullTimeout)
+	defer cancel()
+	pull, err := p.ports.Decisions.RunDecisions(pctx)
+	if err != nil {
+		note, _ := decisionsWarning(err)
+		p.rec.DecisionsNote(note)
+		return
+	}
+	p.rec.Decisions(pull)
 }
 
 // cleanup is the failed run's way out: every stop that did not pass through LEAVE still disbands (when asked) and

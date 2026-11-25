@@ -200,6 +200,9 @@ func (r *Run) Watch(ctx context.Context) Result {
 		}
 	}
 	r.watchFinish(ctx, w)
+	// The run is over: the module's decision rows of it, when the command asked for them. A failed read is a warning
+	// in the summary and never changes the watch's end.
+	r.pullDecisions(ctx)
 	r.states = append(r.states, StateStop)
 	return r.watchResult(w)
 }

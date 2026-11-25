@@ -179,6 +179,10 @@ type Config struct {
 	// starts it on the tank once the party is in, "off" sends nothing; empty is off for every other run. A core
 	// without the command is one warning line and the run goes on (the summary then says "unsupported").
 	CombatLogWatch string
+	// PullDecisions asks the module for the run's decision rows once the run has ended and writes them beside the
+	// record as <run_id>.decisions.jsonl (dungeon-watch's --decisions-pull). Off by default; a failed pull is a
+	// warning in the summary and never fails the run.
+	PullDecisions bool
 	// Logf prints the watch's progress lines; nil prints nothing.
 	Logf func(format string, args ...any)
 }

@@ -28,6 +28,12 @@ sources:
     resource: cmd/forever-agent/forever_capture_events.go
   - id: capture-stats
     resource: cmd/forever-agent/forever_capture_stats.go
+  - id: decisions-cmd
+    resource: cmd/forever-agent/decisions_cmd.go
+  - id: decisions-read
+    resource: internal/forever/command/tbcmd/decisions.go
+  - id: decisions-record
+    resource: internal/forever/driver/decisions.go
 ---
 
 Every run leaves files behind, and those files are the whole basis of the testing tools: nothing is judged from a live socket when a recording will do. A dungeon run or brain session writes a run trace and its summary; a watch adds its combat log and run record; the trials bench writes a run folder; a scenario writes its transcripts. This page says what each file is, what it holds, and how `trace-score` reads a trace again after the fact.
@@ -102,8 +108,51 @@ A `forever dungeon-watch` run writes three more files beside its trace, and the 
 | `<run_id>.combatlog.jsonl` | the session's combat log, one row per line in the trials runner's raw row shape (`seq`, `kind`, `time`, `mono_ms`, `source`, `target`, `spell_id`, `amount`, plus `reason` on a spell fail) |
 | `<run_id>.forever-run.json` | the run record: end reason, the module's counters, per-leg and per-step evidence, deaths, pauses, encounter packets and the `watch` block |
 | `<run_id>.report-card.txt` | the card the watch prints and writes after every run |
+| `<run_id>.decisions.jsonl` | the module's decision rows of the run, with `--decisions-pull`: one JSON object per line (see [the decisions file](#the-decisions-file)) |
 
 The combat log is bounded by `--combat-max-mb` (default 64) and the record says so when it stops early.
+
+# The decisions file
+
+A run can ask the bot module for the decision rows it recorded for that run once the run has ended: `forever
+dungeon-play` and `forever dungeon-watch` take `--decisions-pull` (off by default, needs `--out`). The rows go beside
+the record as `<run_id>.decisions.jsonl`, one JSON object per line and oldest first, the same one-object-per-line form
+the combat log uses. The summary's `decisions` block counts them (`rows`, `pages`, `bytes`) or says why none came
+(`note`).
+
+| Key | Type | Meaning |
+|---|---|---|
+| `seq` | number | the row's cursor; it rises with every new decision |
+| `t` | number | the module's clock at the decision, in unix milliseconds |
+| `dt` | number | milliseconds since the previous row |
+| `state` | word | the run's state: `running`, `paused` or `done` |
+| `phase` | word | the plan phase: `begin`, `gather`, `walk`, `pull`, `task`, `rest`, `wait` or `hold` |
+| `step` | number | the plan step |
+| `record` | word | what the module did with the record behind the row: `tick` (written), `stub` (cut to fit) or `dropped` (a refusing sink) |
+| `order`, `note`, `say` | text | the decision's own texts |
+| `trunc` | `true`, when present | the module cut a free text of the row at its stored bound; the row is still one whole line |
+
+A key the module adds later is kept with the text it came as, so a newer module loses nothing in an older agent. A
+row that breaks the shape is refused instead of stored: a missing key, a state word outside the list, two rows with
+one sequence, or an end line whose count disagrees with the lines.
+
+The read is bounded and paged. The agent asks for the rows after a sequence in pages of at most 200, follows the
+module's own next cursor, and stops on its "no more" answer, when a page brings no row, or at its own bound of 25
+pages (the block says `truncated` then). A failed read never fails the run: the block's note names the reason
+(`not supported by this module build`, a refusal such as `capture-off`, `no-capture` or `no-run`, the unconfirmed
+command permission, or a lost link), and the run's own stop reason and exit code stand.
+
+The read is also a command of its own, for a run recorded earlier:
+
+```bash
+forever-agent decisions pull --leader NAME --out DIR
+```
+
+`--run ID` names the run by its id instead of its leader. The command logs in, reads the rows through the command
+channel and writes them into `DIR` as `<run id>.decisions.jsonl`; `--since-seq N` starts above an earlier cursor and
+`--limit N` (1-200) sets the page asked for. It needs the account's command permission, like every `.tb` read, and a
+module build without the command answers `not supported by this module build`. Without `--leader` or `--run` the
+command keeps its other mode: the Turtle dashboard pull of decision captures (`--dash-url`).
 
 # Folder shapes of the other tools
 

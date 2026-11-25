@@ -245,6 +245,10 @@ type Options struct {
 	// four bots through it on the player's own ports (play_session.go), with no GM line and no GM guard. A nil value
 	// runs none of it.
 	DungeonPlay *PlayRunOptions
+	// The decisions pull: `forever-agent decisions pull` in its module mode reads one run's decision rows through the
+	// command channel and writes them into Out as <stem>.decisions.jsonl (stem: RunID, else the module's run id). A
+	// nil value runs none of it.
+	DecisionsPull *DecisionsPullOptions
 	// Round BG-A1: forever bg-watch. BGWatch queues the character into a
 	// battleground, accepts, observes the match and records it. A nil value
 	// runs none of it.
@@ -375,6 +379,10 @@ type Report struct {
 	Watch *driver.Result
 	// Round P5b: the player run's result, nil when the session ran something else.
 	Play *driver.Result
+	// The decisions pull (`decisions pull` in its module mode): the rows' summary block, the file it wrote and the
+	// module's own run id. Nil when the session ran something else.
+	Decisions     *driver.RunDecisions
+	DecisionsFile string
 	// Round BG-A1: the bg-watch result, nil when the session ran something else.
 	BGWatch *bg.Result
 	// RouteWalk is the whole-plan walk's table, nil when the session ran something else.
@@ -1432,6 +1440,12 @@ func (s *session) enter(ctx context.Context) error {
 		res, err := s.dungeonPlay(ctx, s.opts.DungeonPlay)
 		s.report.Play = res
 		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.DecisionsPull != nil {
+		if err := s.pullDecisions(ctx, s.opts.DecisionsPull); err != nil {
 			return err
 		}
 		return s.logout(ctx)

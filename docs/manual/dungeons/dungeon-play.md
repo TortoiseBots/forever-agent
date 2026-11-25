@@ -28,7 +28,7 @@ sources:
 forever-agent forever dungeon-play --plan FILE --bots TANK,HEALER,DPS,DPS \
     [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME \
     [--max-minutes N] [--max-wipes N] [--last-leg NAME] [--disband] [--out DIR] [--map] \
-    [--min-active SEC] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] \
+    [--min-active SEC] [--navmesh DIR] [--decisions-pull] [--dry] [--no-preflight | --preflight-only] \
     [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]
 ```
 
@@ -201,6 +201,7 @@ walks on.
 | `--map` | off | After the run, write its map (SVG and HTML replay) into `--out`. Needs `--out`. |
 | `--min-active` | 30 | Seconds a bot must be alive and in combat to be judged. |
 | `--navmesh` | none | mmaps folder for the live walker (the dry walker walks straight lines). |
+| `--decisions-pull` | off | After the run, read the bot module's decision rows of the run and write them beside the record as `<run_id>.decisions.jsonl`. Needs `--out`. A player-led run usually reads none: the module keeps no capture for it (its answer is `no-capture`), and a player account's command channel is not confirmed for a `.tb` read. Either way it is a warning in the summary, never a failed run. |
 | `--dry` | off | Run the whole machine against the scripted world; no network. With `--out` the dry run is judged too. |
 | `--no-preflight`, `--preflight-only`, `--serve-dir`, `--export`, `--soap-*` | | As on [dungeon-run](dungeon-run.md); the preflight mode is `dungeon-play` and checks the four bots are owned by the account. |
 
@@ -236,8 +237,9 @@ judge: tank (warrior tank) warn: spec protection (role tank); missing core: Shie
 verdict: PASS
 ```
 
-With `--out` the run writes `<run_id>.jsonl` (the trace), `<run_id>.forever-run.json` (the summary) and
-`<run_id>.combatlog.jsonl` (the combat log). The summary's `play` block holds the run's minutes, its budgets,
+With `--out` the run writes `<run_id>.jsonl` (the trace), `<run_id>.forever-run.json` (the summary),
+`<run_id>.combatlog.jsonl` (the combat log) and, with `--decisions-pull`, `<run_id>.decisions.jsonl` (the module's
+decision rows; the summary's `decisions` block counts them or says why none came). The summary's `play` block holds the run's minutes, its budgets,
 `gm_lines`, the lines by prefix, the frame count and the combat-log counters (`combat_rows`, `combat_dropped`,
 `combat_truncated`, `combat_error`).
 
