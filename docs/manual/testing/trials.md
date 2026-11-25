@@ -4,7 +4,7 @@ title: Trials
 description: "Run the behaviour test bench: hire a bot into a scripted fight, score each specified behaviour, and read the card."
 tags: [testing, trials, behaviour, verdicts]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T09:30:41Z }
+generated: { by: forever-agent docs, at: 2026-11-25T14:00:00Z }
 sources:
   - id: trials-cmd
     resource: cmd/forever-agent/trials_cmd.go
@@ -32,6 +32,8 @@ sources:
     resource: internal/trials/playdata/gear.go
   - id: aotc
     resource: data/aotc/aotc.go
+  - id: realism
+    resource: internal/trials/realism/snapshot.go
   - id: scenario-schema
     resource: internal/trials/scenario/scenario.go
   - id: live-run
@@ -56,6 +58,7 @@ The bench lives in `forever-agent trials` and is a Go port of the Python trials 
 | `trials sweep` | class sweep: tanks first, one run folder and card per trial, plus `sweep.md` |
 | `trials cleanup` | replay a run's ledger: kill its summons, clear auras, free bots, release leases |
 | `trials forever-data-check` | ask the live server every spell, item and mob entry the trials name |
+| `trials realism` | judge a bot snapshot against the player data, per bot and per spec and level band, with a baseline's before/after |
 
 # A trial file
 
@@ -207,6 +210,15 @@ The `edge` trial `priest-holy-low-mana-innervate-ally` stages the case the class
 No shipped trial stages two healers yet (the live damage situations hurt one victim), so on today's trial set the rule reports "one healer only" and stays `INCONCLUSIVE`; it judges any run whose party does name two healers.
 
 The rows print under `## Class rules` (trial, repeat, rule, verdict, the main healer's heals on the tanks, and the reason), `card.json` carries `class_rules`, and `--class-rules` adds a second count line with the class rules' `PASS`, `FAIL` and `INCONCLUSIVE` counts. They are bench readings, not part of the trial verdict: they never change the exit code.
+
+# Judging a bot snapshot
+
+```sh
+forever-agent forever bot-snapshot --dir ./serve --out bots.json
+forever-agent trials realism --snapshot bots.json [--baseline before.json] [--json]
+```
+
+`trials realism` judges one snapshot of what bots have — their talents, worn items and enchants — against the same player data: talents by level group, gear realism (required level and item levels against the level's allowance, raid, PvP and reputation sources), the spec's stat priority through the player-data gear rule (one judgement; the priority is reported, never judged), and the level 60 enchants, with a per-spec-and-level-band table and a before/after when a baseline is given. Every verdict is `PASS`, `FAIL` or `INCONCLUSIVE`, and none fails on data the snapshot does not carry; a check whose decisive part is unread is `INCONCLUSIVE`, never a `PASS`. The snapshot format, what the taker fills today, each check's starting thresholds and its `INCONCLUSIVE` cases are in [realism checks](realism.md).
 
 # Validating trial files
 

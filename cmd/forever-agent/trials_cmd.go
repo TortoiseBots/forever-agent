@@ -26,6 +26,8 @@ const trialsUsage = "usage: forever-agent trials <command> [args]\n" +
 	"                                     class sweep, tanks first, one card each plus sweep.md\n" +
 	"  forever-data-check --slots F --server S [--scratch NAME] [--out FILE] [--dir RUNDIR] [--allow-unknown]\n" +
 	"                                     ask the live server every spell, item and mob entry the trials name\n" +
+	"  realism --snapshot FILE [--baseline FILE] [--json]\n" +
+	"                                     judge a bot snapshot against the player data, per bot and per spec\n" +
 	"\n" +
 	"score's --player-data also judges the bots against the aotc.gg player data (gear fits the spec, talents imply spells);\n" +
 	"score's --class-rules also judges the party's healer assignment from the recording"
@@ -54,6 +56,8 @@ func trialsCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return trialsSweepCmd(ctx, args[1:], stdout, stderr)
 	case "forever-data-check":
 		return trialsDataCheckCmd(ctx, args[1:], stdout, stderr)
+	case "realism":
+		return trialsRealismCmd(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprintln(stdout, trialsUsage)
 		return exitOK

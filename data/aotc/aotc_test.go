@@ -138,8 +138,8 @@ func TestCommonTalentsFiltersAndSorts(t *testing.T) {
 	}
 }
 
-// TestGearAndEnchantAccessors pins the slot accessors: best geared only, no item-set rows, the slot
-// matched case-insensitively, most worn first.
+// TestGearAndEnchantAccessors pins the slot accessors: best geared for gear, all-level-60 for
+// enchants, no item-set rows, the slot matched case-insensitively, most worn first.
 func TestGearAndEnchantAccessors(t *testing.T) {
 	d := Default()
 	head := d.GearFor("druid", "balance", "head")
@@ -166,7 +166,7 @@ func TestGearAndEnchantAccessors(t *testing.T) {
 	if len(enchants) == 0 {
 		t.Fatal("no head enchants")
 	}
-	if enchants[0].Population != PopulationBestGeared {
+	if enchants[0].Population != PopulationAll {
 		t.Fatalf("enchant population %q", enchants[0].Population)
 	}
 	if len(d.GearFor("druid", "balance", "NoSuchSlot")) != 0 {

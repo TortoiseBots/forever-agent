@@ -4,12 +4,16 @@ title: forever spell-score
 description: "Judge a Forever class fight from its watch combat log: each party member's casts against the oracle of its class, failing only wrong-class abilities."
 tags: [testing, spell-score, spells, oracle, forever]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-24T20:35:15Z }
+generated: { by: forever-agent docs, at: 2026-11-25T14:00:00Z }
 sources:
   - id: spellscore-cmd
     resource: cmd/forever-agent/forever_spellscore.go
   - id: spelljudge
     resource: internal/forever/spelljudge/spelljudge.go
+  - id: spelljudge-diff
+    resource: internal/forever/spelljudge/diff.go
+  - id: spell-diff
+    resource: cmd/forever-agent/forever_spelldiff.go
   - id: kb-judge
     resource: internal/kbspells/judge.go
   - id: kb-forever
@@ -87,7 +91,32 @@ With `--json`:
 }
 ```
 
-The finding object also carries `missing`, `unknown`, `never` and `off_list` lists when they are not empty, and `unknown_ids` with `--fail-unknown`.
+The finding object also carries `missing`, `unknown`, `never` and `off_list` lists when they are not empty, `unknown_ids` with `--fail-unknown`, and `spells`: the member's own cast count per spell name, which is what the two-run comparison below reads.
+
+# Comparing two runs
+
+```sh
+forever-agent forever spell-diff [--json] [--min-active 30] [--fail-unknown] [--oracle DIR] [--spells DIR] <before> <after>
+```
+
+`spell-diff` runs the same judge on both sides and prints what changed per class: the class's cast total, every spell whose count moved (added or removed when one side has none) and every member whose verdict moved:
+
+```
+warrior: 60 cast(s) -> 70 cast(s)
+  Shield Slam: 10 -> 20 (+10)
+  Taunt: removed (3)
+  Maintank (protection): pass -> warn
+    missing core: Shield Slam
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--json` | false | print the comparison as one object (`format`, `before`, `after`, `classes`) |
+| `--min-active` | `30` | seconds a member must be alive and in combat before its core list is judged |
+| `--fail-unknown` | false | judge an unknown cast as a failure on both sides |
+| `--oracle` / `--spells` | the embedded data | the oracle directory and the spell table directory |
+
+Each side is a watch folder or a watch trace, or a saved `forever spell-score --json` answer (a `.json` file holding its `findings`). Exit `0` when both sides read, `2` on a usage or load error: a comparison reports, it does not judge.
 
 # Exit codes
 

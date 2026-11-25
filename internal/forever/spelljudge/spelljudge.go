@@ -25,6 +25,9 @@ type Finding struct {
 	WrongClass []string `json:"wrong_class,omitempty"` // "Sinister Strike (rogue)"
 	UnknownIDs []uint32 `json:"unknown_ids,omitempty"` // casts named by neither the row nor the spell table
 	Casts      int      `json:"casts"`
+	// Spells is the member's own cast count per spell name (the same counting Spells reads): what a
+	// before/after of two runs compares, spell by spell.
+	Spells map[string]int `json:"spells,omitempty"`
 }
 
 // Options are the judge's readings: how much active time a member needs before its core list is judged, and whether
@@ -87,6 +90,9 @@ func judgeMember(r *bughunt.Run, o *kbspells.Oracle, t *foreverspells.Table, m s
 		}
 	}
 	f := Finding{Casts: n}
+	if len(casts) > 0 {
+		f.Spells = casts
+	}
 	for id := range unknown {
 		f.UnknownIDs = append(f.UnknownIDs, id)
 	}

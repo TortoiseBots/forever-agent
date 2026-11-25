@@ -769,6 +769,24 @@ func (d *Data) CommonTalents(class, spec, levels string, minShare float64) []Tal
 	return out
 }
 
+// SplitsFor returns the spec's most common level 60 point splits, most common first. A spec the file
+// does not name is empty, never a guess.
+func (d *Data) SplitsFor(class, spec string) []TalentSplit {
+	var out []TalentSplit
+	for _, s := range d.Splits {
+		if s.Class == class && s.Spec == spec {
+			out = append(out, s)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Pct != out[j].Pct {
+			return out[i].Pct > out[j].Pct
+		}
+		return out[i].Split < out[j].Split
+	})
+	return out
+}
+
 // StatPriorityFor returns the spec's stat priority at 60, highest first (equal orders keep the file's
 // order).
 func (d *Data) StatPriorityFor(class, spec string) []StatWeight {
@@ -816,12 +834,13 @@ func (d *Data) GearFor(class, spec, slot string) []GearItem {
 	return out
 }
 
-// EnchantsFor returns the enchants the spec uses at 60 in one slot (empty for every slot), best
-// geared population only, most used first.
+// EnchantsFor returns the enchants the spec uses at 60 in one slot (empty for every slot), the
+// all-level-60 population (every character, not only the best geared: a raider's habit is not the
+// pool's), most used first.
 func (d *Data) EnchantsFor(class, spec, slot string) []Enchant {
 	var out []Enchant
 	for _, e := range d.Enchants {
-		if e.Class != class || e.Spec != spec || e.Population != PopulationBestGeared {
+		if e.Class != class || e.Spec != spec || e.Population != PopulationAll {
 			continue
 		}
 		if slot != "" && !strings.EqualFold(e.Slot, slot) {
