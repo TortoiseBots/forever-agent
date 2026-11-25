@@ -455,3 +455,31 @@ func specDiffOf(t *testing.T, d Diff, class, spec, band string) SpecDiff {
 	t.Fatalf("no %s/%s band %s in %+v", class, spec, band, d.Specs)
 	return SpecDiff{}
 }
+
+// TestHeadlineWordDecisionTable pins the headline's word for every tally shape: better only without a
+// worse row and without a row that is no longer judged, rows with too few bots outside the headline.
+func TestHeadlineWordDecisionTable(t *testing.T) {
+	cases := []struct {
+		name  string
+		tally RowTally
+		want  string
+	}{
+		{"all unchanged", RowTally{Unchanged: 4}, "unchanged"},
+		{"one better, rest unchanged", RowTally{Better: 1, Unchanged: 3}, "better"},
+		{"one worse, rest unchanged", RowTally{Worse: 1, Unchanged: 3}, "worse"},
+		{"one better, one worse", RowTally{Better: 1, Worse: 1}, "mixed"},
+		{"one better, one no longer judged", RowTally{Better: 1, NoLongerJudged: 1}, "mixed"},
+		{"one better, nine no longer judged", RowTally{Better: 1, NoLongerJudged: 9}, "mixed"},
+		{"worse and no longer judged stays worse", RowTally{Worse: 1, NoLongerJudged: 2}, "worse"},
+		{"only no longer judged", RowTally{NoLongerJudged: 3}, "no longer judged"},
+		{"no longer judged beside unchanged", RowTally{NoLongerJudged: 1, Unchanged: 2}, "no longer judged"},
+		{"all not comparable", RowTally{NotComparable: 3}, "not comparable"},
+		{"no shared rows", RowTally{}, "not comparable"},
+		{"one better among too few bots rows", RowTally{Better: 1, NotComparable: 4}, "better"},
+	}
+	for _, tc := range cases {
+		if got := headlineWord(tc.tally); got != tc.want {
+			t.Fatalf("%s: %+v reads %q, want %q", tc.name, tc.tally, got, tc.want)
+		}
+	}
+}

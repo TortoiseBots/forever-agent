@@ -394,14 +394,16 @@ func (t RowTally) String() string {
 	return strings.Join(out, ", ")
 }
 
-// headlineWord is the headline's word for a check, decided from its row tally: worse when a row got
-// worse and none better, better when a row got better and none worse, "mixed" when both, then "no
-// longer judged", else unchanged; "not comparable" when no row could be compared.
+// headlineWord is the headline's word for a check, decided from its row tally. Rows that are not
+// comparable (too few bots) do not enter it: with no other row it is "not comparable". "better" needs
+// a better row and neither a worse row nor a row that is no longer judged (a lost read-out is not an
+// improvement, so better beside either reads "mixed"); worse beside no-longer-judged rows stays
+// "worse"; only no-longer-judged rows read "no longer judged"; else "unchanged".
 func headlineWord(t RowTally) string {
 	switch {
 	case t.Better+t.Worse+t.Unchanged+t.NoLongerJudged == 0:
 		return "not comparable"
-	case t.Better > 0 && t.Worse > 0:
+	case t.Better > 0 && (t.Worse > 0 || t.NoLongerJudged > 0):
 		return "mixed"
 	case t.Worse > 0:
 		return "worse"
