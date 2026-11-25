@@ -24,7 +24,7 @@
 // NOT survive a wipe (walk 44, raid hk7m attempt -3: no lines on the restart,
 // and Hakkar cast Aspect of Jeklik/Venoxis again). The zulgurub boss scripts
 // overwrite their own slot on Reset (boss_jeklik.cpp:105-106,
-// boss_venoxis.cpp:152-153), see docs/okf/raids/raid-walk-reference.md.
+// boss_venoxis.cpp:152-153), see docs/manual/turtle/raids/raid-walk-reference.md.
 // Resending into data that did survive is harmless (SetData is idempotent).
 // After `run start` the lines go out ONLY at a rest or gather status that passes
 // the pre-pull gate (gmInstanceDataMayFire): any other status defers a pending

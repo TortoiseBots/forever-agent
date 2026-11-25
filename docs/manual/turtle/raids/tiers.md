@@ -1,0 +1,33 @@
+---
+type: Concept
+title: Hire gear tiers
+description: Why the hire tier matters, where each raid's minimum comes from, and what comparison runs are.
+tags: [turtle, raids, tier, hires]
+status: stable
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
+sources:
+  - id: tiers
+    resource: internal/raidwalk/tiers.go
+---
+
+This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore server.
+
+# Hire gear tiers
+
+> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
+> against the Turtle stack. Against a Forever server, these commands refuse to run; `forever raid-watch` and `raid-autopilot --forever` are the Forever path.
+
+The walk hires and refits at the kit a player holds when the raid is next: a wipe at the right tier is a gear-set tuning finding, never fixed by raising the tier. The hire gear tier comes from a committed table, one row per raid, from the mercenary unlock quests.[^tiers]
+
+## The table
+
+Three raids have sourced rows: `onyxias_lair` is 2, `zul_gurub` and `ruins_of_ahnqiraj` are 1. Every other raid holds a 0 row: no tier sourced yet, and a walk refuses to run it without `--tier N`.
+
+## The two flags
+
+- `--tier N` (1-3) fills the tier of a raid the table leaves unknown. It is refused on a raid that has a row.
+- `--tier-override N` (1-3) replaces a known minimum. It marks the run a **comparison, not a tier proof**: the notes and `summary.json` (`roster.tier_comparison`) say so, and the suite's baseline pick skips it.
+
+`--tier` and `--tier-override` together are refused. A roster file tier that differs from the table's row is refused too — use `--tier-override` to state the comparison. The summary records where the tier came from in `roster.tier_source`: `table`, `roster`, `--tier` or `--tier-override`.
+
+The walk waits up to `--hire-settle` (default 20s, a poll of the group that ends as soon as every hire has joined) after the last hire for its join summons, then refits with `.bot gear raid <commander> tier <N>`. The module's gear queue is one slot for the whole server, and the verdict of the job holding it goes only to the character that queued it, so a walk refused with `ACTION_ERR|gear|busy` (a gear job is already running) cannot wait that job out: the module answers the refusal, never that job's verdict. The verdict line carries no job or requester id, so the walk gives the slot's job the same 1m bound it gives a gear job of its own. A `TBM:GEAR` verdict for the refit's tier inside that window is the slot's job answering this commander, so it is used as the refit's verdict and nothing is re-sent (the slot's job was an earlier attempt's own refit, a walk restarted while it ran); a verdict for another tier answers another request and is dropped. A window with no verdict means the slot's job belongs to another requester (its verdict goes only to its own commander's chat), and only then is the line re-sent, each retry noted, until a send is accepted or the 120 s budget leaves no room for another wait. Each send is answered before anything else goes out, so two gear requests never overlap. A budget spent on busy answers ends the walk on the module's own line. Any `--hire-settle` below the default marks the summary `roster.settle_short: true`, and the suite's baseline pick skips that walk.

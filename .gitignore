@@ -16,5 +16,7 @@ settings.json
 /cmd/forever-agent/forever-agent
 /cmd/forever-agent/forever-agent.exe
 /forever-agent
+
+# Python bytecode from the docs checker (make docs-check).
 __pycache__/
 *.pyc
