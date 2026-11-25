@@ -132,8 +132,12 @@ two subgroups, or names more than five members into one subgroup.
 4. The `--layout` is applied (a `raid_move` event per move, with the member's slot and its subgroup). A move into a
    subgroup with room is sent first, so a member leaving a full subgroup frees its slot; a move whose target subgroup
    already holds five is a swap with a member of it that the layout does not place there (`CMSG_SWAP_SUB_GROUPS`, the
-   event carries `swap_with`). A layout the roster cannot satisfy — six members in one subgroup, a member that is not
-   in the party — sends nothing and stops the run `raid-move`, with the reason in a `raid_layout_refused` event.
+   event carries `swap_with`). Only the members the layout names count against a subgroup's five: a member the layout
+   does not name may be swapped into the mover's old subgroup (the first such member of the target, in roster order),
+   so a layout of one line into a full subgroup is carried out. At most one move or swap is sent per named member. A
+   layout that cannot be satisfied — more than five members named into one subgroup, a member that is not in the
+   party, one member named for two subgroups — is refused by `dungeon-play` before anything is sent, and by the run
+   (which sends nothing and stops it `raid-move`, with the reason in a `raid_layout_refused` event) by the same rule.
 
 Everything else is the player run it already was, over the raid's roster: the party gate reads every member, the
 straggler ladder and regroups follow one bot at a time, rest reads the whole group's bars, and the trace names each

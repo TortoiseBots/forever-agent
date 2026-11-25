@@ -42,9 +42,10 @@ the same suite command and the same verdict rules as the Turtle form (see the
 2. Resolves the entry's server and slot against the slots file (the server needs its `forever` block: `rest`, `rpc`,
    `ca`) and takes the slot's lease for 30 minutes. A slot held by someone else refuses that raid; nothing is launched.
    The lease is renewed every 5 minutes while the watch runs (a watch's budget is two hours by default). One renewal
-   that errors and then passes is retried: only **3** consecutive failures (`raidSuiteLeaseRenewTries`, 15 minutes at
-   the default interval, inside the lease's own 30 minutes) count as a lost lease, and then the watch is cancelled —
-   a run never keeps a slot it no longer holds. That raid is reported `failed` with the renewal's error, and its
+   that errors and then passes is retried: only **3** consecutive store errors (`raidSuiteLeaseRenewTries`, 15 minutes
+   at the default interval, inside the lease's own 30 minutes) count as a lost lease, and then the watch is cancelled —
+   a run never keeps a slot it no longer holds. A definitive answer (the lease is gone, or another holder has it)
+   cancels the watch on the first renewal, with no retries. That raid is reported `failed` with the renewal's error, and its
    record's `exit_code` is non-zero (the error is never the watch's own `0`). The lease's holder is this run's own
    (the process and its start instant), so two suites walking one plan never adopt each other's lease: the second is
    refused the held slot. The lease is released however the watch ends, a panic in the watch included. A cancelled

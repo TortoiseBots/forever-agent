@@ -2002,8 +2002,9 @@ func (p *playRun) endFight(ctx context.Context, adds int, units []Unit) string {
 	boss := p.bossRun
 	down := p.pullDown(units)
 	// A raid never walks past a boss, and a boss that aggroed by itself is fought through the joined fight like any
-	// hostile on the party: the run stops as soon as that fight ends, not after the walk to the boss's own pull.
-	raidBoss := p.cfg.Raid != nil && p.raidBossFought
+	// hostile on the party: the run stops as soon as that fight ends, not after the walk to the boss's own pull. A
+	// party the boss wiped is not a raid that reached it: the wipe goes through the regroup below and is counted.
+	raidBoss := p.cfg.Raid != nil && p.raidBossFought && !p.wiped()
 	p.bossRun = false
 	p.raidBossFought = false
 	p.skull, p.pullSet, p.pullGone = wire.GUID{}, p.pullSet[:0], p.pullGone[:0]

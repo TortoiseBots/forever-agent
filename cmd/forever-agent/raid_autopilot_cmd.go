@@ -405,6 +405,20 @@ func (w *autoForeverWorld) hold(f autoForeverSlot) error {
 	return nil
 }
 
+// errAutoLeaseGone and autoLeaseHeldError are renewHeld's definitive answers: the store was read and the slot is no
+// longer this holder's. Anything else renewHeld returns is a store error that may pass.
+var errAutoLeaseGone = errors.New("the lease is gone (released by a teardown?)")
+
+type autoLeaseHeldError struct{ holder string }
+
+func (e *autoLeaseHeldError) Error() string { return "the lease is held by " + e.holder }
+
+// autoLeaseLost is true for a definitive answer that the lease is gone or another holder's.
+func autoLeaseLost(err error) bool {
+	var held *autoLeaseHeldError
+	return errors.Is(err, errAutoLeaseGone) || errors.As(err, &held)
+}
+
 // renewHeld extends a live attempt's lease. The store's record names the lease id, so an adopted attempt (whose
 // supervisor never saw the acquire) renews the same lease. A lease gone or held by another holder is an error the
 // caller logs: the run's own end and teardown follow.
@@ -414,10 +428,10 @@ func (w *autoForeverWorld) renewHeld(f autoForeverSlot) error {
 		return err
 	}
 	if cur == nil {
-		return errors.New("the lease is gone (released by a teardown?)")
+		return errAutoLeaseGone
 	}
 	if cur.Holder != f.holder {
-		return fmt.Errorf("the lease is held by %s", cur.Holder)
+		return &autoLeaseHeldError{holder: cur.Holder}
 	}
 	_, err = w.store.Renew(f.server, f.slot, f.holder, cur.LeaseID, autoForeverLeaseTTL)
 	return err

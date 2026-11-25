@@ -388,21 +388,12 @@ func TestPlayRaidTraceSlots(t *testing.T) {
 func TestPlayRaidLayoutSwapsIntoFullSubgroup(t *testing.T) {
 	group := raidGroup(15)
 	mover := group.Tanks[0] // subgroup 1, which holds five with this character
-	partner := group.DPS[9] // Raiddpsj, the first member of subgroup 4 in roster order
-	group.Layout = []RaidSlot{{Name: mover, Subgroup: 4}, {Name: partner, Subgroup: 1}}
+	group.Layout = []RaidSlot{{Name: mover, Subgroup: 4}}
 	rig := newRaidRig(t, group, true, nil)
 	rig.cfg.Out = t.TempDir()
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
 	if res.Stop == "raid-move" {
-		tf, _ := trace.Read(res.Trace)
-		why := ""
-		for _, ev := range tf.Events {
-			if ev.Ev == "raid_layout_refused" {
-				why, _ = ev.D["error"].(string)
-			}
-		}
-		t.Fatalf("the move into a full subgroup stopped the run raid-move: %s (states %v, subgroups %v)",
-			why, res.States, rig.fake.Subgroups)
+		t.Fatalf("the move into a full subgroup stopped the run raid-move (states %v)", res.States)
 	}
 	if len(rig.fake.RaidMoves) != 0 {
 		t.Fatalf("plain moves = %+v; want none (subgroup 4 was full)", rig.fake.RaidMoves)
@@ -411,14 +402,14 @@ func TestPlayRaidLayoutSwapsIntoFullSubgroup(t *testing.T) {
 		t.Fatalf("swaps = %+v; want one", rig.fake.RaidSwaps)
 	}
 	sw := rig.fake.RaidSwaps[0]
-	// Raiddpsj is the first member of subgroup 4 in roster order, and the layout places it in subgroup 1.
-	if sw.Name != mover || sw.Subgroup != 4 || sw.SwapWith != partner {
-		t.Fatalf("swap = %+v; want %s with %s into subgroup 4", sw, mover, partner)
+	// Raiddpsj is the first member of subgroup 4 in roster order and the layout does not place it there.
+	if sw.Name != mover || sw.Subgroup != 4 || sw.SwapWith != "Raiddpsj" {
+		t.Fatalf("swap = %+v; want %s with Raiddpsj into subgroup 4", sw, mover)
 	}
 	if got := rig.fake.Subgroups[strings.ToLower(mover)]; got != 4 {
 		t.Fatalf("%s is in subgroup %d; want 4", mover, got)
 	}
-	if got := rig.fake.Subgroups[strings.ToLower(partner)]; got != 1 {
+	if got := rig.fake.Subgroups["raiddpsj"]; got != 1 {
 		t.Fatalf("the swapped member is in subgroup %d; want %d", got, 1)
 	}
 	events := playTraceEvents(t, res, "raid_move")

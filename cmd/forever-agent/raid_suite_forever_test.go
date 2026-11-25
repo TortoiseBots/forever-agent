@@ -389,6 +389,86 @@ func TestRaidSuiteForeverTransientRenewFailureKeepsTheWatch(t *testing.T) {
 	}
 }
 
+// raidForeverWatchUntilCancelled is a watch that runs until the suite cancels it (or five seconds pass) and then fails.
+func raidForeverWatchUntilCancelled(ctx context.Context, args []string, out string) int {
+	select {
+	case <-ctx.Done():
+	case <-time.After(5 * time.Second):
+	}
+	return exitRaidWalkFailed
+}
+
+// TestRaidSuiteForeverDefinitiveRenewalAnswerCancelsAtOnce: an answer that the lease is gone, or held by another
+// holder, ends the watch on the first renewal — no two more retries — while a store error that passes keeps the
+// three-failure rule: the watch survives two of them, and the third cancels it.
+func TestRaidSuiteForeverDefinitiveRenewalAnswerCancelsAtOnce(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		err       error
+		wantCalls int
+	}{
+		{"lease gone", errAutoLeaseGone, 1},
+		{"held by another holder", &autoLeaseHeldError{holder: "raid-suite-other"}, 1},
+		{"store error", errors.New("the store is busy"), raidSuiteLeaseRenewTries},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			raidForeverLeaseRenew(t, 15*time.Millisecond)
+			rig := newRaidForeverRig(t)
+			slotsPath := raidForeverSlots(t)
+			prev := raidSuiteRenewHeld
+			t.Cleanup(func() { raidSuiteRenewHeld = prev })
+			calls := 0
+			raidSuiteRenewHeld = func(w *autoForeverWorld, f autoForeverSlot) error {
+				calls++
+				return c.err
+			}
+			rig.watch = raidForeverWatchUntilCancelled
+			code, rep, stderr := raidForeverRun(t, slotsPath, raidForeverEntry())
+			if code == exitOK {
+				t.Fatalf("exit %d; a lost lease is a failure (stderr %q)", code, stderr)
+			}
+			if len(rep.Raids) != 1 || rep.Raids[0].Verdict != suiteFailed {
+				t.Fatalf("report = %+v; want one failed raid (stderr %q)", rep.Raids, stderr)
+			}
+			if calls != c.wantCalls {
+				t.Fatalf("renewal calls = %d; want %d", calls, c.wantCalls)
+			}
+		})
+	}
+}
+
+// TestRaidSuiteForeverTwoStoreErrorsKeepTheWatch: two consecutive store errors then a good renewal keep the watch.
+func TestRaidSuiteForeverTwoStoreErrorsKeepTheWatch(t *testing.T) {
+	raidForeverLeaseRenew(t, 15*time.Millisecond)
+	rig := newRaidForeverRig(t)
+	slotsPath := raidForeverSlots(t)
+	prev := raidSuiteRenewHeld
+	t.Cleanup(func() { raidSuiteRenewHeld = prev })
+	calls := 0
+	raidSuiteRenewHeld = func(w *autoForeverWorld, f autoForeverSlot) error {
+		calls++
+		if calls <= 2 {
+			return errors.New("the store is busy")
+		}
+		return w.renewHeld(f)
+	}
+	rig.watch = func(ctx context.Context, args []string, out string) int {
+		time.Sleep(120 * time.Millisecond)
+		if ctx.Err() != nil {
+			return exitRaidWalkFailed
+		}
+		writeSuiteSummary(t, out, suiteSummary(raidSuiteForeverUntil, time.Now(), 300))
+		return exitOK
+	}
+	code, rep, stderr := raidForeverRun(t, slotsPath, raidForeverEntry())
+	if code != exitOK {
+		t.Fatalf("exit %d stderr %q; want the watch to survive two store errors", code, stderr)
+	}
+	if len(rep.Raids) != 1 || rep.Raids[0].Verdict == suiteFailed {
+		t.Fatalf("report = %+v; want the walk judged, not failed (stderr %q)", rep.Raids, stderr)
+	}
+}
+
 // TestRaidSuiteForeverWatchPanicReleasesTheLease: a panic in the watch's goroutine is recovered, the lease is
 // released on the way out, and the panic is raised again rather than hidden.
 func TestRaidSuiteForeverWatchPanicReleasesTheLease(t *testing.T) {

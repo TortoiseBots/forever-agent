@@ -189,45 +189,62 @@ func (p *playRun) convertRaid(ctx context.Context) bool {
 	return true
 }
 
-// ValidateRaidLayout checks a layout file against the group it names, before anything is sent: every name is one of
-// the group's bots (or the character), no member is named for two subgroups, and no subgroup is named more than five
-// times. character is the agent's own, which a layout may move too. A layout that passes here can still fail the
-// roster's own fit (applyRaidLayout stops raid-move then), but a typo never costs a raid's FORM.
-func ValidateRaidLayout(layout []RaidSlot, r *PlayRaid, character string) error {
-	if len(layout) == 0 {
-		return nil
-	}
-	names := map[string]bool{strings.ToLower(strings.TrimSpace(character)): true}
-	if r != nil {
-		for _, name := range append(append(append([]string{}, r.Tanks...), r.Healers...), r.DPS...) {
-			names[strings.ToLower(strings.TrimSpace(name))] = true
-		}
-	}
+// raidKey is how a layout and a roster compare names.
+func raidKey(name string) string { return strings.ToLower(strings.TrimSpace(name)) }
+
+// checkRaidLayout is the one place that decides whether a layout can be satisfied, shared by the command's pre-check
+// and the run's planner so they cannot disagree. A layout is satisfiable when every line names a known member and a
+// subgroup from 1 to eight, no member is named for two subgroups, and no subgroup is NAMED more than five times: the
+// members a layout does not name are movable (a move into a full subgroup swaps with one of them), so they never
+// count against a subgroup's five. It returns the layout's distinct lines in file order, each named member's subgroup
+// by key, and every rule the layout breaks. noun names the group in "is not in the <noun>".
+func checkRaidLayout(layout []RaidSlot, known func(key string) bool, noun string) ([]RaidSlot, map[string]int, []error) {
 	var errs []error
+	var lines []RaidSlot
+	target := make(map[string]int, len(layout))
 	count := map[int]int{}
-	placed := map[string]int{}
 	for _, slot := range layout {
 		if slot.Subgroup < 1 || slot.Subgroup > party.MaxSubgroups {
 			errs = append(errs, fmt.Errorf("%q: subgroup %d: use 1 to %d", slot.Name, slot.Subgroup, party.MaxSubgroups))
 			continue
 		}
-		key := strings.ToLower(strings.TrimSpace(slot.Name))
-		if !names[key] {
-			errs = append(errs, fmt.Errorf("%q is not in the raid group", slot.Name))
+		key := raidKey(slot.Name)
+		if !known(key) {
+			errs = append(errs, fmt.Errorf("%q is not in the %s", slot.Name, noun))
 			continue
 		}
-		if prev, ok := placed[key]; ok {
+		if prev, ok := target[key]; ok {
 			if prev != slot.Subgroup {
 				errs = append(errs, fmt.Errorf("%q is named for subgroup %d and %d: one member sits in one subgroup", slot.Name, prev, slot.Subgroup))
 			}
 			continue
 		}
-		placed[key] = slot.Subgroup
+		target[key] = slot.Subgroup
+		lines = append(lines, slot)
 		count[slot.Subgroup]++
 		if count[slot.Subgroup] == party.MaxPartyMembers+1 {
 			errs = append(errs, fmt.Errorf("subgroup %d is named %d times: a raid subgroup holds %d", slot.Subgroup, count[slot.Subgroup], party.MaxPartyMembers))
 		}
 	}
+	return lines, target, errs
+}
+
+// ValidateRaidLayout checks a layout file against the group it names, before anything is sent, by the same rules the
+// run's planner applies (checkRaidLayout): every name is one of the group's bots (or the character), no member is
+// named for two subgroups, and no subgroup is named more than five times. character is the agent's own, which a layout
+// may move too. A layout that passes here is one the planner can carry out, so a typo or an impossible layout never
+// costs a raid's FORM.
+func ValidateRaidLayout(layout []RaidSlot, r *PlayRaid, character string) error {
+	if len(layout) == 0 {
+		return nil
+	}
+	names := map[string]bool{raidKey(character): true}
+	if r != nil {
+		for _, name := range append(append(append([]string{}, r.Tanks...), r.Healers...), r.DPS...) {
+			names[raidKey(name)] = true
+		}
+	}
+	_, _, errs := checkRaidLayout(layout, func(key string) bool { return names[key] }, "raid group")
 	return errors.Join(errs...)
 }
 
@@ -239,17 +256,20 @@ type raidLayoutMove struct {
 
 // raidLayoutPlan turns the layout into the moves that satisfy it from the roster's current subgroups. The core drops a
 // plain move into a subgroup that already holds five, so a move whose target is full trades places with a member of it
-// that the layout does not place there (the first such member in roster order). Moves into a subgroup with room are
-// taken first, so a member moving out of a full subgroup frees its slot before a swap is needed; a layout that cannot
-// be satisfied (an unknown name, six members in one subgroup, no eligible swap partner) is an error and sends nothing.
+// that the layout does not place there (the first such member in roster order). Only the members the layout NAMES
+// count against a subgroup's five: the others are movable, and a swap partner always exists (the mover is not in the
+// target, so at most four of its five members are named there). A member the layout does not name can therefore end in
+// the mover's old subgroup. Moves into a subgroup with room are taken first, so a member moving out of a full subgroup
+// frees its slot before a swap is needed. Each layout line is sent at most once (one move or one swap), and a layout
+// that cannot be satisfied is an error and sends nothing; the rules are checkRaidLayout's, shared with the command's
+// pre-check.
 func raidLayoutPlan(layout []RaidSlot, roster []PartyMember) ([]raidLayoutMove, error) {
 	if len(roster) == 0 {
 		return nil, errors.New("the party roster is empty")
 	}
 	current := make(map[string]int, len(roster))
-	byName := make(map[string]PartyMember, len(roster))
 	for _, m := range roster {
-		key := strings.ToLower(strings.TrimSpace(m.Name))
+		key := raidKey(m.Name)
 		if key == "" {
 			return nil, errors.New("the party roster holds an unnamed member")
 		}
@@ -257,40 +277,10 @@ func raidLayoutPlan(layout []RaidSlot, roster []PartyMember) ([]raidLayoutMove, 
 			return nil, fmt.Errorf("%s has no subgroup: the roster is not a raid's", m.Name)
 		}
 		current[key] = m.Subgroup
-		byName[key] = m
 	}
-	target := make(map[string]int, len(layout))
-	var pending []RaidSlot
-	for _, slot := range layout {
-		if slot.Subgroup < 1 || slot.Subgroup > party.MaxSubgroups {
-			return nil, fmt.Errorf("%q: subgroup %d: use 1 to %d", slot.Name, slot.Subgroup, party.MaxSubgroups)
-		}
-		key := strings.ToLower(strings.TrimSpace(slot.Name))
-		if _, ok := byName[key]; !ok {
-			return nil, fmt.Errorf("%q is not in the party", slot.Name)
-		}
-		if prev, ok := target[key]; ok {
-			if prev != slot.Subgroup {
-				return nil, fmt.Errorf("%q is named for subgroup %d and %d", slot.Name, prev, slot.Subgroup)
-			}
-			continue
-		}
-		target[key] = slot.Subgroup
-		pending = append(pending, slot)
-	}
-	// The final placement: a member the layout does not name stays where it is. A subgroup that would hold more
-	// than five can never be satisfied, by a move or by a swap.
-	final := map[int]int{}
-	for key, sub := range current {
-		if t, ok := target[key]; ok {
-			sub = t
-		}
-		final[sub]++
-	}
-	for sub := 1; sub <= party.MaxSubgroups; sub++ {
-		if final[sub] > party.MaxPartyMembers {
-			return nil, fmt.Errorf("subgroup %d would hold %d members: a raid subgroup holds %d", sub, final[sub], party.MaxPartyMembers)
-		}
+	pending, target, errs := checkRaidLayout(layout, func(key string) bool { _, ok := current[key]; return ok }, "party")
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
 	}
 	occ := map[int]int{}
 	for _, sub := range current {
@@ -301,7 +291,7 @@ func raidLayoutPlan(layout []RaidSlot, roster []PartyMember) ([]raidLayoutMove, 
 		// A member already in its subgroup is done; the layout's line sends nothing for it.
 		done := -1
 		for i, slot := range pending {
-			if current[strings.ToLower(slot.Name)] == slot.Subgroup {
+			if current[raidKey(slot.Name)] == slot.Subgroup {
 				done = i
 				break
 			}
@@ -321,7 +311,7 @@ func raidLayoutPlan(layout []RaidSlot, roster []PartyMember) ([]raidLayoutMove, 
 			}
 		}
 		slot := pending[idx]
-		key := strings.ToLower(slot.Name)
+		key := raidKey(slot.Name)
 		from := current[key]
 		if free {
 			occ[from]--
@@ -332,10 +322,10 @@ func raidLayoutPlan(layout []RaidSlot, roster []PartyMember) ([]raidLayoutMove, 
 			continue
 		}
 		// The target is full: trade places with the first member of it, in roster order, that the layout does not
-		// place there. The final count above guarantees one exists.
+		// place there. checkRaidLayout names at most five members into it and the mover is not in it, so one exists.
 		partner := ""
 		for _, m := range roster {
-			pk := strings.ToLower(strings.TrimSpace(m.Name))
+			pk := raidKey(m.Name)
 			if pk == key || current[pk] != slot.Subgroup {
 				continue
 			}
@@ -346,11 +336,11 @@ func raidLayoutPlan(layout []RaidSlot, roster []PartyMember) ([]raidLayoutMove, 
 			break
 		}
 		if partner == "" {
-			return nil, fmt.Errorf("subgroup %d is full and no member of it is free to swap with %s", slot.Subgroup, slot.Name)
+			return nil, fmt.Errorf("internal error: subgroup %d is full and no member of it is free to swap with %s (the layout check should have refused this)", slot.Subgroup, slot.Name)
 		}
 		// The swap exchanges the two subgroups, so both occupancies stay as they are.
 		current[key] = slot.Subgroup
-		current[strings.ToLower(strings.TrimSpace(partner))] = from
+		current[raidKey(partner)] = from
 		moves = append(moves, raidLayoutMove{slot: slot, swapWith: partner})
 		pending = append(pending[:idx], pending[idx+1:]...)
 	}

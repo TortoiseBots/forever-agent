@@ -699,8 +699,9 @@ type raidSuiteWatchResult struct {
 }
 
 // superviseForeverWatch waits for one `--forever` watch and keeps its lease alive: every raidSuiteLeaseRenew the lease
-// is renewed. A renewal error that passes is retried, up to raidSuiteLeaseRenewTries consecutive failures: only then
-// is the lease counted lost, and the watch cancelled, because a run may not keep a slot it no longer holds. It
+// is renewed. A store error that passes is retried, up to raidSuiteLeaseRenewTries consecutive failures: only then
+// is the lease counted lost, and the watch cancelled, because a run may not keep a slot it no longer holds. A
+// definitive answer (the lease is gone, or held by another holder) cancels the watch at once. It
 // returns the watch's own answer and, when the lease was lost, the last renewal's error.
 func (s *raidSuite) superviseForeverWatch(cancel context.CancelFunc, f autoForeverSlot, done <-chan raidSuiteWatchResult) (raidSuiteWatchResult, error) {
 	tick := time.NewTicker(raidSuiteLeaseRenew)
@@ -718,7 +719,9 @@ func (s *raidSuite) superviseForeverWatch(cancel context.CancelFunc, f autoForev
 			}
 			failures++
 			fmt.Fprintf(s.stderr, "raid-suite: renew %s/%s (%d/%d): %v\n", f.server, f.slot, failures, raidSuiteLeaseRenewTries, err)
-			if failures < raidSuiteLeaseRenewTries {
+			// A definitive answer (the lease is gone, or another holder has it) is lost at once: waiting would only
+			// let the watch run on at a slot it no longer holds. A store error that may pass gets the retries.
+			if !autoLeaseLost(err) && failures < raidSuiteLeaseRenewTries {
 				continue
 			}
 			cancel()
