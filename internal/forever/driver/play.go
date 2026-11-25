@@ -318,6 +318,9 @@ type playRun struct {
 
 	// sightBlocked is the last look's verdict of the pull in hand: the tank could not see the skull.
 	sightBlocked bool
+	// sightUnsupported is the port's reason once the module answers no sight query at all (the query came back as the
+	// player's own say, or the build has no command): it is recorded once and the older flow runs the rest of the run.
+	sightUnsupported string
 	// gateStatsErr records the pre-boss gate's first failed member-stats request (the wait's own error is recorded once).
 	gateStatsErr bool
 	// refused is set when the last engage's tank order was refused by the module (its whisper), and refusedOut when

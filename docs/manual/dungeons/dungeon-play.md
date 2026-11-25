@@ -4,7 +4,7 @@ title: forever dungeon-play
 description: Play one dungeon plan as a real character leading four bots, and read the run's record and its pass or fail verdict.
 tags: [dungeons, play, player, command]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T10:00:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T19:45:00Z }
 sources:
   - id: play-cmd
     resource: cmd/forever-agent/forever_play.go
@@ -204,7 +204,10 @@ refusal (`PlayRefuseTime`); a skull the server sees from no point of the path ta
 answer the module cannot give — a rate refusal, an error, or a module without the command — keeps the older flow
 exactly: the navmesh close-in before the order, and after a refusal a 5 yd step along the path from the tank toward the
 skull with a 15 s wait for the tank beside it. A module that answers once that it has no sight command is asked no more
-for the rest of the run.
+for the rest of the run. The same holds for an account the module does not answer sight for: a query the core says
+aloud as this character's own chat is read as that answer, not as a command falling through, so it trips no say-echo
+guard and the next order still goes out. Either way the one `pull_sight_unsupported` event carries the `reason`
+(`no-command` or `said-aloud`), and every later pull reads the unknown answer at once.
 
 When those retries are spent — or the skull already stands inside the character's own 5 yd reach, where another step
 would add no sight — the leading player pulls the mob itself:

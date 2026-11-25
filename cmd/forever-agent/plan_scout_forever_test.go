@@ -84,6 +84,9 @@ type fakeForeverServe struct {
 	// walkErr is WalkPath's error; walkHang makes it wait for the context instead of answering.
 	walkErr  error
 	walkHang bool
+	// walkErrAt, when set, answers WalkPath at one point with its error instead of walking (the serve's own
+	// "no full route" for a partial one); a nil answer walks the point as usual.
+	walkErrAt func(x, y, z float32) error
 	// gmRefusal answers a GM line that starts with the key with this line instead of succeeding.
 	gmRefusal map[string]string
 	// gmErr makes a GM line that starts with the key return this error (the serve's own "not confirmed" answer).
@@ -335,11 +338,16 @@ func (f *fakeForeverServe) PathTo(_ context.Context, x, y, z float32) (serveclie
 func (f *fakeForeverServe) WalkPath(ctx context.Context, x, y, z float32) (serveclient.Path, error) {
 	f.mu.Lock()
 	f.walks = append(f.walks, dungeon.Point{X: x, Y: y, Z: z})
-	hang, err := f.walkHang, f.walkErr
+	hang, err, at := f.walkHang, f.walkErr, f.walkErrAt
 	f.mu.Unlock()
 	if hang {
 		<-ctx.Done()
 		return serveclient.Path{}, ctx.Err()
+	}
+	if at != nil {
+		if e := at(x, y, z); e != nil {
+			return serveclient.Path{}, e
+		}
 	}
 	if err != nil {
 		return serveclient.Path{}, err
@@ -721,6 +729,69 @@ func TestScoutForeverWalkFailureIsAnErrorRow(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("no live_walk check in the report")
+	}
+}
+
+// TestScoutForeverPartialWalkGoesOnToTheNextStand: a walk_path that answers no full route (partial) is not a reason to
+// stop the pass. The stand's walk is recorded as partial with the distance the session reached, the next stand is
+// still planned and walked, and the report's note counts the partial one.
+func TestScoutForeverPartialWalkGoesOnToTheNextStand(t *testing.T) {
+	dir := t.TempDir()
+	mmaps := foreverFlat(t)
+	foreverScoutPlanFile(t, dir, "scout_pw", true)
+	fake := newFakeForeverServe()
+	fake.pathStatus = func(dungeon.Point, dungeon.Point) string { return "partial" }
+	fake.walkErrAt = func(x, y, z float32) error {
+		if x != 20 {
+			return nil
+		}
+		// The session moved halfway to the stand before the server answered that it has no full route.
+		fake.mu.Lock()
+		fake.status.X, fake.status.Y, fake.status.Z = 15, 0, 0
+		fake.mu.Unlock()
+		return errors.New("serveclient: walk_path: rpc error -32000: walk_path: no full route to 20.0 0.0 0.0 (partial)")
+	}
+	useFakeForeverServe(t, fake)
+	code, _, errOut := runCLI("plan-scout", "scout_pw", "--dir", dir, "--mmaps", mmaps,
+		"--spawns", foreverExport(), "--forever", "--out", filepath.Join(dir, "out"), "--live", "--slot", t.TempDir())
+	if code == exitPlanScoutLiveAborted {
+		t.Fatalf("the pass stopped on a partial walk: %q", errOut)
+	}
+	fake.mu.Lock()
+	paths := len(fake.paths)
+	fake.mu.Unlock()
+	if paths < 2 {
+		t.Fatalf("%d path queries; want the next stand scouted after the partial walk", paths)
+	}
+	rep := foreverReport(t, dir, "scout_pw")
+	partial := 0
+	for _, st := range rep.Steps {
+		for _, c := range st.Checks {
+			if c.Name != planscout.CheckLiveWalk || c.Verdict != planscout.VerdictSkip {
+				continue
+			}
+			if reached, ok := c.Data["reached_yd"]; ok {
+				partial++
+				if reached != 5 {
+					t.Errorf("live_walk reached_yd = %v; want 5 (from x 10 to x 15)", reached)
+				}
+				if !strings.Contains(c.Reason, "no full route") {
+					t.Errorf("live_walk reason %q; want the server's no-full-route answer", c.Reason)
+				}
+			}
+		}
+	}
+	if partial != 1 {
+		t.Fatalf("%d partial live_walk checks; want one", partial)
+	}
+	note := ""
+	for _, n := range rep.Notes {
+		if strings.HasPrefix(n, "live walks: ") {
+			note = n
+		}
+	}
+	if !regexp.MustCompile(`^live walks: 1 stand\(s\) partial`).MatchString(note) {
+		t.Fatalf("the report has no partial-stand count, only %q (%v)", note, rep.Notes)
 	}
 }
 

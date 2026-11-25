@@ -307,8 +307,19 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 		noteStops = true
 		data.Notes = append(data.Notes, fmt.Sprintf("live stops: %d of %d read", readStops, len(stops)))
 	}
+	// partialWalks counts the stands whose walk the server planned no full route for: each is recorded with the
+	// distance it reached and the pass goes on, and the one note says how many there were.
+	partialWalks, partialNoted := 0, false
+	notePartialWalks := func() {
+		if partialWalks == 0 || partialNoted {
+			return
+		}
+		partialNoted = true
+		data.Notes = append(data.Notes, fmt.Sprintf("live walks: %d stand(s) partial (walk_path had no full route; each recorded with the distance reached and the pass went on)", partialWalks))
+	}
 	abort := func(reason string) (planscout.LiveData, int, string) {
 		noteStopCount()
+		notePartialWalks()
 		data.Aborted = true
 		data.AbortReason = reason
 		return data, exitPlanScoutLiveAborted, reason
@@ -481,6 +492,26 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 				data.Walks[hop.Step] = planscout.WalkResult{Skipped: "walk budget"}
 				continue
 			}
+			if scoutPartialWalk(walkErr) {
+				// The server planned no full route, so the walk never started: that stand is partial, not the end of
+				// the pass. Record where the session stands and how far that is from the hop's origin, then go on to
+				// the next stand.
+				st, serr := client.Status(ctx)
+				if serr != nil {
+					if r := ceiling(); r != "" {
+						return abort(r)
+					}
+					return abort(fmt.Sprintf("status after the partial route to %.1f %.1f %.1f: %v",
+						hop.Point.X, hop.Point.Y, hop.Point.Z, serr))
+				}
+				partialWalks++
+				data.Walks[hop.Step] = planscout.WalkResult{
+					Stop:    dungeon.Point{X: st.X, Y: st.Y, Z: st.Z},
+					Reached: foreverDist2D(hop.From.X, hop.From.Y, st.X, st.Y),
+					Partial: true,
+				}
+				continue
+			}
 			// A failed walk is an error row with the reason, never a stop the check measures as a shortfall.
 			reason := fmt.Sprintf("the walk to %.1f %.1f %.1f failed: %v",
 				hop.Point.X, hop.Point.Y, hop.Point.Z, walkErr)
@@ -497,6 +528,7 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 		}
 		data.Walks[hop.Step] = planscout.WalkResult{Stop: dungeon.Point{X: st.X, Y: st.Y, Z: st.Z}, Length: float64(walked.Length)}
 	}
+	notePartialWalks()
 	return data, exitOK, ""
 }
 
@@ -811,6 +843,17 @@ func foreverGM(ctx context.Context, c scoutForeverClient, line string, planMap u
 // more after that settle instead of stopping the pass there.
 func scoutTeleportUnconfirmed(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "the teleport is not confirmed")
+}
+
+// scoutPartialWalk reports the serve's own no-full-route answer for a partial route: the walk never starts, and the
+// pass records that stand as partial and goes on to the next one. The answer is the serve's documented text, read
+// here because the error crosses the RPC as the method's own message.
+func scoutPartialWalk(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "walk_path: no full route") && strings.Contains(msg, "(partial)")
 }
 
 // scoutTeleportAttempts is how many times a stand sends its `.go xyz`: the first line can be the one the core dropped

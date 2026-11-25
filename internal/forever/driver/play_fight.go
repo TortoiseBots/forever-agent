@@ -569,19 +569,44 @@ func sightSamples(points []Vec3, yd float64) []Vec3 {
 
 // tankSight is the ServerSight port's answer for the unit as the TANK sees it; known false when the module cannot say.
 func (p *playRun) tankSight(u Unit) (in bool, dist float64, known bool) {
+	p.noteSightUnsupported()
 	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 || u.GUID.IsZero() {
 		return false, 0, false
 	}
-	return p.ports.ServerSight.TankSees(p.cfg.Bots[0], u.GUID)
+	in, dist, known = p.ports.ServerSight.TankSees(p.cfg.Bots[0], u.GUID)
+	if !known {
+		p.noteSightUnsupported()
+	}
+	return in, dist, known
 }
 
 // pointSight asks the ServerSight port whether a spot on the ground sees the unit. at is a point on the floor; the
 // query is made from the core's standing eye above it (PlayLosEyeYd). known false when the module cannot say.
 func (p *playRun) pointSight(at Vec3, u Unit) (in bool, dist float64, known bool) {
+	p.noteSightUnsupported()
 	if p.ports.ServerSight == nil || u.GUID.IsZero() {
 		return false, 0, false
 	}
-	return p.ports.ServerSight.PointSees(Vec3{at[0], at[1], at[2] + float32(PlayLosEyeYd)}, u.GUID)
+	in, dist, known = p.ports.ServerSight.PointSees(Vec3{at[0], at[1], at[2] + float32(PlayLosEyeYd)}, u.GUID)
+	if !known {
+		p.noteSightUnsupported()
+	}
+	return in, dist, known
+}
+
+// noteSightUnsupported records the module's refusal to answer sight once for the run, with the port's reason: the
+// query came back as the player's own say (the account may not ask), or the build has no sight command. Every later
+// pull reads unknown at once, so the run keeps today's flow without paying a quiet wait for the same answer.
+func (p *playRun) noteSightUnsupported() {
+	if p.sightUnsupported != "" || p.ports.ServerSight == nil {
+		return
+	}
+	reason := p.ports.ServerSight.Unsupported()
+	if reason == "" {
+		return
+	}
+	p.sightUnsupported = reason
+	p.rec.Event(p.now(), "pull_sight_unsupported", map[string]any{"reason": reason})
 }
 
 // sightBudget is one PULL's whole sight work in one budget: PlayTankSightSpots queries and PlayTankSightTime from the
@@ -863,6 +888,7 @@ func nearestSample(samples []Vec3, at Vec3) int {
 // of the first. With no port, or an answer the module cannot give, it is today's flow: the plan's marks and the
 // navmesh close-in (closeToSee). false means the run stopped or a regroup is next.
 func (p *playRun) tankSightBefore(ctx context.Context, group int, members []Unit) bool {
+	p.noteSightUnsupported()
 	p.skullPick = wire.GUID{}
 	p.sightBlocked = false
 	fallback := func() bool {

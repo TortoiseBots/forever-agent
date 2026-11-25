@@ -182,4 +182,9 @@ type ServerSight interface {
 	// PointSees asks whether a spot on the ground sees the unit. at is the eye's point, already raised by the caller
 	// (PlayLosEyeYd); dist is what the server measured and 0 when it refused.
 	PointSees(at Vec3, target wire.GUID) (in bool, dist float64, known bool)
+	// Unsupported is why the module answers no sight query at all, once it does not: "" while it answers,
+	// "said-aloud" when the query came back as the caller's own say chat (the account may not ask), "no-command"
+	// when the build has no sight command. The reason is fixed for the session: the run records it once and keeps
+	// the older flow for the rest of the run.
+	Unsupported() string
 }
