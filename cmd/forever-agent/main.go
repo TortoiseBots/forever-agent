@@ -194,6 +194,7 @@ const usageText = `usage:
   forever-agent raid-walk <plan> [--server m910q] [--slot N] [--holder NAME] [--dir DIR] [--sql FILE] [--until boss|none|step N|leg L] [--from leg L|step N] [--speed X] [--hires FILE] [--enter auto|near|tele] [--hold-minutes M] [--max-run-minutes 90] [--paused-wait 10m] [--auto-resume K] [--reset-wait 5m] [--wipe-resume K] [--wipe-end fast] [--wipe-rest 10m] [--revive-at-raid=false] [--patrols FILE] [--out DIR] [--dash-url URL] [--dash-user TADASH] [--dash-pass-file PATH] [--dash-insecure-http] [--decisions on|off] [--decisions-max-mib N] [--mmaps DIR] [--slots FILE] [--binary PATH] [--instance-cap-per-account N] [--reuse-instance] [--dry-run]
   forever-agent walk-preflight [--server NAME]... [--binary PATH] [--json] <walk-dir>
   forever-agent decisions pull --dash-url URL --dash-user U --dash-pass-file FILE [--dash-insecure-http] --commander C [--since T] [--until T] --out DIR [--max-mib N]
+  forever-agent decisions pull (--leader NAME | --run ID) --out DIR [--since-seq N] [--limit N] [--rest host:port --rpc host:port --ca FILE] --account EMAIL --character NAME
   forever-agent plan-diff <old> <new> [--plan NAME] [--json] [--out DIR] [--svg FILE] [--minimaps DIR] [--picture worldmap|minimap|navmesh|none] [--fail-on-change]
   forever-agent plan-list [--dir dungeons] [--json]
   forever-agent raid-autopilot [--foreground] [--binary PATH] [--poll D] [--stall D] [--settle D] [--status-every D] [--instance-cap-per-account N] [--dry-run] <walk-dir>

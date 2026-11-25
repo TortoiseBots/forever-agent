@@ -222,7 +222,8 @@ func playDry(ctx context.Context, route *driver.Route, cfg driver.PlayConfig, ch
 	fake.EmitCasts = true
 	fake.SpawnPacks()
 	fake.SpawnBosses()
-	ports := driver.PlayPorts{Owner: fake.Module, Group: fake, Player: fake, World: fake, Walker: fake, Clock: clock, Combat: fake}
+	ports := driver.PlayPorts{Owner: fake.Module, Group: fake, Player: fake, World: fake, Walker: fake, Clock: clock,
+		Combat: fake}
 	return driver.Play(ctx, route, ports, cfg)
 }
 

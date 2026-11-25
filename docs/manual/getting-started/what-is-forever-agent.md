@@ -100,7 +100,7 @@ The Turtle packages and the old documentation are under `docs/turtle/`.
 | `path-check` | `forever path-check` |
 | `raid-walk`, `raid-suite`, `walk-preflight` | none yet: `forever raid-watch` and `raid-autopilot --forever` are the Forever path |
 | `trace-score` | none: it reads a 1.12 run trace |
-| `pulltest`, `decisions`, `tune-diff` | none: Turtle test and tuning tools |
+| `pulltest`, `tune-diff` | none: Turtle test and tuning tools |
 | `rotation` | none: the Turtle brain |
 | `fight-score`, `dashboard-replay` | none: they read Turtle dashboard recordings |
 

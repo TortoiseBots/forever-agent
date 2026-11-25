@@ -179,6 +179,13 @@ type Config struct {
 	// starts it on the tank once the party is in, "off" sends nothing; empty is off for every other run. A core
 	// without the command is one warning line and the run goes on (the summary then says "unsupported").
 	CombatLogWatch string
+	// PullDecisions reads the live module's decision rows during the watch, after every status poll (at least two
+	// seconds apart) and once more just before the stop, and appends them beside the record as
+	// <run_id>.decisions.jsonl (dungeon-watch's --decisions-pull). The module erases a run's capture when it ends, so a
+	// run can be read only while it lives, and a run that ends by itself loses the rows after the last read (the
+	// summary's note names the last sequence read). Off by default; a failed read is a warning in the summary and
+	// never fails the watch.
+	PullDecisions bool
 	// Logf prints the watch's progress lines; nil prints nothing.
 	Logf func(format string, args ...any)
 }

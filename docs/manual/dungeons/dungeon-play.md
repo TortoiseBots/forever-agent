@@ -237,7 +237,9 @@ verdict: PASS
 ```
 
 With `--out` the run writes `<run_id>.jsonl` (the trace), `<run_id>.forever-run.json` (the summary) and
-`<run_id>.combatlog.jsonl` (the combat log). The summary's `play` block holds the run's minutes, its budgets,
+`<run_id>.combatlog.jsonl` (the combat log). A player-led run has no decision capture to read, so `dungeon-play` does
+not pull the module's rows; [dungeon-watch](dungeon-watch.md) does, while its run lives. The summary's `play` block
+holds the run's minutes, its budgets,
 `gm_lines`, the lines by prefix, the frame count and the combat-log counters (`combat_rows`, `combat_dropped`,
 `combat_truncated`, `combat_error`).
 

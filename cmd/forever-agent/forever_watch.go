@@ -83,6 +83,8 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 	drawMap := fs.Bool("map", false, "after the summary, write the run's map (SVG and HTML replay) into --out; a failure is one log line and never fails the watch")
 	navmeshDir := fs.String("navmesh", "", "mmaps folder for the live entry walk")
 	dry := fs.Bool("dry", false, "run the watch machine against the scripted world (no network)")
+	pullDecisions := false
+	fs.Var(onOffFlag{v: &pullDecisions, name: "--decisions-pull"}, "decisions-pull", "read the live run's decision rows on an interval and once more before the stop, into <run_id>.decisions.jsonl beside the record (on or off; needs --out)")
 	var layoutPath string
 	if raid {
 		fs.StringVar(&layoutPath, "layout", "", "raid layout file: one bot per line, its name and the subgroup 1-8 it is moved to before PREPARE (optional)")
@@ -147,6 +149,10 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 		fmt.Fprintln(stderr, cmdName+": --map needs --out (the map is written beside the trace)")
 		return exitUsage
 	}
+	if pullDecisions && *out == "" {
+		fmt.Fprintln(stderr, cmdName+": --decisions-pull needs --out (the rows are written beside the record)")
+		return exitUsage
+	}
 	if !pf.check(cmdName, *dry, stderr) {
 		return exitUsage
 	}
@@ -204,6 +210,7 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 		FrameEvery:     time.Duration(*frameEvery) * time.Second,
 		CombatMaxBytes: int64(*combatMaxMB) << 20,
 		CombatLogWatch: *combatlogWatch,
+		PullDecisions:  pullDecisions,
 		Logf: func(format string, a ...any) {
 			fmt.Fprintf(stdout, format+"\n", a...)
 		},

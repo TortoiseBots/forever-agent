@@ -33,7 +33,7 @@ forever-agent forever dungeon-watch --leader NAME --plan FILE \
     [--watchdog-minutes N] [--pause-minutes N] [--poll SEC] [--attach [--attach-wait SEC]] \
     [--frame-every SEC] [--combat-max-mb N] [--combatlog-watch group|unit|off] \
     [--repulls N] [--member-deaths N] [--slow-factor X] [--out DIR] [--map] [--navmesh DIR] \
-    [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] \
+    [--decisions-pull] [--dry] [--no-preflight | --preflight-only] [--serve-dir DIR] [--export FILE] \
     [--soap-user NAME --soap-password-file FILE] [--module-tactics FILE]
 ```
 
@@ -94,6 +94,7 @@ on; the summary then says `unsupported` and the log is in range only.
 | `--frame-every` | 2 | The frame interval in seconds (2-60); `0` turns frames off. |
 | `--combat-max-mb` | 64 | The combat log's size bound in MiB (1-4096); a page that would cross it is not written and the summary says the log is truncated. |
 | `--combatlog-watch` | `group` | `group`, `unit` or `off`. |
+| `--decisions-pull` | off | Read the live run's decision rows after every status poll (at least 2 s apart) and once more just before the stop, and append them beside the record as `<run_id>.decisions.jsonl` (see [traces and records](../testing/traces-and-records.md#the-decisions-file)). The module erases a run's capture when it ends, so only a watched, live run can be read, and a run that ends by itself loses the rows after the last read (the summary's `note` says so and names the last sequence read). Needs `--out`; a failed read is a warning in the summary and never fails the watch. |
 | `--repulls` | 2 | Report card: flag a step re-pulled more than this many times (0-100). |
 | `--member-deaths` | 3 | Report card: flag a member with at least this many deaths and two above the next (1-20). |
 | `--slow-factor` | 2 | Report card: flag a leg over this many times its plan's recorded time (1-20). |
@@ -152,6 +153,12 @@ With `--out` the watch writes:
   `events`, the frame and combat counters, `pause_log`, `legs`, `step_log`, `death_log`, `loose_pulls`,
   `rescue_log` and the instance's `encounters`.
 - `<run_id>.combatlog.jsonl`: the combat log rows, when the session has a log.
+- `<run_id>.decisions.jsonl`: the module's decision rows of the live run, with `--decisions-pull`: one JSON object
+  per line, oldest first. The summary's `decisions` block counts them (`rows`, `pages`, `bytes`, `skipped`,
+  `page_bound`) or says why none came (`note`). A run that ends by itself loses the rows after the watch's last
+  read, because the module erases its capture with the run: at most one poll's rows are missing, and the `note` says
+  so and names the last sequence read, or says that no row was read. A run this watch stops itself has no such loss:
+  it reads once more before the stop.
 
 The report card (`card: ...`) names the verdict `CLEARED`, `STOPPED AT <leg/step> (<reason>)` or `PAUSED-STUCK AT
 <leg/step> (<pause reason>)`, or `FAILED (<reason>)`, plus the flags (re-pulled steps, member deaths, slow legs)

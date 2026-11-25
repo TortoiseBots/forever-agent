@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/driver"
+	"github.com/pjerra/forever-agent/internal/forever/world"
 	"github.com/pjerra/forever-agent/internal/tbdash"
 )
 
@@ -170,5 +172,89 @@ func TestDecisionsPullExitCodes(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "manifest:") {
 		t.Fatalf("manifest note missing: %q", errOut)
+	}
+}
+
+// TestDecisionsPullModuleFlags: the module mode is chosen by --leader or --run, and a half dashboard invocation never
+// becomes a module read.
+func TestDecisionsPullModuleFlags(t *testing.T) {
+	login := []string{"--rest", "rest.test:443", "--rpc", "rpc.test:443", "--ca", "/tmp/ca.pem", "--account", "a", "--character", "C"}
+	cases := []struct {
+		name string
+		args []string
+		ok   bool
+		want string
+	}{
+		{"leader", append([]string{"--leader", "Tankbot", "--out", "/tmp/o"}, login...), true, "Tankbot"},
+		{"run", append([]string{"--run", "r-20261124T190001-a1b2", "--out", "/tmp/o"}, login...), true, "r-20261124T190001-a1b2"},
+		{"both", append([]string{"--leader", "Tankbot", "--run", "r-1", "--out", "/tmp/o"}, login...), false, ""},
+		{"no out", append([]string{"--leader", "Tankbot"}, login...), false, ""},
+		{"stray dashboard flag", append([]string{"--leader", "Tankbot", "--out", "/tmp/o", "--dash-url", "http://d"}, login...), false, ""},
+		{"limit over the clamp", append([]string{"--leader", "Tankbot", "--out", "/tmp/o", "--limit", "500"}, login...), false, ""},
+		{"negative since", append([]string{"--leader", "Tankbot", "--out", "/tmp/o", "--since-seq", "-1"}, login...), false, ""},
+	}
+	for _, c := range cases {
+		o, code := parseDecisionsPullArgs(c.args, io.Discard)
+		if c.ok && (code != exitOK || !o.moduleMode() || o.target() != c.want) {
+			t.Errorf("%s: code %d, target %q, want %q", c.name, code, o.target(), c.want)
+		}
+		if !c.ok && code != exitUsage {
+			t.Errorf("%s: code %d, want a usage error", c.name, code)
+		}
+	}
+	// The dashboard mode still parses as it did, with no module address.
+	o, code := parseDecisionsPullArgs([]string{"--dash-url", "http://d", "--dash-pass-file", "/tmp/pass", "--commander", "C", "--out", "/tmp/o"}, io.Discard)
+	if code != exitOK || o.moduleMode() {
+		t.Fatalf("dashboard flags: code %d, module mode %v", code, o.moduleMode())
+	}
+}
+
+// TestDecisionsPullModuleReport: the command prints the pull's summary and exits 0; a read failure exits nonzero with
+// the reason, and the password never appears in either.
+func TestDecisionsPullModuleReport(t *testing.T) {
+	t.Setenv("FOREVER_PASSWORD", "hunter2")
+	old := enterDecisionsPull
+	defer func() { enterDecisionsPull = old }()
+	login := []string{"pull", "--leader", "Tankbot", "--out", "/tmp/o", "--rest", "rest.test:443", "--rpc", "rpc.test:443",
+		"--ca", "/tmp/ca.pem", "--account", "a", "--character", "C"}
+	enterDecisionsPull = func(ctx context.Context, o *decisionsPullOptions, stdout io.Writer) (*world.Report, error) {
+		if o.target() != "Tankbot" || o.out != "/tmp/o" {
+			t.Errorf("the session got target %q out %q", o.target(), o.out)
+		}
+		return &world.Report{Decisions: &driver.RunDecisions{Rows: 3, Pages: 1, Bytes: 512},
+			DecisionsFile: "/tmp/o/r-1.decisions.jsonl"}, nil
+	}
+	var stdout, stderr bytes.Buffer
+	if code := decisionsCmd(context.Background(), login, &stdout, &stderr); code != exitOK {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "pulled 3 row(s)") || !strings.Contains(stdout.String(), "r-1.decisions.jsonl") {
+		t.Fatalf("stdout: %q", stdout.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), "hunter2") {
+		t.Fatal("the password reached the output")
+	}
+	enterDecisionsPull = func(ctx context.Context, o *decisionsPullOptions, stdout io.Writer) (*world.Report, error) {
+		return nil, errors.New("the module refused the read: no-capture")
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := decisionsCmd(context.Background(), login, &stdout, &stderr); code != exitWorld {
+		t.Fatalf("refusal exit %d, want %d", code, exitWorld)
+	}
+	if !strings.Contains(stderr.String(), "no-capture") {
+		t.Fatalf("stderr: %q", stderr.String())
+	}
+	// A run the module kept no row for is a success with nothing written, and the message says so.
+	enterDecisionsPull = func(ctx context.Context, o *decisionsPullOptions, stdout io.Writer) (*world.Report, error) {
+		return &world.Report{Decisions: &driver.RunDecisions{Rows: 0, Pages: 1}}, nil
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := decisionsCmd(context.Background(), login, &stdout, &stderr); code != exitOK {
+		t.Fatalf("no rows: exit %d, want 0: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "no decision row") {
+		t.Fatalf("stdout: %q", stdout.String())
 	}
 }

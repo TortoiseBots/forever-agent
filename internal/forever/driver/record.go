@@ -90,6 +90,9 @@ type RunSummary struct {
 	// Play is set for a player run (forever dungeon-play): its time, its budgets, the lines it sent and the evidence
 	// the spell judge reads. Other modes leave it nil.
 	Play *PlayRecord `json:"play,omitempty"`
+	// Decisions is the module's decision rows a run pulled at its end (--decisions-pull): the rows written to
+	// <run_id>.decisions.jsonl, or why the pull wrote none. A run that did not ask for the pull leaves it nil.
+	Decisions *RunDecisions `json:"decisions,omitempty"`
 }
 
 // PlayRecord is a player run's own counters (#88). Minutes is the run's length on its clock, MaxMinutes and MaxWipes

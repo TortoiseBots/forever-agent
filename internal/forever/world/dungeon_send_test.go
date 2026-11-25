@@ -20,7 +20,7 @@ import (
 // it (a raw setup line, a new escape hatch) fails the test.
 var adapterMethods = map[string]bool{
 	"State": true, "Threat": true, "Order": true, "Party": true, "Act": true,
-	"RunStatus": true, "RunEvents": true, "CommanderStatus": true,
+	"RunStatus": true, "RunEvents": true, "RunDecisions": true, "CommanderStatus": true,
 	"Run": true, "gmOn": true, "teleOutside": true, "appear": true, "deathRecap": true,
 	"combatLog": true, "combatLogUnit": true,
 	// The group layer's raid calls (#108): typed client packets sent by the session, never a `.tb` line.
