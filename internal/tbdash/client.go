@@ -274,6 +274,23 @@ func (c *Client) GetJSON(ctx context.Context, path string, query url.Values) (js
 	return json.RawMessage(body), nil
 }
 
+// GetJSONOnce GETs path once, without the session renewal a 401 or a 302 costs: one of those answers is returned as
+// an *HTTPError, as any other non-200 is. It is for a caller whose read is optional, where a route that redirects (or
+// a dashboard that serves it only to a browser) must not cost a full login on every sample of a poll.
+func (c *Client) GetJSONOnce(ctx context.Context, path string, query url.Values) (json.RawMessage, error) {
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	body, code, err := c.get(ctx, path, query)
+	if err != nil {
+		return nil, err
+	}
+	if code != http.StatusOK {
+		return nil, &HTTPError{Code: code, Method: http.MethodGet, Path: path}
+	}
+	return json.RawMessage(body), nil
+}
+
 // Commanders reads GET /api/v1/commanders.
 func (c *Client) Commanders(ctx context.Context) (json.RawMessage, error) {
 	return c.GetJSON(ctx, "/api/v1/commanders", nil)
