@@ -38,12 +38,12 @@ func (w *World) Packs(opt PackOptions) []Pack {
 	return w.packs(index)
 }
 
-// packs groups the hostile spawns found in index. A pack's identity is the authored one: the group's leader and members, and
-// both directions of every aggro link (spec 5.2 (a) and (b); nothing else — proximity and family assist happen per pull).
-func (w *World) packs(index map[uint64]int) []Pack {
-	if len(index) == 0 {
-		return nil
-	}
+// packSets is every spawn in index under one pack label: the roots of the authored pack rules. A creature_groups group
+// links its leader and members when the group's rows (ORed) carry AGGRO_TOGETHER; a creature_linking edge links the two
+// spawns when it carries an aggro flag (both directions). A spawn linked to nothing is its own set. leaderFallback links
+// every non-zero group leader's members whatever the flags, for an export that carries no group_flags column at all: it
+// names who leads whom and nothing else, and there the leader row is the only evidence a group exists.
+func (w *World) packSets(index map[uint64]int, leaderFallback bool) map[uint64]uint64 {
 	uf := newUnion(len(w.Spawns))
 
 	// (a) creature_groups rows with AGGRO_TOGETHER: leader and every member are one pack.
@@ -57,7 +57,7 @@ func (w *World) packs(index map[uint64]int) []Pack {
 		groupFlags[s.GroupLeader] |= s.GroupFlags
 	}
 	for leader, members := range groups {
-		if groupFlags[leader]&AggroTogether == 0 {
+		if !leaderFallback && groupFlags[leader]&AggroTogether == 0 {
 			continue
 		}
 		first := -1
@@ -86,10 +86,43 @@ func (w *World) packs(index map[uint64]int) []Pack {
 		}
 	}
 
-	components := map[int][]uint64{}
+	out := make(map[uint64]uint64, len(index))
+	for guid, i := range index {
+		out[guid] = uint64(uf.find(i))
+	}
+	return out
+}
+
+// PackIndex is every spawn's pack label under the core's pack model: Pack's own (a creature_groups group that aggros
+// together, or a creature_linking aggro edge), with one reading for an older export. An export whose creature rows carry
+// group leaders but no group_flags column at all (World.GroupFlagsKnown false) says only who leads whom: with no flags
+// to read, a shared non-zero leader is the group those rows describe. A column whose every row says 0 is not that
+// case; it says nothing aggros together. A spawn in no group is its own label.
+func (w *World) PackIndex() map[uint64]uint64 {
+	index := make(map[uint64]int, len(w.Spawns))
+	// The column is the evidence, not a non-zero value in it: an export carrying group_flags (or the Forever export's
+	// group_ai) says all its groups' option sets, and zeros mean none of them aggros together. Only an export without
+	// the column falls back to its leader rows.
+	flagsSeen := w.GroupFlagsKnown
+	for i, s := range w.Spawns {
+		index[s.GUID] = i
+		if s.GroupFlags != 0 {
+			flagsSeen = true
+		}
+	}
+	return w.packSets(index, !flagsSeen)
+}
+
+// packs groups the hostile spawns found in index. A pack's identity is the authored one: the group's leader and members, and
+// both directions of every aggro link (spec 5.2 (a) and (b); nothing else — proximity and family assist happen per pull).
+func (w *World) packs(index map[uint64]int) []Pack {
+	if len(index) == 0 {
+		return nil
+	}
+	sets := w.packSets(index, false)
+	components := map[uint64][]uint64{}
 	for guid := range index {
-		root := uf.find(index[guid])
-		components[root] = append(components[root], guid)
+		components[sets[guid]] = append(components[sets[guid]], guid)
 	}
 	patrollers := w.patrollers()
 	out := make([]Pack, 0, len(components))

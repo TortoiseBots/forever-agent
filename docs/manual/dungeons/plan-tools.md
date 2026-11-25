@@ -91,8 +91,13 @@ Each failing line names the leg, its name, the part (`via 2`, `direct via 1`, `t
 trigger's stand outside it), `needs a mapping walk` (the point is marked `needs_walk`), `in an avoid box`, `cut by an
 avoid box`, `server unreachable` (the server's own query refuses the hop), `hop inside the arrival radius` (the
 point is within 3 yd of the one before, so the run never sends the move) and `key` (a keyed object without its
-item, or an item nothing provides). Warnings are `needless direct` and `estimated patrol period`; neither fails the
-plan. Hops the plan exempts with `check_skip` are listed with the plan's reason.
+item, or an item nothing provides). Warnings are `needless direct`, `estimated patrol period` and `pack spread` (a
+pull group whose members stand more than 20 yd apart, `PackSpreadYd`, on spawns the world data does not link as one
+pack: a `creature_groups` group that aggros together, or a `creature_linking` edge with an aggro flag, is what links a
+real pack — a formation-only group and a plain link are not one — and no stand is in the sight of both, so the tank may
+refuse the far member. Split the group, or keep it on purpose and read the warning as the price of one planned pull). `pack spread`
+reads the world export like the aggro lints, so a map without one is not judged. None of the three fails the plan. Hops the plan
+exempts with `check_skip` are listed with the plan's reason.
 
 The lints are counted by name: `water`, `off-floor`, `edge`, `ledge`, `short hop`, `aggro`, `boss_aggro`, `patrol`,
 `reach`, `hop_len`, `arrival`, `climb_anchor`, `joiners`, `objects`. `joiners` is the pull-size estimate: bodies

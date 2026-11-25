@@ -162,10 +162,49 @@ forever-agent forever dungeon-play --plan dungeons/onyxias_lair.json \
 # The leading player's own pull
 
 The pull is the tank's first: the agent puts the skull on the pack's kill-order entry and the cross on the next unit,
-selects the skull and orders the tank onto it. The tank's answer is the module's own: when it whispers that it cannot
-see the marked skull, the party steps 5 yd along the navmesh path toward it (never nearer than 5 yd), waits up to 15 s
-for the tank beside the new stand, and orders again with the mark re-sent. The refusal's own bounds are 4 steps
-(`PlayRefuseTries`) and 90 s from the first refusal (`PlayRefuseTime`).
+selects the skull and orders the tank onto it. The tank's answer is the module's own: it refuses a mark its own
+line-of-sight test cannot see **from the bot's position**, which the character's navmesh ray is not (live 2026-11-24:
+the ray clear at 30.5 yd, the refusal right after). So the run asks the server's own sight before it orders, through
+the module's read-only `.tb los` query — the one line of the player run's command channel that is not a `.bot` verb:
+
+- The **skull** goes on the first member of the kill order the TANK sees. Two queries are never sent closer than
+  250 ms (`PlayLosQueryEvery`), under the module's five a second; a rate refusal is waited out once and that one query
+  retried.
+- The answer is the module's own words: a unit it found is echoed by its **name** (spaces and apostrophes
+  percent-encoded), even when the query named it by guid; a ground spot comes back with **two decimals**, so the echo
+  is matched within a hundredth of a yard per axis (`sightcmd.SpotToleranceYd`); a refusal carries `los=0` and no
+  distance. A unit the module cannot find (it left the view) is a NO the pick **skips**: the next member is asked.
+  A malformed line, another query's answer and an access refusal are unknown and keep the older flow.
+- A tank that **sees none** is walked into sight of the first: the navmesh path from the tank toward the unit is
+  sampled every 2 yd (`PlaySrvSightStepYd`), never nearer than 5 yd to the unit, never more than 30 yd past the pull's
+  stand (`PlaySightPastStandYd` — the plan's for a pack, where the party gathered for a boss and a stranger), and cut
+  where the path first enters **another pack's clearance** (`PlayAgentApproachPackYd`, the fallback approach's own
+  rule: the pull's own units, the party's pets and critters are not counted; the blocker is recorded, see below). Each
+  sample is asked as a spot on the ground with the eye at 2 yd above it (`PlayLosEyeYd`); the agent walks to the first
+  sample **ahead of its own stand** (the sample nearest it, never one behind it toward the tank) that the server
+  clears, and then steps forward along the path (`PlayAgentLeadYd` a step, the path's last sample ahead when less is
+  left) until the tank itself sees the unit — neither step ever goes back toward the tank, which is what run 4 did for
+  every try. After every step the search **waits for the tank to close up** (`PlayTankWait`, 15 s at most) before it
+  reads the sight again, because a live follow reaches its spot a poll or two behind the leader; the step that reaches
+  the path's end is waited for and looked at like every other, and a search with no step left does not wait twice on
+  the same ground.
+- **One sight budget a pull**: at most 24 queries (`PlayTankSightSpots`) and 60 s (`PlayTankSightTime`) from the
+  first look cover the skull pick, the stand walk and the search after **every** tank refusal together, and the
+  refusal path's own 90 s (`PlayRefuseTime` from the first refusal) caps what is left; the waits for the tank spend
+  that same time. Spent, the answer is **unknown** and the pull keeps the older flow below (the module is the judge),
+  never "the server sees from no point". The lead steps are bounded by 8 tries (`PlayTankSightTries`).
+- The search is recorded as `pull_tank_sight` (`group`, `target`, `seen`, `yd`) for the pick, `pull_sight_stand`
+  (`group`, `target`, `seen`, `known`, `tries`, `x`, `y`, `z`) for the walk, and `pull_sight_cut` (`group`, `target`,
+  `blocker` with its `guid`, `entry` and `yd` from the unit) when another pack's clearance ended it.
+
+When it whispers that it cannot see the marked skull anyway, the same search runs again from the refusal (never the
+older step, which was measured from the tank and so never moved it: run 4's tank stood at one point for the whole 60 s),
+spending the same one budget. The refusal's own bounds stay 4 steps (`PlayRefuseTries`) and 90 s from the first
+refusal (`PlayRefuseTime`); a skull the server sees from no point of the path takes the fallback pull at once. An
+answer the module cannot give — a rate refusal, an error, or a module without the command — keeps the older flow
+exactly: the navmesh close-in before the order, and after a refusal a 5 yd step along the path from the tank toward the
+skull with a 15 s wait for the tank beside it. A module that answers once that it has no sight command is asked no more
+for the rest of the run.
 
 When those retries are spent — or the skull already stands inside the character's own 5 yd reach, where another step
 would add no sight — the leading player pulls the mob itself:
@@ -239,7 +278,7 @@ A failed fallback records `agent_pull_failed` with its reason:
 |---|---|
 | `gone` | The mob left the view or turned friendly before or during the approach. |
 | `already-pulled` | This group (or this unknown unit) already had its one agent pull. |
-| `no-path` | No walk to the mob inside the approach's bounds; `detail` says which: `path` (no complete navmesh route), `path-length` (past 40 yd), `past-stand` (past 30 yd from the stand) or `pack-near` (another pack, an unclaimed patrol or a stranger is inside the 22 yd clearance, and the longest clear prefix was no path either). |
+| `no-path` | No walk to the mob inside the approach's bounds; `detail` says which: `path` (no complete navmesh route), `path-length` (past 40 yd), `past-stand` (past 30 yd from the stand) or `pack-near` (another pack, an unclaimed patrol or a stranger is inside the 22 yd clearance, and the longest clear prefix was no path either). A `pack-near` event also carries `blocker` (`guid`, `entry`, `yd`: the hostile that stood in the way and how far it stood from the mob). |
 | `no-sight-after-approach` | The approach reached the pull's range but the line to the mob never cleared. |
 | `approach-timeout` | `PlayLimits.PullReach` ran out before the agent stood in range and in sight. |
 | `reach-timeout` | The agent stood in its pull position and the wait for the mob to turn on it ran out (`PlayLimits.PullReach`); the mob evaded in place, held a non-party target, or the single swing did not land. |

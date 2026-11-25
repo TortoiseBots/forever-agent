@@ -105,6 +105,10 @@ type World struct {
 	Objects []Object
 	Links   []Link
 	Patrols []Patrol // the DB's waypoint loops; see Patrol for why this is not patrols.Patrol
+	// GroupFlagsKnown says the export carried its group flags column (creatures.tsv group_flags, or the Forever
+	// export's group_ai): a column of all zeros is then a real answer (formation-only groups, nothing aggros together),
+	// not an older export without the column, whose leader rows are the only evidence of a group.
+	GroupFlagsKnown bool
 }
 
 // AggroRadius is Creature::GetAttackDistance for one spawn against a party of partyLevel: the detection range minus the level
@@ -175,7 +179,8 @@ func load(dir string, mapID uint32, forever bool) (*World, []string, error) {
 		return nil, nil, err
 	}
 	sort.Slice(spawns, func(i, j int) bool { return spawns[i].GUID < spawns[j].GUID })
-	w := &World{Map: mapID, Spawns: spawns}
+	w := &World{Map: mapID, Spawns: spawns,
+		GroupFlagsKnown: creatures.has("group_flags") || (forever && creatures.has("group_ai"))}
 
 	groups, err := readTSV(filepath.Join(dir, "groups.tsv"))
 	if err != nil {

@@ -44,6 +44,9 @@ const (
 	WarnNeedlessDirect = "needless direct"
 	// WarnEstimatedPatrol is the reason of the warning on a patrol whose period_s is an estimate (Patrol.PeriodEstimate).
 	WarnEstimatedPatrol = "estimated patrol period"
+	// WarnPackSpread is the reason of the warning on a pull group whose members stand further apart than PackSpreadYd:
+	// the plan groups mobs the world data does not link as one pack, and no stand is in the sight of both.
+	WarnPackSpread = "pack spread"
 
 	// ReasonServerUnreachable is a hop the server's own path query refuses: the run
 	// leader's CheckMove answers "unreachable" (or the path's end is short after 3
@@ -258,6 +261,53 @@ func joinIssues(is []PlanIssue) string {
 // ErrCheckStart is the error of a check asked to start at a leg or pull group the plan does not have.
 var ErrCheckStart = errors.New("plan check: bad start")
 
+// PackSpreadYd is how far apart two members of one pull group may stand before the plan check warns (20 yd): a plan
+// group spread wider than this is not one pull from a stand. The world's creature_groups is what links a real pack,
+// and a plan group whose members are not linked is two packs a stand cannot see at once: the module refuses the order
+// on the far member (Ragefire Chasm's trogg cave stood two unlinked troggs 46.6 yd apart, part of #88).
+const PackSpreadYd = 20.0
+
+// PackSpreads lists the leg's pull groups, from leg `from` on, whose members stand more than PackSpreadYd apart and
+// are not one authored pack: the furthest such pair is the warning, and linked says whether two of the plan's points
+// stand on spawns of one world pack (the creature_groups link). A nil linked means the check cannot know, and then it
+// makes no warning at all: the plan-check command passes the oracle when the map's world export is there, and a map
+// without one is not judged. It needs no navmesh.
+func (p *Plan) PackSpreads(from int, linked func(a, b Point) bool) []PlanIssue {
+	if linked == nil {
+		return nil
+	}
+	var out []PlanIssue
+	for li := max(from, 0); li < len(p.Legs); li++ {
+		l := p.Legs[li]
+		for gi, g := range l.PullGroups {
+			if len(g.Positions) < 2 {
+				continue
+			}
+			var a, b Point
+			far := PackSpreadYd
+			for i := range g.Positions {
+				for j := i + 1; j < len(g.Positions); j++ {
+					at, to := g.Positions[i], g.Positions[j]
+					if d := dist3(at, to); d > far && !linked(at, to) {
+						a, b, far = at, to, d
+					}
+				}
+			}
+			if far <= PackSpreadYd {
+				continue
+			}
+			out = append(out, PlanIssue{
+				Leg: li, LegName: l.Name, Part: "pull group spread",
+				PullGroup: gi + 1, PullGroups: len(l.PullGroups),
+				Point: b, From: a, Reason: WarnPackSpread,
+				Detail: fmt.Sprintf("the members stand %.1f yd apart (%.1f %.1f %.1f and %.1f %.1f %.1f) and no creature_groups link joins them in the world data: no stand is in the sight of both, so the tank may refuse the far one; split the pull group into the packs that really stand apart",
+					far, a.X, a.Y, a.Z, b.X, b.Y, b.Z),
+			})
+		}
+	}
+	return out
+}
+
 // CheckOptions are the choices of a plan check. A run that starts inside the plan is checked from where the driver puts the party: at
 // Plan.LegStart (the end of the leg before) for a leg, at Plan.GatherSpot for a pull group; the earlier part of the plan is not walked.
 // The zero value checks the whole plan with the driver's default look. A pull group or boss gated to a team is checked like any other:
@@ -270,6 +320,9 @@ type CheckOptions struct {
 	FromPullGroup *int
 	// LookStandoff and LookArrive are the run's tuned look (tune.go: look_standoff, look_arrive); 0 takes the defaults.
 	LookStandoff, LookArrive float32
+	// PackLinked reports whether two of the plan's points stand on spawns of one world pack (the creature_groups link),
+	// for the pack-spread warning: a nil oracle skips that warning, because no world export was there to read.
+	PackLinked func(a, b Point) bool
 }
 
 // Validate says whether the plan has the leg and pull group the check is to start at (an ErrCheckStart error when not).
@@ -344,6 +397,9 @@ func checkPlanRec(p *Plan, nav Navmesh, opt CheckOptions, look lookFunc, rec *ro
 	if err := c.runLeader(opt.FromLeg); err != nil {
 		return nil, err
 	}
+	// A pull group spread wider than one stand can see, of mobs the world data does not link, is a warning, not a
+	// failure: the plan runs, and the far member is the tank's refusal to lose.
+	c.res.Warnings = append(c.res.Warnings, p.PackSpreads(opt.FromLeg, opt.PackLinked)...)
 	return c.res, nil
 }
 

@@ -148,3 +148,94 @@ func TestPacksPatrolAndPooled(t *testing.T) {
 		t.Errorf("packs 70/71 marked pooled without a pool")
 	}
 }
+
+// TestPackIndexPinsTheLinkFlags: PackIndex is the plan check's link oracle, and it holds the pack rules Packs does — a
+// group links only when its rows aggro together, a creature_linking edge only with an aggro flag — plus one reading for
+// an export with no group_flags column at all, where the leader rows are the only evidence of a group.
+func TestPackIndexPinsTheLinkFlags(t *testing.T) {
+	aggroGroup := &World{Spawns: []Spawn{
+		{GUID: 1, Faction: 14, GroupLeader: 1, GroupFlags: AggroTogether},
+		{GUID: 2, Faction: 14, GroupLeader: 1, GroupFlags: AggroTogether},
+		{GUID: 3, Faction: 14},
+	}}
+	idx := aggroGroup.PackIndex()
+	if idx[1] != idx[2] {
+		t.Fatal("an AGGRO_TOGETHER group's members are not one set")
+	}
+	if idx[1] == idx[3] {
+		t.Fatal("a spawn outside the group is in it")
+	}
+
+	formation := &World{Spawns: []Spawn{
+		{GUID: 10, Faction: 14, GroupLeader: 10, GroupFlags: FormationMove},
+		{GUID: 11, Faction: 14, GroupLeader: 10, GroupFlags: FormationMove},
+	}}
+	if idx := formation.PackIndex(); idx[10] == idx[11] {
+		t.Fatal("a formation-only group is one set")
+	}
+
+	links := &World{
+		Spawns: []Spawn{{GUID: 20, Faction: 14}, {GUID: 21, Faction: 14}, {GUID: 22, Faction: 14}},
+		Links:  []Link{{Slave: 21, Master: 20, Flag: 0x0100}, {Slave: 22, Master: 21, Flag: linkAggro}},
+	}
+	idx = links.PackIndex()
+	if idx[20] == idx[21] {
+		t.Fatal("a link without an aggro flag is one set")
+	}
+	if idx[21] != idx[22] {
+		t.Fatal("an aggro link is two sets")
+	}
+
+	// No group_flags anywhere: the leader rows are the whole group record.
+	bare := &World{Spawns: []Spawn{{GUID: 30, Faction: 14, GroupLeader: 30}, {GUID: 31, Faction: 14, GroupLeader: 30}, {GUID: 32, Faction: 14}}}
+	idx = bare.PackIndex()
+	if idx[30] != idx[31] {
+		t.Fatal("a leader-only export's group rows are not one set")
+	}
+	if idx[30] == idx[32] {
+		t.Fatal("a leader-only export links a spawn outside its groups")
+	}
+}
+
+// TestPackIndexTellsAZeroFlagsColumn: the export carries its group_flags column and every row says 0 (a formation-only
+// world, nothing aggros together): that is the core's answer, not an old export without the column whose leader rows
+// ARE the group. Reading a zeroed column as leader-only would hide a pack-spread warning.
+func TestPackIndexTellsAZeroFlagsColumn(t *testing.T) {
+	zeroed := &World{GroupFlagsKnown: true, Spawns: []Spawn{
+		{GUID: 40, Faction: 14, GroupLeader: 40, GroupFlags: 0},
+		{GUID: 41, Faction: 14, GroupLeader: 40, GroupFlags: 0},
+	}}
+	idx := zeroed.PackIndex()
+	if idx[40] == idx[41] {
+		t.Fatal("an export with the group_flags column of all zeros read as a leader-only export")
+	}
+	// The reading for an export WITHOUT the column is unchanged: its leader rows are the group.
+	bare := &World{Spawns: []Spawn{
+		{GUID: 50, Faction: 14, GroupLeader: 50},
+		{GUID: 51, Faction: 14, GroupLeader: 50},
+	}}
+	if idx := bare.PackIndex(); idx[50] != idx[51] {
+		t.Fatal("an export without the group_flags column no longer reads its leader rows as a group")
+	}
+}
+
+// TestLoadNotesTheGroupFlagsColumn: the loader knows whether creatures.tsv carried its group_flags column, so an
+// export with the column of all zeros is not mistaken for an older export without it.
+func TestLoadNotesTheGroupFlagsColumn(t *testing.T) {
+	dir := writeExport(t, map[string]string{
+		"creatures.tsv": newHeader +
+			spawnRowOpts(60, 100, "leader", 0, 0, 0, 0, 60, 0, 20, 0, 1, 0, 0) +
+			spawnRowOpts(61, 100, "member", 40, 0, 0, 0, 60, 0, 20, 0, 1, 0, 0),
+		"groups.tsv": "leader_guid\tmember_guid\tdist\tangle\tflags\n60\t61\t40\t0\t0\n",
+	})
+	w, _, err := Load(dir, 1)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !w.GroupFlagsKnown {
+		t.Fatal("the export's group_flags column was not seen")
+	}
+	if idx := w.PackIndex(); idx[60] == idx[61] {
+		t.Fatal("the export's zeroed group flags read as a leader-only export")
+	}
+}

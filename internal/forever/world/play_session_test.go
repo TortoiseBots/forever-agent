@@ -215,10 +215,30 @@ func TestPlaySessionSelectionGoesBeforeTheAttackOrder(t *testing.T) {
 }
 
 func TestPlaySessionLinkAdmitsOnlyBotLines(t *testing.T) {
+	sightGuid := "f1300000000000000000000000060001"
 	for text, want := range map[string]bool{
-		".bot add Botone":           true,
-		".bot attack Bottwo":        true,
-		".bot who":                  true,
+		".bot add Botone":    true,
+		".bot attack Bottwo": true,
+		".bot who":           true,
+		// The one read-only sight query of the player run's channel, in exactly the shapes sightcmd's builder writes:
+		// a bot's name or a ground spot, then the target's bare lower-case guid.
+		".tb los Bottwo " + sightGuid:                     true,
+		".tb los Bottwo " + sightGuid + " #t123abc":       true,
+		".tb los Bottwo " + sightGuid + " #":              false,
+		".tb los Bottwo " + sightGuid + " #bad token":     false,
+		".tb los -285.52,-20.88,-60.41 " + sightGuid:      true,
+		".tb los 1,2,3 " + sightGuid:                      true,
+		".tb los 0,0,0 " + sightGuid:                      true,
+		".tb los 0.00,0.00,0.00 " + sightGuid:             false,
+		".tb los target " + sightGuid:                     false,
+		".tb los Bottwo":                                  false,
+		".tb los Bottwo " + strings.ToUpper(sightGuid):    false,
+		".tb los Bottwo " + sightGuid + " map=389":        false,
+		".tb los Bo=two " + sightGuid:                     false,
+		".tb los 1, 2, 3 " + sightGuid:                    false,
+		".tb los Bottwo " + sightGuid + "\n.tb run start": false,
+		".tb gps":                   false,
+		".tb state":                 false,
 		".bot  add   Botone":        false,
 		".bot who extra":            false,
 		".bot who ":                 false,
@@ -266,6 +286,188 @@ func TestPlaySessionLinkAdmitsOnlyBotLines(t *testing.T) {
 	s.gmStop = errors.New("said aloud")
 	if err := l.SendCommand(context.Background(), ".bot who"); err == nil {
 		t.Fatal("a send went out after the say echo stopped the channel")
+	}
+}
+
+// losAnswer puts a scripted module answer on the session's system chat with the token of the line it answers: the
+// module echoes the run's own #token on its one-line sight record, and the collector only takes that line as ours.
+func losAnswer(sent, line string) string {
+	if i := strings.LastIndexByte(sent, '#'); i >= 0 {
+		return line + " " + sent[i:]
+	}
+	return line
+}
+
+// losSent is a sight line without the per-call token the command layer appends.
+func losSent(text string) string {
+	if i := strings.LastIndex(text, " #"); i >= 0 {
+		return text[:i]
+	}
+	return text
+}
+
+// losGUID is a guid as sightcmd's builder writes it: 32 lower-case hex digits, no 0x.
+func losGUID(g wire.GUID) string { return strings.ToLower(strings.TrimPrefix(g.String(), "0x")) }
+
+// TestPlayServerSightReadsTheModulesRealAnswers pins the shapes the module really writes: a guid the module found is
+// echoed as the unit's NAME (spaces and apostrophes percent-encoded), a spot with two decimals, and each refusal with
+// its empty fields. A refusal about the world and a unit the module cannot find are NOs the pull may act on; a
+// malformed answer, another pair's answer, a rate refusal that outlives its retry and silence are unknown.
+func TestPlayServerSightReadsTheModulesRealAnswers(t *testing.T) {
+	s, sc := newPlaySession(t)
+	prev := PlayLosQueryEvery
+	PlayLosQueryEvery = time.Millisecond
+	t.Cleanup(func() { PlayLosQueryEvery = prev })
+	target, other := unitGUID(3), unitGUID(4)
+	var asks []string
+	var answer func(sent string) string
+	sc.onSay = func(text string) {
+		asks = append(asks, text)
+		if answer != nil {
+			if line := answer(text); line != "" {
+				sc.sys(line)
+			}
+		}
+	}
+	st := newPlayServerSight(s)
+
+	// The tank asks about a creature by guid; the module found it and echoes its name, not the digits.
+	answer = func(sent string) string {
+		return losAnswer(sent, "los a=Bottwo b=Bael%27Gar%20the%20Bound map=389 los=1 dist=17.4 same_map=1 in_world=1")
+	}
+	if in, dist, known := st.TankSees("bottwo", target); !in || !known || dist != 17.4 {
+		t.Fatalf("TankSees = (%v, %v, %v); want seen at 17.4 yd through an echoed name", in, dist, known)
+	}
+	if len(asks) != 1 || losSent(asks[0]) != ".tb los Bottwo "+losGUID(target) {
+		t.Fatalf("sent %v; want the one tank sight line", asks)
+	}
+
+	// A spot asked with three decimals comes back with two; the sides still match within the module's rounding.
+	asks = nil
+	answer = func(sent string) string {
+		return losAnswer(sent, "los a=456.93,-12.35,3.5 b=Dark%20Iron%20Dwarf map=389 los=1 dist=8.2 same_map=1 in_world=1")
+	}
+	if in, dist, known := st.PointSees(driver.Vec3{456.929, -12.347, 3.5}, target); !in || !known || dist != 8.2 {
+		t.Fatalf("PointSees = (%v, %v, %v); want seen through the two-decimal echo", in, dist, known)
+	}
+	if len(asks) != 1 || losSent(asks[0]) != ".tb los 456.929,-12.347,3.5 "+losGUID(target) {
+		t.Fatalf("sent %v; want the point sight line", asks)
+	}
+
+	// Every refusal the module writes, with the sides this call sent and the empty fields its line carries.
+	guid := losGUID(target)
+	for _, tc := range []struct {
+		reason string
+		line   string
+		want   bool // known
+	}{
+		{"bad-argument", "los a=Bottwo b=" + guid + " map= los=0 dist= same_map= in_world= reason=bad-argument", false},
+		{"unknown-unit", "los a=Bottwo b=" + guid + " map=530 los=0 dist= same_map=1 in_world=1 reason=unknown-unit", true},
+		{"not-in-world", "los a=Bottwo b=" + guid + " map=530 los=0 dist= same_map=1 in_world=0 reason=not-in-world", true},
+		{"different-maps", "los a=Bottwo b=" + guid + " map=530 los=0 dist= same_map=0 in_world=1 reason=different-maps", true},
+		{"no-access", "los a=Bottwo b=" + guid + " map= los=0 dist= same_map= in_world= reason=no-access", false},
+		{"rate", "los a=Bottwo b=" + guid + " map= los=0 dist= same_map= in_world= reason=rate", false},
+	} {
+		asks = nil
+		answer = func(sent string) string { return losAnswer(sent, tc.line) }
+		in, _, known := st.TankSees("Bottwo", target)
+		if in || known != tc.want {
+			t.Fatalf("reason=%s: TankSees = (%v, %v); want (false, %v)", tc.reason, in, known, tc.want)
+		}
+		// A rate refusal is retried once, so it costs two queries; every other refusal is answered once.
+		want := 1
+		if tc.reason == "rate" {
+			want = 2
+		}
+		if len(asks) != want {
+			t.Fatalf("reason=%s: sent %d line(s), want %d", tc.reason, len(asks), want)
+		}
+	}
+
+	// Another pair's answer is not this call's: the sides do not match, so it is unknown.
+	asks = nil
+	answer = func(sent string) string {
+		return losAnswer(sent, "los a=Bottwo b="+losGUID(other)+" map=389 los=1 dist=17.4 same_map=1 in_world=1")
+	}
+	if in, _, known := st.TankSees("Bottwo", target); known || in {
+		t.Fatalf("another unit's answer = (%v, %v); want unknown", in, known)
+	}
+
+	// A line another run's token ends is not ours either: the collector skips it and takes the one this call sent.
+	asks = nil
+	answer = nil
+	sc.onSay = func(text string) {
+		asks = append(asks, text)
+		sc.sys("los a=Bottwo b=Bael%27Gar map=389 los=0 dist= same_map=0 in_world=1 reason=different-maps #someoneelse")
+		sc.sys(losAnswer(text, "los a=Bottwo b=Bael%27Gar map=389 los=1 dist=17.4 same_map=1 in_world=1"))
+	}
+	if in, dist, known := st.TankSees("Bottwo", target); !in || !known || dist != 17.4 {
+		t.Fatalf("TankSees past another run's token = (%v, %v, %v); want this call's answer", in, dist, known)
+	}
+
+	// Silence and an older module without the command are unknown, and a player run still asks for no GM guard.
+	for _, quiet := range []bool{true, false} {
+		answer = nil
+		if quiet {
+			sc.onSay = func(text string) { asks = append(asks, text) }
+		} else {
+			sc.onSay = func(text string) { asks = append(asks, text); sc.sys("There is no such command") }
+		}
+		if in, _, known := st.TankSees("Bottwo", target); known || in {
+			t.Fatalf("TankSees on %v = (%v, %v); want unknown", quiet, in, known)
+		}
+	}
+	if s.gmConfirmed {
+		t.Fatal("a player run asked for the GM guard")
+	}
+}
+
+// TestPlayServerSightSpacesItsQueriesAndRetriesARateRefusalOnce: the module allows five queries and one more every
+// 200 ms per caller, so two queries are never closer than PlayLosQueryEvery; a rate refusal waits once and retries
+// that one query, and a second refusal is unknown.
+func TestPlayServerSightSpacesItsQueriesAndRetriesARateRefusalOnce(t *testing.T) {
+	s, sc := newPlaySession(t)
+	prev := PlayLosQueryEvery
+	PlayLosQueryEvery = 250 * time.Millisecond
+	t.Cleanup(func() { PlayLosQueryEvery = prev })
+	target := unitGUID(3)
+	guid := losGUID(target)
+	rate := "los a=Bottwo b=" + guid + " map= los=0 dist= same_map= in_world= reason=rate"
+	ok := "los a=Bottwo b=Some%20Name map=389 los=1 dist=5.0 same_map=1 in_world=1"
+	var asks []string
+	var times []time.Time
+	var lines []string
+	sc.onSay = func(text string) {
+		asks = append(asks, text)
+		times = append(times, time.Now())
+		if len(lines) > 0 {
+			line := lines[0]
+			lines = lines[1:]
+			if line != "" {
+				sc.sys(losAnswer(text, line))
+			}
+		}
+	}
+	st := newPlayServerSight(s)
+
+	lines = []string{rate, ok}
+	if in, dist, known := st.TankSees("Bottwo", target); !in || !known || dist != 5.0 {
+		t.Fatalf("TankSees after one rate refusal = (%v, %v, %v); want the retried answer", in, dist, known)
+	}
+	if len(asks) != 2 {
+		t.Fatalf("sent %d line(s) for one rate retry, want 2", len(asks))
+	}
+	if gap := times[1].Sub(times[0]); gap < PlayLosQueryEvery {
+		t.Fatalf("the retry came %v after the refusal; want the %v spacing", gap, PlayLosQueryEvery)
+	}
+
+	// A second rate refusal ends it: unknown, one retry and no third query.
+	asks, times, lines = nil, nil, []string{rate, rate}
+	if in, _, known := st.TankSees("Bottwo", target); known || in {
+		t.Fatalf("TankSees after two rate refusals = (%v, %v); want unknown", in, known)
+	}
+	if len(asks) != 2 {
+		t.Fatalf("sent %d line(s) for two rate refusals, want 2 (one retry)", len(asks))
 	}
 }
 
@@ -911,4 +1113,53 @@ func TestPlaySessionGroupMemberFactsKeepTheTwoReadings(t *testing.T) {
 		return
 	}
 	t.Fatal("the facts have no Bottank")
+}
+
+// TestPlayServerSightRemembersAnOlderModule: once the module says it has no sight command — the core refusing the
+// `.tb` word, or the module's dispatcher answering its unknown-command code — the run asks it no more for the rest of
+// the run. An older module costs one quiet wait per pull and per refusal otherwise, and each wait is what the pull's
+// own bounds are spent on.
+func TestPlayServerSightRemembersAnOlderModule(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		answer func(sent string) string
+	}{
+		{"the core refuses the word", func(string) string { return "Command 'tb' does not exist" }},
+		{"the module answers unknown-command", func(sent string) string {
+			if i := strings.LastIndex(sent, " #"); i >= 0 {
+				return "error code=unknown-command cmd=tb " + sent[i+1:]
+			}
+			return "error code=unknown-command cmd=tb"
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, sc := newPlaySession(t)
+			prev := PlayLosQueryEvery
+			PlayLosQueryEvery = time.Millisecond
+			t.Cleanup(func() { PlayLosQueryEvery = prev })
+			target := unitGUID(3)
+			var asks []string
+			sc.onSay = func(text string) {
+				asks = append(asks, text)
+				if line := tc.answer(text); line != "" {
+					sc.sys(line)
+				}
+			}
+			st := newPlayServerSight(s)
+			if in, _, known := st.TankSees("Bottwo", target); known || in {
+				t.Fatalf("the older module's first answer = (%v, %v); want unknown", in, known)
+			}
+			if len(asks) != 1 {
+				t.Fatalf("sent %d line(s) for the one query, want 1", len(asks))
+			}
+			for i := range 3 {
+				if in, _, known := st.PointSees(driver.Vec3{float32(i), 2, 3}, target); known || in {
+					t.Fatalf("query %d = (%v, %v); want unknown", i+2, in, known)
+				}
+			}
+			if len(asks) != 1 {
+				t.Fatalf("sent %d line(s); want no query after the module said it has no sight command", len(asks))
+			}
+		})
+	}
 }

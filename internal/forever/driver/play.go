@@ -296,6 +296,10 @@ type PlayPorts struct {
 	// refuses ("I dont see my rti attack target") is read at once and the pull steps in toward the skull and orders
 	// again; with none, a refused order waits out the pull window as before.
 	Refusals Refusals
+	// ServerSight is the module's own sight query, optional: with it, the skull goes on the first member of the kill
+	// order the TANK sees, and a tank that sees none is walked along the path into sight of one before the order; with
+	// none (an older module, a rate refusal), the navmesh close-in and the module's refusal are the flow as before.
+	ServerSight ServerSight
 }
 
 // playRun is one player run's machine. It is strictly sequential: one goroutine owns every port call.
@@ -371,7 +375,13 @@ type playRun struct {
 	// pullStand is the plan's pull stand for the group in hand: the agent's own approach never ends further than
 	// PlayAgentApproachPastYd beyond it. agentPulled and agentPulledUnit remember the group and the stranger whose own
 	// pull the agent already made: at most one per group.
-	pullStand       Vec3
+	pullStand Vec3
+	// skullPick is the skull the server's own sight put on a member of the pull in hand (the first of the kill order
+	// the tank sees): the marks go on it while it lives, and a pull whose skull died forgets it.
+	skullPick wire.GUID
+	// sight is the pull in hand's ONE sight budget: the skull pick, the stand walk and every refusal's lead spend it
+	// together, so a run of refusals cannot start a fresh search each time. nil between pulls.
+	sight           *sightBudget
 	agentPulled     map[int]bool
 	agentPulledUnit map[wire.GUID]bool
 	// approachBase is how far the agent's own approach stood from each hostile at the first plan that stood inside its
@@ -1055,18 +1065,32 @@ func (p *playRun) walkTo(ctx context.Context, to Vec3, exact, direct bool) {
 	if exact {
 		arrive = PlayExactYd
 	}
+	if !p.walkToWithin(ctx, to, arrive, direct) {
+		return
+	}
+	if !direct {
+		// A direct via is a line the plan says to take (the map data has no link for it): it has no navmesh arrival to
+		// judge, exactly as before.
+		p.checkExact(to, exact)
+	}
+}
+
+// walkToWithin is walkTo's walk with the caller's own arrival tolerance: a point nearer than PlayArriveYd from where
+// the walk starts (the sight search's lead steps are one path sample each) is still walked, never swallowed. false is
+// a walk that did not arrive (a stop of the run's, a pack in the way, a map change that outlived its re-plans).
+func (p *playRun) walkToWithin(ctx context.Context, to Vec3, arrive float64, direct bool) bool {
 	p.refreshSelf()
 	if dist3(p.self, to) <= arrive {
-		return
+		return true
 	}
 	if direct {
 		from := [3]float32{p.self[0], p.self[1], p.self[2]}
 		end := [3]float32{to[0], to[1], to[2]}
 		switch p.walkSegments(ctx, [][][3]float32{{from, end}}) {
 		case walkStopped, walkPulling:
-			return
+			return false
 		}
-		return
+		return true
 	}
 	for range 3 {
 		p.refreshSelf()
@@ -1077,22 +1101,22 @@ func (p *playRun) walkTo(ctx context.Context, to Vec3, exact, direct bool) {
 			} else {
 				p.stop("walk")
 			}
-			return
+			return false
 		}
 		if route.Kind != navmesh.RouteComplete {
 			p.stop("walk:" + string(route.Kind))
-			return
+			return false
 		}
 		switch p.walkSegments(ctx, SplitRoute(route.Points, PlaySegmentYd)) {
 		case walkStopped, walkPulling:
-			return
+			return false
 		case walkChanged:
 			continue
 		}
-		p.checkExact(to, exact)
-		return
+		return true
 	}
 	p.stop("walk:mapchange")
+	return false
 }
 
 // walkEnd is how one walk ended: an arrival, a map change (the rest is planned again), a pack in the way to pull

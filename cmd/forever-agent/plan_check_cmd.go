@@ -86,6 +86,9 @@ func planCheckCmd(args []string, stdout, stderr io.Writer) int {
 		if *fromGroup >= 0 {
 			opt.FromPullGroup = fromGroup
 		}
+		// The pack-spread warning needs the world data's packs: the map's export, when it is there (a map without one is
+		// not judged, the same way the aggro and patrol lints are skipped without it).
+		opt.PackLinked = planlint.PackLinkOracle(packWorld(*dir, *spawns, p.Map, *forever))
 		var nav dungeon.Navmesh = planner
 		if *forever {
 			nav = foreverNav{planner}
@@ -248,6 +251,17 @@ func lintRows(rows planexport.Rows, origins []planexport.RowOrigin, planner *nav
 		}
 	}
 	return fs, note, nil
+}
+
+// packWorld is the map's world export for the pack-spread rule, nil when it is not there: the same folder the aggro and
+// patrol lints read.
+func packWorld(dir, spawns string, mapID uint32, forever bool) *worldspawn.World {
+	if forever {
+		w, _ := worldForLintsForever(spawns, mapID)
+		return w
+	}
+	w, _ := worldForLints(dir, spawns, mapID)
+	return w
 }
 
 // worldForLintsForever loads a server's spawns for the aggro, patrol and object lints from --spawns: a world export (one

@@ -140,6 +140,12 @@ for each other), `patrol` (a loop that walks near the pack: `entries`, `path`, `
 `source`), `approach` (up to four points the run leader walks before pulling), `hold`, `stand_pull` with `clear_yd`,
 and `max_bodies`.
 
+A pull group's members should stand within about 20 yd of each other (`PackSpreadYd`): the world data's
+`creature_groups` that aggro together (or a `creature_linking` aggro edge) is what links a pack, and a wide plan group
+of mobs it does not link is two packs that no stand can see at once, so the tank may refuse the far member. Plan-check warns (`pack spread`) about such a group where the map's
+world export shows the members are not one pack; split it into the packs that stand apart unless the one stand is a
+deliberate choice.
+
 # Steps
 
 A step holds exactly one of these keys:

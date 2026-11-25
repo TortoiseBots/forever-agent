@@ -8,8 +8,9 @@ package world
 //
 // Like the commander's adapters they are thin: every read comes from the model the packet loop keeps, every send
 // goes through the session, and nothing here runs on a goroutine of its own, so the run's one goroutine owns every
-// call. A player run is never a GM run: the command link below admits the `.bot` verbs of the contract and nothing
-// else, and does not ask for the GM guard (a player has no GM permission to confirm).
+// call. A player run is never a GM run: the command link below admits the `.bot` verbs of the contract and the one
+// read-only sight query `.tb los`, and nothing else, and does not ask for the GM guard (a player has no GM permission
+// to confirm).
 
 import (
 	"context"
@@ -24,10 +25,12 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/botcmd"
+	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
 	"github.com/pjerra/forever-agent/internal/forever/loot"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
+	"github.com/pjerra/forever-agent/internal/forever/sightcmd"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -86,6 +89,8 @@ func newPlayPorts(ctx context.Context, s *session) driver.PlayPorts {
 		// The packet loop counts the module's sight refusals (feedCommand); the run reads them on its own goroutine,
 		// the same one that pumps the session.
 		Refusals: playRefusals{s: s},
+		// The module's own read-only sight query: the pull puts the TANK in the server's line of sight before it orders.
+		ServerSight: newPlayServerSight(s),
 	}
 }
 
@@ -122,6 +127,114 @@ func (w playSight) InSight(from, to driver.Vec3) (in, known bool) {
 	return ray.Clear, true
 }
 
+// playServerSight is the ServerSight port over the module's read-only sight query: one `.tb los` line on the command
+// channel and the one line the module answers it with. The line is built and read by the typed `.tb` client
+// (tbcmd.LOS), so the sides, the map rule, the per-call token and the tie between the answer and the call are the
+// shared reader's, the same ones the daemon's los method uses.
+//
+// A reply the module did not give — no line in the quiet window, a say echo (the account may not ask), a module
+// without the command — is unknown, and the pull keeps its older flow. A module that cannot find the unit (it left
+// the view) answered the question: that is a NO, so the pull's pick skips that member and asks about the next one
+// instead of turning the server's sight off. The module allows five queries a second and one more every 200 ms per
+// caller, so two queries are never sent closer than PlayLosQueryEvery, and a rate refusal is retried once.
+type playServerSight struct {
+	s       *session
+	last    time.Time
+	spacing time.Duration
+	// unsupported says the module already answered that it has no sight command (an older build): it is asked no more
+	// for the rest of the run, so each later pull and refusal does not pay a quiet wait for the same answer.
+	unsupported bool
+}
+
+var _ driver.ServerSight = (*playServerSight)(nil)
+
+// PlayLosQueryEvery is the least time between two sight queries (250 ms: the module's own budget is five a second, and
+// the pull asks in bursts). A variable so a test shortens it.
+var PlayLosQueryEvery = 250 * time.Millisecond
+
+func newPlayServerSight(s *session) *playServerSight {
+	return &playServerSight{s: s, spacing: PlayLosQueryEvery}
+}
+
+func (w *playServerSight) TankSees(bot string, target wire.GUID) (in bool, dist float64, known bool) {
+	return w.ask(w.s.ctx, bot, target.String())
+}
+
+func (w *playServerSight) PointSees(at driver.Vec3, target wire.GUID) (in bool, dist float64, known bool) {
+	return w.ask(w.s.ctx, spotText(at), target.String())
+}
+
+// spotText writes a spot the way sightcmd's side grammar takes one: the plan positions are float32, so the text is the
+// value the plan holds, never an exponent.
+func spotText(at driver.Vec3) string {
+	return strconv.FormatFloat(float64(at[0]), 'f', -1, 32) + "," +
+		strconv.FormatFloat(float64(at[1]), 'f', -1, 32) + "," +
+		strconv.FormatFloat(float64(at[2]), 'f', -1, 32)
+}
+
+// ask sends one sight query and reads its answer. A rate refusal is waited out once and that one query is retried;
+// a second rate refusal, an error and an older module's missing command are unknown. A missing command is remembered:
+// the run does not ask that module again.
+func (w *playServerSight) ask(ctx context.Context, a, b string) (in bool, dist float64, known bool) {
+	if w.unsupported {
+		return false, 0, false
+	}
+	for attempt := 0; ; attempt++ {
+		if err := w.rate(ctx); err != nil {
+			return false, 0, false
+		}
+		rep, err := w.los(ctx, a, b)
+		if err != nil {
+			if errors.Is(err, tbcmd.ErrLOSUnsupported) {
+				w.unsupported = true
+			}
+			return false, 0, false
+		}
+		if rep.Reason != sightcmd.Rate {
+			return serverSightVerdict(rep)
+		}
+		if attempt > 0 {
+			return false, 0, false
+		}
+	}
+}
+
+// los is one `.tb los` call over the player run's channel.
+func (w *playServerSight) los(ctx context.Context, a, b string) (tbcmd.LOSReport, error) {
+	c := tbcmd.NewClient(command.NewSession(&playLink{cmdLink: cmdLink{s: w.s}}))
+	c.Base = w.s.commandOptions(command.Options{Quiet: playReplyQuiet, Deadline: playReplyDeadline})
+	return c.LOS(ctx, a, b, nil)
+}
+
+// serverSightVerdict reads the module's answer the way the pull needs it: the server's own line and how far apart the
+// two sides stand. A refusal about the world (another map, not in the world) is a NO those units cannot see each
+// other; a unit the module cannot find is a NO too (it is gone, and the pick skips it). An access, rate or argument
+// refusal is unknown: the module did not judge that line, so the run keeps its own flow.
+func serverSightVerdict(rep tbcmd.LOSReport) (in bool, dist float64, known bool) {
+	switch rep.Reason {
+	case "":
+		return rep.Clear && rep.SameMap && rep.InWorld, rep.DistYD, true
+	case sightcmd.DifferentMaps, sightcmd.NotInWorld, sightcmd.UnknownUnit:
+		return false, 0, true
+	}
+	return false, 0, false
+}
+
+// rate keeps the queries under the module's budget: it waits out what is left of the spacing, pumping the session so a
+// late line is still packaged. A dead link ends the wait with unknown, which the caller reads as no answer.
+func (w *playServerSight) rate(ctx context.Context) error {
+	now := w.s.Now()
+	if !w.last.IsZero() && w.spacing > 0 {
+		if wait := w.spacing - now.Sub(w.last); wait > 0 {
+			if err := w.s.collect(ctx, wait); err != nil {
+				return err
+			}
+		}
+	}
+	w.last = w.s.Now()
+	return nil
+}
+
 // --- Owner: bot-commands v1 over the command channel ---
 
 // playLink is the player run's command transport: the session's own pump, and a send that admits one thing, a line
@@ -132,12 +245,49 @@ type playLink struct {
 	cmdLink
 }
 
+// playSightQuery admits the pull's read-only sight query, and only as the line sightcmd's own builder writes: two
+// sides (a bot's name or a spot on the ground, then the target's guid) and a trailing per-call #token once the command
+// layer has appended it. The words are read from their positions and the rebuilt line must equal the sent one, so the
+// command's own name is never written here and nothing but the builder's shape gets through.
+func playSightQuery(text string) bool {
+	body := text
+	if i := strings.LastIndex(text, " #"); i >= 0 {
+		if !command.ValidToken(text[i+2:]) {
+			return false
+		}
+		body = text[:i]
+	}
+	if strings.ContainsRune(body, '#') {
+		return false
+	}
+	words := strings.Fields(body)
+	if len(words) != 4 {
+		return false
+	}
+	a, err := sightcmd.ParseSide("a", words[2])
+	if err != nil || (a.Kind != sightcmd.Name && a.Kind != sightcmd.Position) {
+		return false
+	}
+	b, err := sightcmd.ParseSide("b", words[3])
+	if err != nil || b.Kind != sightcmd.Guid {
+		return false
+	}
+	line, err := sightcmd.BuildLine(a, b, nil)
+	return err == nil && line == body
+}
+
 // playLineAllowed is the closed vocabulary of the player run's command channel, held to the contract's whole grammar
 // and not only its prefix: `.bot`, one verb of the contract, and the bot's name where the verb takes one, as single
 // spaced words. It is admitted only when botcmd.Line, the one builder of v1 requests, would write this very line, so
 // the verb's arity, the bot's normalised name, the module's chain separator and the chat validator's rules are the
-// builder's own and nothing but a typed request gets through.
+// builder's own and nothing but a typed request gets through. Beside them sits the one read-only sight query,
+// `.tb los`, admitted only when sightcmd's own builder would write that very line (the two shapes the pull builds).
 func playLineAllowed(text string) bool {
+	// The one command that is not a `.bot` verb: the module's read-only sight query, in exactly the two shapes the pull
+	// builds (`.tb los <bot> <guid>` and `.tb los x,y,z <guid>`). Nothing else of `.tb` is a player run's to send.
+	if playSightQuery(text) {
+		return true
+	}
 	parts := strings.Split(text, " ")
 	if len(parts) < 2 || len(parts) > 3 || parts[0] != ".bot" {
 		return false
