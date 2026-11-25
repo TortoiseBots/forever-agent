@@ -25,7 +25,8 @@ import (
 // data is agility and strength too): an outfit in the wrong armour class but the right stat family
 // passes. And an enhancement shaman's own slot data names a caster family for Wrist, Hands, Waist
 // and Feet, so hunter-only agility mail there is contrary even though the spec's own agility mail
-// (rule (a)) is fine. Both need the item read-out of #20 (item stats), not a threshold change.
+// (rule (a)) is fine: 4 of the 8 armour slots, 4 of the 7 that have such an item at all. Both need
+// the item read-out of #20 (item stats), not a threshold change.
 func gearRow(rec Record, in Inputs) Row {
 	row := Row{ID: RuleGear, Verdict: VerdictInconclusive}
 	class, spec := strings.ToLower(strings.TrimSpace(rec.Class)), SpecName(rec.Spec)
