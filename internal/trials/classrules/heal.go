@@ -168,17 +168,13 @@ func healAssignmentRow(rec Record) Row {
 		return row
 	}
 
-	var rest []string
 	restSet := map[string]bool{}
 	for _, h := range judged {
 		if h == main {
 			continue
 		}
 		for unit := range h.restTargets {
-			if !restSet[unit] {
-				restSet[unit] = true
-				rest = append(rest, unit)
-			}
+			restSet[unit] = true
 		}
 	}
 	for _, h := range judged {
