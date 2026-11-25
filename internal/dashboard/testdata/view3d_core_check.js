@@ -115,6 +115,10 @@ assert.strictEqual(C.answerMap(389, { map: 0 }), 0);
 assert.strictEqual(C.answerMap(389, {}), 389, "an answer without a map keeps the current one");
 assert.strictEqual(C.answerMap(389, C.normalizeAnswer({ mode: "no-serve" })), 389);
 assert.ok(C.statusText("live", "live", "", 0).includes("(map 0)"));
+// The record picker names the map, map 0 included: only a record that carries no map leaves it out.
+assert.strictEqual(C.recordLabel({ name: "r1", map: 0, start: "2026-11-25T10:00:00Z" }), "r1 · map 0 · 2026-11-25T10:00:00Z");
+assert.strictEqual(C.recordLabel({ name: "r2", start: "x" }), "r2 · x");
+assert.strictEqual(C.recordLabel({ name: "r3", map: 389 }), "r3 · map 389");
 const sc = C.normalizeScene({ map: 389, tiles: [{ x: 1, y: 2, vertices: [0, 0, -5, 0, 1, 3], indices: [0, 1, 2] }, { x: 2, y: 2, missing: true }] });
 assert.strictEqual(sc.low, -5); assert.strictEqual(sc.high, 3); assert.strictEqual(sc.tiles[1].missing, true);
 assert.strictEqual(C.statusText("live", "no-serve", "no answer", 389), "No serve: no answer");

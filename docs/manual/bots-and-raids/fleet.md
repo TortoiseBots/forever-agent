@@ -92,7 +92,8 @@ the JSON, for instance) refuses the whole file.
 `game_account` is checked before the fleet starts, because only the login service knows how many game accounts an
 account holds: a member that names none costs one login (no world socket, no character, paced by the same budget),
 and an account that lists several stops the fleet then, with exit 2 and the field to add, instead of a serve
-failing at the world after its login was spent.
+failing at the world after its login was spent. The answer is kept per account, so the fleet spends at most one
+login per account on the check, and the member it stops is the first one that would have needed that answer.
 
 # What it does
 

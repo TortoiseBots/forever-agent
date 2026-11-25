@@ -57,7 +57,7 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 
 | Method | Params | What it does | Page |
 |---|---|---|---|
-| `units` | `within`, `near`, `entry`, `name`, `hostile`, `owner`, `limit` | Units in view, nearest first | [Status](status-and-world-reads.md#units) |
+| `units` | `within`, `near`, `entry`, `name`, `hostile`, `owner`, `reaction`, `limit` | Units in view, nearest first | [Status](status-and-world-reads.md#units) |
 | `unit` | `guid`, `name` | One unit row | [Status](status-and-world-reads.md#unit-and-target) |
 | `target` | `guid`, `name` | Select a unit on the server | [Status](status-and-world-reads.md#unit-and-target) |
 | `gameobjects` | `within`, `radius`, `entry`, `type`, `name`, `limit` | Game objects in view | [Status](status-and-world-reads.md#gameobjects) |

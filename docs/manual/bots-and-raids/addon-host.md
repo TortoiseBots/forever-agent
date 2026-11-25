@@ -61,7 +61,12 @@ code the daemon wrote. These are the rules it runs under:
 - The add-on's own prefix list has a share of the server's 64: the smaller of 32 and what the
   session's reserved prefixes leave. `addon_start` takes no more, a prefix registered or sent
   under past the share is refused, and three such refusals mark the add-on `throttled`. The list
-  grows only once the session took the registration, so a failed one leaves no entry. A prefix the
+  grows only once the session took the registration, so a failed one leaves no entry. A prefix
+  only sent under counts against the share exactly as a registered one: the client registers it
+  with the send, and past the share the send raises a Lua error the add-on sees (not only an error
+  on the row `addon_state` keeps). The prefixes `addon_start` registered up front are counted the
+  same way, so `RegisterAddonMessagePrefix` answers `false` for one past the share instead of
+  `true` for a prefix the session then refuses. A prefix the
   add-on registers after the load is sent to the session as a request of its own as soon as the
   call answers, so it is fed the frames that arrive under it from then on.
 - Its sidecar is a separate process under a 256 MiB address-space limit. A call that does not

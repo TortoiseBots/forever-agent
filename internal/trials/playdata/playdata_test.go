@@ -825,3 +825,135 @@ func TestRowsOrder(t *testing.T) {
 		t.Fatalf("evidence %+v", doc["evidence"])
 	}
 }
+
+// TestGearFitsSpecEnhancementHunterOnlyMail pins the known false failure of the gear rule on real data: an enhancement
+// shaman in mail only hunters wear. The item's family is agility, which the shaman's own slot data names in some armour
+// slots but not in Wrist, Hands, Waist and Feet (its own rows there name a caster family above the floor, so those
+// slots accept caster only). So the same kind of piece is FINE in Shoulders, Chest and Legs and FAILs in Wrist, Hands,
+// Waist and Feet: 4 of the 8 armour slots (4 of the 7 that have a hunter-only agility item at all).
+//
+// The false failure is a data gap, not a threshold: the tables carry no item stats or armour type, so the rule cannot
+// tell agility mail from a caster piece in those two slots. With the item read-out the slot's own armour family would
+// settle it. The test pins today's verdicts so a threshold or data change shows up here (and so the manual's
+// known-limits line is checked against the rule).
+func TestGearFitsSpecEnhancementHunterOnlyMail(t *testing.T) {
+	tables := aotc.Default()
+	in := Inputs{Tables: tables}
+	// One hunter-only agility item per armour slot that has one (worn at least GearFamilyShare by hunter specs only,
+	// and absent from the shaman's own rows): the mail pieces of the Beaststalker's and Beastmaster's sets and their
+	// data peers.
+	cases := []struct {
+		slot  string
+		entry int64
+		want  string
+	}{
+		{"Shoulders", 16679, VerdictPass}, // Beaststalker's Mantle
+		{"Chest", 252483, VerdictPass},    // Dawn Armor
+		{"Wrist", 226885, VerdictFail},    // Beastmaster's Bindings
+		{"Hands", 226883, VerdictFail},    // Beastmaster's Gauntlets
+		{"Waist", 272397, VerdictFail},    // Ranger's Belt
+		{"Legs", 17754, VerdictPass},      // Infernal Trickster Leggings
+		{"Feet", 16675, VerdictFail},      // Beaststalker's Boots
+	}
+	fails := 0
+	for _, tc := range cases {
+		if _, ok := tables.Item(tc.entry); !ok {
+			t.Fatalf("item %d is not in the item tables", tc.entry)
+		}
+		row := gearRow(Record{Class: "shaman", Spec: "enhancement", Level: GearLevel, EquippedKnown: true,
+			Equipped: []Item{{Entry: tc.entry, Slot: tc.slot}}}, in)
+		if row.Verdict != tc.want {
+			t.Errorf("%s item %d is %s, want %s: %s\n%s", tc.slot, tc.entry, row.Verdict, tc.want,
+				row.Reason, strings.Join(row.Evidence, "\n"))
+		}
+		if row.Verdict == VerdictFail {
+			fails++
+		}
+	}
+	if fails != 4 {
+		t.Errorf("%d of the %d slots fail, want the four known ones (Wrist, Hands, Waist, Feet)", fails, len(cases))
+	}
+}
+
+// floorOnlyFamilies is weightedFamilies without the single-largest fallback: the families the share floor alone keeps.
+// It exists so the largest-family clause can be measured against the shipped data.
+func floorOnlyFamilies(contribs []familyShare) map[string]bool {
+	sums := map[string]float64{}
+	var total float64
+	for _, c := range contribs {
+		for family := range c.families {
+			sums[family] += c.share
+			total += c.share
+		}
+	}
+	out := map[string]bool{}
+	floor := familyShareFloor * total
+	for family, share := range sums {
+		if share >= floor-1e-9 {
+			out[family] = true
+		}
+	}
+	return out
+}
+
+// TestLargestFamilyClauseOnRealData measures the largest-family clause against every set the shipped tables produce:
+// the acceptable families of every spec and slot, and every item's own reading. On this data the clause never adds a
+// family (no set has a single largest family under the floor), so the rule's verdicts on real gear are the share
+// floor's alone; the clause's own behaviour is pinned on synthetic shares by TestWeightedFamilies.
+//
+// The sweep is here so the claim can be checked, never assumed: a data refresh that makes the clause matter fails this
+// test with the spec, slot or item named, and the case then gets its own pin instead of being folded into a claim.
+func TestLargestFamilyClauseOnRealData(t *testing.T) {
+	tables := aotc.Default()
+	reader := newFamilyReader(tables)
+	slots := []string{"Head", "Shoulders", "Chest", "Wrist", "Hands", "Waist", "Legs", "Feet", "Back", "Finger", "Neck", "Trinket", "Main Hand", "Off Hand"}
+	for _, key := range tables.SpecList() {
+		for _, slot := range slots {
+			var contribs []familyShare
+			for _, g := range tables.GearRows(key.Class, key.Spec) {
+				if g.SetSlot() || g.ID <= 0 || !strings.EqualFold(g.Slot, slot) {
+					continue
+				}
+				if families := reader.slotFamilies(Item{Entry: g.ID, Name: g.Name, Slot: g.Slot}); len(families) > 0 {
+					contribs = append(contribs, familyShare{share: g.Pct, families: families})
+				}
+			}
+			with, without := weightedFamilies(contribs), floorOnlyFamilies(contribs)
+			for family := range with {
+				if !without[family] {
+					t.Errorf("%s/%s %s: the largest-family clause accepts %q; want the share floor alone", key.Class, key.Spec, slot, family)
+				}
+			}
+		}
+	}
+	// The item side: every item's own reading is the floor's alone too.
+	ids := map[int64]bool{}
+	for _, key := range tables.SpecList() {
+		for _, g := range tables.GearRows(key.Class, key.Spec) {
+			if !g.SetSlot() && g.ID > 0 {
+				ids[g.ID] = true
+			}
+		}
+	}
+	for id := range ids {
+		info, ok := tables.Item(id)
+		if !ok {
+			continue
+		}
+		for _, slot := range info.Slots {
+			var contribs []familyShare
+			for _, w := range info.Wearers {
+				if !strings.EqualFold(w.Slot, slot) || w.Pct < GearFamilyShare {
+					continue
+				}
+				contribs = append(contribs, familyShare{share: w.Pct, families: reader.specFamilies(w.Class, w.Spec)})
+			}
+			with, without := weightedFamilies(contribs), floorOnlyFamilies(contribs)
+			for family := range with {
+				if !without[family] {
+					t.Errorf("item %d (%s) in %s: the largest-family clause accepts %q; want the share floor alone", id, info.Name, slot, family)
+				}
+			}
+		}
+	}
+}

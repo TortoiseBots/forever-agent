@@ -421,7 +421,7 @@ async function loadRecords() {
     for (const r of list) {
       const o = document.createElement("option");
       o.value = r.name;
-      o.textContent = r.name + (r.map ? " · map " + r.map : "") + (r.start ? " · " + r.start : "");
+      o.textContent = Core.recordLabel(r);
       sel.appendChild(o);
     }
     if (state.record) sel.value = state.record;

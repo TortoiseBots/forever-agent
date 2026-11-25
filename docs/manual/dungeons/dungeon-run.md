@@ -143,6 +143,11 @@ A dry run with `--out` writes the same files. Without `--out` the run writes not
 
 # Common problems
 
+- `busy: a run preflight holds the command channel, retry` — while `dungeon_run` starts, its own preflight holds the
+  command channel for each read (the module probe and each `.pinfo`). A `bot`, `gm` or `commander` call (or another
+  `dungeon_run`) arriving in that window is refused at once with `-32003` and nothing sent; `status` and every other
+  method keep answering. Retry the call after the preflight; it never outlasts the channel's 35 s wait plus each
+  read's own deadline. See [RPC basics](../daemon/rpc-basics.md#one-call-at-a-time).
 - `the plan is refused: ...` — the loader's message names the field. Fix the plan, not the command line.
 - `prepare:party` / `prepare:roster` / `prepare:names` / `prepare:offline` / `prepare:level` / `prepare:roles` /
   `prepare:leader` / `prepare:commander` — the party's roster does not match the five names: the module's roster read

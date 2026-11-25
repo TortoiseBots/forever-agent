@@ -368,6 +368,11 @@ type playRun struct {
 	pullStand       Vec3
 	agentPulled     map[int]bool
 	agentPulledUnit map[wire.GUID]bool
+	// approachBase is how far the agent's own approach stood from each hostile at the first plan that stood inside its
+	// clearance (by guid). The clearance is relative to that distance, not to each pass' own, so repeated re-plans
+	// cannot creep nearer a hostile a bit at a time (each pass' own distance let them, 0.5 yd per pass, until the
+	// pull's deadline). Reset for every pull.
+	approachBase map[wire.GUID]float64
 	// stranger is the unit the patrol hold pulled as its own pull (a live hostile the plan does not know that stands
 	// in the way): the pull's own marks, sight stand and bounds, and the leg goes on after it.
 	stranger wire.GUID
@@ -448,7 +453,8 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 		agentPulled: map[int]bool{}, agentPulledUnit: map[wire.GUID]bool{},
 		strangerPulls: map[wire.GUID]int{}, strangerGaveUp: map[wire.GUID]bool{}, strangerRetry: map[wire.GUID]time.Time{}, reaction: map[int32]bool{},
 		maxWipes: playMaxWipes(cfg.MaxWipes), deathSeen: map[string]bool{}, looted: map[wire.GUID]bool{},
-		regroups: map[string]int{},
+		regroups:     map[string]int{},
+		approachBase: map[wire.GUID]float64{},
 	}
 	if p.ports.Clock == nil {
 		p.ports.Clock = WallClock{}
@@ -1545,15 +1551,25 @@ func (p *playRun) notHostile(u Unit) bool {
 	return !hostile
 }
 
-// partyOwned says whether the unit is a pet of the party: it has an owner, and that owner's GUID is a roster member's
-// (the agent included, the roster does). The hunter bot's pet is owned by its bot, not marked friendly, and stands by
-// the party: without this it reads as a stranger the plan does not know.
+// partyOwned says whether the unit is a pet of the party (or its totem, guardian): it has an owner whose GUID is a
+// roster member's (the agent included, the roster does). The hunter bot's pet is owned by its bot, not marked friendly,
+// and stands by the party: without this it reads as a stranger the plan does not know. A charm is the
+// controlling ownership while it is on: a party pet charmed by an enemy fights the party and is a pack, and an enemy
+// pet charmed by a party member is the party's and is not (its Owner still names the enemy that summoned it).
 func (p *playRun) partyOwned(u Unit) bool {
+	if !u.CharmedBy.IsZero() {
+		return p.inRoster(u.CharmedBy)
+	}
 	if u.Owner.IsZero() {
 		return false
 	}
+	return p.inRoster(u.Owner)
+}
+
+// inRoster says whether g is one of the party's members.
+func (p *playRun) inRoster(g wire.GUID) bool {
 	for _, m := range p.roster() {
-		if m.GUID == u.Owner {
+		if m.GUID == g {
 			return true
 		}
 	}

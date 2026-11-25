@@ -255,6 +255,8 @@ func (d *Driver) traceSample() {
 			b.NoPos = true
 		default:
 			b.X, b.Y, b.Z, b.Combat, b.Target, b.Moving = u.X, u.Y, u.Z, u.InCombat, guidText(u.Target), u.Moving
+			orient := u.O
+			b.Orient = &orient
 			if mpw == 0 && u.MaxPower > 0 {
 				b.Power, b.MaxPow, b.PType = u.Power, u.MaxPower, u.PowerType
 			}
@@ -466,6 +468,8 @@ func feedFrame(fr tbm.ViewFrame) trace.Frame {
 	for _, p := range fr.Party {
 		b := trace.Bot{G: guidText(p.GUID), Alive: !p.Dead, Combat: p.InCombat(), State: p.State, HP: p.HP, MaxHP: p.MaxHP, Power: p.Power, MaxPow: p.MaxPower,
 			PType: p.PowerType, X: p.X, Y: p.Y, Z: p.Z, Target: guidText(p.Target), Cast: p.Spell, Action: p.Action, Res: p.Result, Why: p.Reason, Lead: p.GUID == fr.Lead && fr.Lead != 0}
+		orient := p.O
+		b.Orient = &orient
 		if h, ok := hostile[p.Target]; ok {
 			b.Facing = facingDegrees(p.O, p.X, p.Y, h.X, h.Y)
 		}

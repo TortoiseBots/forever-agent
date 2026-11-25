@@ -86,7 +86,9 @@ Every off-tank is the named `--ot` bots (in the order given), or with no names t
 
 ## The oracle line per bot
 
-Every bot is judged against its class spec in the selected data the same way [spell-score](spell-score.md) judges a watch, with one difference: the fight is judged after 20 s of it by default, not a trace's 60 s, and the fight's spell lines may be capped, so a core spell the bot might have cast is reported as `unknown` rather than missing. Only warnings print; the line `N bot(s) judged ok` (plus `M not judged`) closes the reading.
+Every bot is judged against its class spec in the selected data the same way [spell-score](spell-score.md) judges a watch, with one difference: the fight is judged after 20 s of it by default, not a trace's 60 s, and the fight's spell lines may be capped, so a core spell the bot might have cast is reported as `unknown` rather than missing. Only warnings print; the line `N bot(s) judged ok` (plus `M not judged`) closes the reading. A record with nothing to
+judge is not a clean one: no bots at all warns `no bots in the fight record: nothing was judged`, and a bot with no
+spells warns that its casts cannot be judged (warnings are part of the reading, so `--json` carries them too).
 
 # What you see
 

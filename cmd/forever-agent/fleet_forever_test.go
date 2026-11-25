@@ -503,3 +503,35 @@ func TestFleetCheckGameAccountsErrorsEarly(t *testing.T) {
 		t.Fatalf("a member that names its game account was probed: %v", probed)
 	}
 }
+
+// TestFleetCheckGameAccountsProbesOncePerAccount: the count belongs to the account, so two characters of one account
+// cost one login, not one per member (a fleet of five characters on one account used to spend five logins on the same
+// answer, through the fleet's shared budget).
+//
+// Mutation this test catches: a probe inside the member loop with no account cache (one login per member).
+func TestFleetCheckGameAccountsProbesOncePerAccount(t *testing.T) {
+	old := fleetGameAccounts
+	t.Cleanup(func() { fleetGameAccounts = old })
+	dir := t.TempDir()
+	pw := filepath.Join(dir, "pw")
+	if err := os.WriteFile(pw, []byte("not-a-real-password\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	members := []fleetForeverMember{
+		{Account: "ACC", Character: "Onea", Dir: "d1", Listen: "127.0.0.1:9101", PasswordFile: pw},
+		{Account: "ACC", Character: "Twob", Dir: "d2", Listen: "127.0.0.1:9102", PasswordFile: pw},
+		{Account: "OTHER", Character: "Thre", Dir: "d3", Listen: "127.0.0.1:9103", PasswordFile: pw},
+	}
+	var probed []string
+	fleetGameAccounts = func(_ context.Context, _ live.ServerExt, m fleetForeverMember, _ string, _ func(context.Context) error) (int, error) {
+		probed = append(probed, m.Account+"/"+m.Character)
+		return 1, nil
+	}
+	var out strings.Builder
+	if err := fleetCheckGameAccounts(context.Background(), serveExt, members, nil, time.Now, &out); err != nil {
+		t.Fatalf("one game account each: %v", err)
+	}
+	if len(probed) != 2 || probed[0] != "ACC/Onea" || probed[1] != "OTHER/Thre" {
+		t.Fatalf("probed %v, want one probe per account (ACC/Onea, OTHER/Thre)", probed)
+	}
+}

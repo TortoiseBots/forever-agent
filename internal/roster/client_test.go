@@ -503,7 +503,50 @@ func TestRosterDoesNotWaitOnAHangingStatusRoute(t *testing.T) {
 	if r.Heartbeat != nil {
 		t.Fatalf("heartbeat = %+v, want nil when the status route never answers", r.Heartbeat)
 	}
-	if waited > 2*time.Second {
-		t.Fatalf("Roster waited %v on a status route that never answers: the optional heartbeat read must be bounded well below the caller's request timeout", waited)
+	// heartbeatTimeout (500 ms) is the optional read's own bound; the roster's timeout here is 5 s, so a wait near 2 s
+	// would mean the bound swelled to seconds (the old assertion allowed it).
+	if waited > 2*heartbeatTimeout {
+		t.Fatalf("Roster waited %v on a status route that never answers: the optional heartbeat read must be bounded by heartbeatTimeout (%s), not by the caller's request timeout", waited, heartbeatTimeout)
+	}
+}
+
+// TestRosterStatusRedirectDoesNotRelogin: a status route that answers a redirect (a dashboard serving its API only to
+// a browser, or one whose status path moved) is a roster without a heartbeat, and it does not cost a login on every
+// sample: the optional read never renews the session.
+//
+// Mutation this test catches: the heartbeat read going through the renewing read (each sample answers 302, each sample
+// logs in again, and a watch's every poll spends a login).
+func TestRosterStatusRedirectDoesNotRelogin(t *testing.T) {
+	var logins int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/login":
+			atomic.AddInt32(&logins, 1)
+			http.SetCookie(w, &http.Cookie{Name: "s", Value: "v", Path: "/"})
+			fmt.Fprint(w, `{"success":true}`)
+		case "/api/v1/bots":
+			fmt.Fprint(w, `[{"name":"Ash","guid":1,"kind":"pool","state":"idle","hp":10,"max_hp":10,"map":0,"instance":"","x":0,"y":0,"z":0}]`)
+		case "/api/v1/status":
+			http.Redirect(w, r, "/login", http.StatusFound)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL, 2*time.Second)
+	for i := range 3 {
+		r, err := c.Roster(context.Background())
+		if err != nil {
+			t.Fatalf("sample %d: %v", i, err)
+		}
+		if r.Heartbeat != nil {
+			t.Fatalf("sample %d: heartbeat %+v from a redirect", i, r.Heartbeat)
+		}
+	}
+	// The bots route answers without a session here, so a login is exactly what a refresh costs: the redirecting
+	// status route must not make one.
+	if n := atomic.LoadInt32(&logins); n != 0 {
+		t.Fatalf("%d logins for three samples with a redirecting status route, want none", n)
 	}
 }

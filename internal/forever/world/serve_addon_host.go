@@ -201,7 +201,11 @@ type serveAddonHost struct {
 	version    string
 	files      []string
 	registered []string // the add-on's own prefixes (the ones it asked for and the ones it sent under)
-	reserved   []string // prefixes the session held at addon_start: the add-on may not register, send under or receive them
+	reserved   []string // prefixes the add-on may not register, send under or receive them (the session's own and the protocol names)
+	// held is the list the session actually had at addon_start, the subset of reserved that is not only a protected
+	// protocol name: it is what a re-register writes back once the session's own list cannot be read (a failed packet
+	// leaves it unknown). Merging reserved itself would register PBC/TBM on a session that never held them.
+	held []string
 	// regSession, regList and regWanted are the last registration the host checked: regList is the list the session
 	// held then and regWanted the add-on's own list it was merged from. While both are unchanged there is nothing
 	// to register, so the harvest's every turn costs two compares and no packet.
@@ -359,14 +363,14 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 	if err != nil {
 		return serveAddonHostState{}, err
 	}
-	res, outs, err := h.Load(prep.world, true, reserved)
+	res, outs, err := h.LoadWith(prep.world, true, reserved, p.Prefixes)
 	if err != nil {
 		h.Close()
 		return serveAddonHostState{}, fmt.Errorf("addon_start: loading the add-on: %w", err)
 	}
 	a := &serveAddonHost{dir: p.Dir, manual: manual, lastTick: time.Now(), cursor: prep.cursor,
-		reserved: reserved,
-		jobs:     make(chan *addonJob, 1), results: make(chan addonJobResult, 1), idle: make(chan struct{}, 1),
+		reserved: reserved, held: prep.held,
+		jobs: make(chan *addonJob, 1), results: make(chan addonJobResult, 1), idle: make(chan struct{}, 1),
 		quit: make(chan struct{}), workerDone: make(chan struct{})}
 	for _, prefix := range p.Prefixes {
 		if !slices.Contains(a.registered, prefix) {
@@ -410,7 +414,11 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 		return nil, nil
 	})
 	if err != nil {
+		// The load's own sends may already have registered prefixes on the session before a later check refused
+		// the start (its share, a bad one): take them off before returning, so a failed start leaves the session's
+		// list as it was.
 		a.stop()
+		_, _ = st.call(context.WithoutCancel(ctx), func(s *session) (any, error) { return nil, a.unregister(s) })
 		return serveAddonHostState{}, fmt.Errorf("addon_start: registering the add-on's prefixes: %w", err)
 	}
 	return st.addonStateNow(ctx)
@@ -985,10 +993,20 @@ func (a *serveAddonHost) registerAddonPrefixes(s *session, wanted []string) erro
 	if a.regSession == s && slices.Equal(have, a.regList) && slices.Equal(wanted, a.regWanted) {
 		return nil
 	}
-	set := make(map[string]struct{}, len(have)+len(wanted))
+	set := make(map[string]struct{}, len(have)+len(wanted)+len(a.held))
 	next := append([]string(nil), have...)
 	for _, prefix := range have {
 		set[prefix] = struct{}{}
+	}
+	// The prefixes the session actually held at addon_start are always part of the list this host writes: a session
+	// whose list became unknown (a failed registration packet) reports none, and the re-register would otherwise drop
+	// them. Only what the session held is written: the protected protocol names it never registered stay unregistered.
+	for _, prefix := range a.held {
+		if _, ok := set[prefix]; ok {
+			continue
+		}
+		set[prefix] = struct{}{}
+		next = append(next, prefix)
 	}
 	for _, prefix := range wanted {
 		if _, ok := set[prefix]; ok {
@@ -1012,9 +1030,14 @@ func (a *serveAddonHost) registerAddonPrefixes(s *session, wanted []string) erro
 	return nil
 }
 
-// unregister takes the add-on's prefixes off the session's list, leaving the rest.
+// unregister takes the add-on's prefixes off the session's list, leaving the rest. A list that became unknown (a
+// registration packet failed after its unregister-all) cannot be filtered, so the host writes back the prefixes it
+// captured at addon_start instead: what the server may hold is then the session's own list, never the add-on's.
 func (a *serveAddonHost) unregister(s *session) error {
 	a.regSession, a.regList, a.regWanted = nil, nil, nil
+	if s.addonState == addonRegistrationUnknown {
+		return s.RegisterAddonPrefixes(a.held...)
+	}
 	have := s.addonRegisteredPrefixes()
 	var keep []string
 	for _, prefix := range have {

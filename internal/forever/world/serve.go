@@ -1048,8 +1048,11 @@ type ServeUnit struct {
 	// The pet fields (round P2): Owner is whichever of UF::UnitData SummonedBy, CreatedBy and CharmedBy names the
 	// unit's owner, OwnerKind says which field it came from, and Pet is the unit's own Summon (the pet it controls,
 	// zero for a pet itself). PetNumber, CreatedBySpell and CreatureFamily are the pet fields P1 decodes.
-	Owner          GUID   `json:"owner,omitempty"`
-	OwnerKind      string `json:"owner_kind,omitempty"`
+	Owner     GUID   `json:"owner,omitempty"`
+	OwnerKind string `json:"owner_kind,omitempty"`
+	// Hostile is the unit's reaction to this character, filled only when the caller asked for it (units'
+	// `reaction`): the mob's faction template against the character's own. Nil when not asked or not known.
+	Hostile        *bool  `json:"hostile,omitempty"`
 	Pet            GUID   `json:"pet,omitempty"`
 	PetNumber      uint32 `json:"pet_number,omitempty"`
 	CreatedBySpell int32  `json:"created_by_spell,omitempty"`

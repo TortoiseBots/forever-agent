@@ -992,3 +992,58 @@ func TestMoverInterruptedLegLeavesNoPendingTeleport(t *testing.T) {
 		})
 	}
 }
+
+// TestMoverTakesNoSampleAcrossATeleportOrAMapChange: Samples measures the segment from the last reported position, so
+// a teleport, a server position and a map change clear it: the next packet starts a new segment instead of naming a
+// closest approach on a line the character never walked (a straight line from the old map's position to the new one
+// would cross every volume on it).
+//
+// Mutations these tests catch: dropping the reset in SetTeleport or in EndMapChange (the next packet asks Samples
+// about a segment hundreds of yards long, across a wall or a map).
+func TestMoverTakesNoSampleAcrossATeleportOrAMapChange(t *testing.T) {
+	start := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	sender := &fakeSender{now: start}
+	m := &Mover{
+		Sender:     sender,
+		ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+		X:          1000, Y: 2000, Z: 50, RunSpeed: 7, Flags: FlagTouchingGround,
+	}
+	var asked [][2][3]float32
+	m.Samples = func(from, to [3]float32) [][3]float32 {
+		asked = append(asked, [2][3]float32{from, to})
+		return nil
+	}
+	if err := m.Stop(); err != nil {
+		t.Fatalf("the first stop: %v", err)
+	}
+	if len(asked) != 0 {
+		t.Fatalf("the first packet asked Samples (%v): there is no reported segment yet", asked)
+	}
+	// A teleport to the far side of the map, then a packet: no segment from the old position.
+	m.SetTeleport(3000, 4000, 10, 0, 4)
+	if err := m.Stop(); err != nil {
+		t.Fatalf("the stop after the teleport: %v", err)
+	}
+	if len(asked) != 0 {
+		t.Fatalf("a teleport to 3000 4000 asked Samples about %v: want a new segment", asked)
+	}
+	// A map change the same way: EndMapChange places the character, and the first packet on the new map starts a
+	// segment of its own.
+	m.BeginMapChange()
+	m.EndMapChange(100, 200, 30, 0)
+	if err := m.Stop(); err != nil {
+		t.Fatalf("the stop after the map change: %v", err)
+	}
+	if len(asked) != 0 {
+		t.Fatalf("a map change asked Samples about %v: want a new segment", asked)
+	}
+	// Without either, the next packet does ask: the hook is live (a segment needs both a span and a length).
+	m.X += 5
+	sender.now = start.Add(time.Second)
+	if err := m.Stop(); err != nil {
+		t.Fatalf("the second stop: %v", err)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("the packet after a reported one asked Samples %d times, want once", len(asked))
+	}
+}

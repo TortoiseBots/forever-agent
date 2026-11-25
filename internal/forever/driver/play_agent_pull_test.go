@@ -1300,10 +1300,12 @@ func wantApproachClears(t *testing.T, rig *playRig) {
 // by a party member and is not marked friendly. It stands by the party, inside the clearance of the agent's start, and
 // it is not a pack: the approach walks and pulls. Counted, it blocked every approach with pack-near.
 func TestAgentPullApproachIgnoresPartyOwnedUnits(t *testing.T) {
+	// Every case stands on the walked path and outside the skull's assistance radius, so each one blocks when it is
+	// counted (a case off the path would pass without the fix, which is what let two of these go by).
 	cases := map[string]Vec3{
-		"at the stand":     {40, 5, 0},
-		"beside the agent": {45, 18, 0},
-		"on the path":      approachPoint(3, 1),
+		"early on the path": approachPoint(1.5, 0),
+		"on the path":       approachPoint(3, 1),
+		"late on the path":  approachPoint(4, 0),
 	}
 	for name, pos := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -1470,4 +1472,147 @@ func TestAgentPullApproachPartialRouteIsNoPath(t *testing.T) {
 	if len(rig.fake.agentAttacks) != 0 {
 		t.Fatalf("the agent attacked %v; want no swing on a partial route", rig.fake.agentAttacks)
 	}
+}
+
+// TestPackOnPathMeasuresFromThePullsFirstPlan: the clearance a hostile inside the agent's start imposes is measured
+// from the distance the pull's first approach planned from, not from wherever a later pass happens to stand. Without
+// that, every pass lets the agent creep about the slack nearer (0.5 yd), pass after pass, until the pull's deadline.
+//
+// Mutation this test catches: packOnPath reading the pass' own start distance (the second plan blocks later, from a
+// point it already crept to).
+func TestPackOnPathMeasuresFromThePullsFirstPlan(t *testing.T) {
+	skull := livePullSkull
+	hostile := approachPoint(4, 12) // inside the clearance of the fallback's start, 12 yd to the side of the path
+	rig := approachRig(t, skull, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(40), Entry: 11980, Pos: hostile})
+	})
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults(),
+		approachBase: map[wire.GUID]float64{}}
+	base := dist3(livePullSelf, hostile)
+	if base >= PlayAgentApproachPackYd {
+		t.Fatalf("the test's hostile stands %.1f yd from the start; want it inside the %v yd clearance", base, PlayAgentApproachPackYd)
+	}
+	if _, blocked := p.packOnPath(-1, skull, []Vec3{livePullSelf, skull}, 0); !blocked {
+		t.Fatal("the path toward the skull did not block on the hostile inside the start's clearance")
+	}
+	if got := p.approachBase[fightGUID(40)]; got != base {
+		t.Fatalf("the recorded baseline is %.2f, want the first plan's %.2f", got, base)
+	}
+	// A later pass stands 0.4 yd nearer the hostile (the creep the old rule allowed) and plans again: the clearance is
+	// the first plan's, so the path blocks within a fraction of a yard instead of the 0.5 the pass' own distance allows.
+	step := float32(0.4 / base)
+	near := Vec3{
+		livePullSelf[0] + (hostile[0]-livePullSelf[0])*step,
+		livePullSelf[1] + (hostile[1]-livePullSelf[1])*step,
+		livePullSelf[2] + (hostile[2]-livePullSelf[2])*step,
+	}
+	at, blocked := p.packOnPath(-1, skull, []Vec3{near, skull}, 0)
+	if !blocked {
+		t.Fatal("the second plan did not block")
+	}
+	if at > PlayAgentApproachStartEpsYd {
+		t.Fatalf("the second plan blocked at %.2f yd; want it measured from the first plan (within the %.2f yd slack of the start)", at, PlayAgentApproachStartEpsYd)
+	}
+	if got := p.approachBase[fightGUID(40)]; got != base {
+		t.Fatalf("the baseline moved to %.2f; want the first plan's %.2f", got, base)
+	}
+}
+
+// TestPackOnPathForgetsTheStartInsideOnceOutside: a distance recorded by a plan that stood inside a hostile's
+// clearance applies only while the pass' start is still inside it. Once a walk has taken the agent outside, a later
+// plan's path keeps the plain clearance again: the recorded 8 yd is not a licence to pass the hostile at 7.5.
+//
+// Mutation this test catches: packOnPath consulting the recorded base without checking the pass' start (the second
+// plan blocks only at the recorded radius, so a path that enters the clearance at 22 yd is planned as if the hostile
+// were 7.5 yd wide, and the approach walks through the pack).
+func TestPackOnPathForgetsTheStartInsideOnceOutside(t *testing.T) {
+	hostile := Vec3{0, 0, 0}
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(43), Entry: 11977, Pos: hostile})
+	})
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults(),
+		approachBase: map[wire.GUID]float64{}}
+	target := Vec3{0, 0, 200}
+	// Pass 1 stands 8 yd from the hostile (inside the clearance) and its path walks away and out: the base is recorded.
+	if _, blocked := p.packOnPath(-1, target, []Vec3{{8, 0, 0}, target}, 0); blocked {
+		t.Fatal("the first plan blocked although its path walks away from the hostile")
+	}
+	if got := p.approachBase[fightGUID(43)]; got != 8 {
+		t.Fatalf("the recorded baseline is %.2f; want 8", got)
+	}
+	// Pass 2 starts 35 yd away (outside the clearance) and its path passes the hostile at 7.5 yd: the block is the
+	// plain radius' entry at 13 yd along, not the recorded 7.5 yd radius' entry at 27.5 yd along.
+	at, blocked := p.packOnPath(-1, target, []Vec3{{35, 0, 0}, {7.5, 0, 0}, {7.5, -40, 0}}, 0)
+	if !blocked {
+		t.Fatal("the second plan did not block on a path that passes the hostile at 7.5 yd")
+	}
+	if math.Abs(at-13) > 1e-3 {
+		t.Fatalf("the second plan blocked at %.2f yd along; want the plain radius' entry at 13 yd", at)
+	}
+	if _, ok := p.approachBase[fightGUID(43)]; ok {
+		t.Fatal("the recorded baseline survived a plan that started outside the clearance")
+	}
+}
+
+// TestPackOnPathForgetsAHostilesBaselineWhileItIsOutOfView: a hostile that leaves the view while the agent stands
+// outside its clearance takes the remembered distance with it. When it reappears with the agent inside the clearance
+// the plain radius applies, so a path that comes nearer than the old distance blocks at the new start's distance, not
+// at the stale reduced one.
+//
+// Mutation this test catches: the baseline kept for a unit the view no longer carries (a hostile that dropped out of
+// sight between two plans keeps a radius taken before the walk left its clearance, and a later path re-enters nearer
+// than the plain radius allows).
+func TestPackOnPathForgetsAHostilesBaselineWhileItIsOutOfView(t *testing.T) {
+	hostile := Vec3{0, 0, 0}
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(45), Entry: 11975, Pos: hostile})
+	})
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults(),
+		approachBase: map[wire.GUID]float64{}}
+	target := Vec3{0, 0, 200}
+	if _, blocked := p.packOnPath(-1, target, []Vec3{{8, 0, 0}, target}, 0); blocked {
+		t.Fatal("the first plan blocked although its path walks away from the hostile")
+	}
+	if got := p.approachBase[fightGUID(45)]; got != 8 {
+		t.Fatalf("the recorded baseline is %.2f; want 8", got)
+	}
+	// The hostile drops out of the view while the agent is away from it: the plan cannot see it, and its baseline goes.
+	rig.fake.RemoveUnit(fightGUID(45))
+	p.packOnPath(-1, target, []Vec3{{35, 0, 0}, target}, 0)
+	if _, ok := p.approachBase[fightGUID(45)]; ok {
+		t.Fatal("the baseline of a hostile the view no longer carries survived")
+	}
+	// It reappears with the agent 20 yd away: the path blocks at that start's own clearance (19.5 yd), not at a stale
+	// 7.5 yd one 12.5 yd along.
+	rig.fake.AddUnit(Unit{GUID: fightGUID(45), Entry: 11975, Pos: hostile})
+	at, blocked := p.packOnPath(-1, target, []Vec3{{20, 0, 0}, {7.5, 0, 0}, {7.5, -40, 0}}, 0)
+	if !blocked {
+		t.Fatal("the reappeared hostile's path did not block")
+	}
+	if math.Abs(at-0.5) > 1e-3 {
+		t.Fatalf("the path blocked at %.2f yd along; want the start's own 19.5 yd clearance at 0.5 yd", at)
+	}
+}
+
+// TestAgentPullApproachCharmedPets: a charm is the controlling ownership. A party's pet charmed by an enemy fights
+// the party and is a pack (the approach keeps its clearance); an enemy's pet charmed by a party member is the party's
+// and is not. The serve unit's Owner still names the summoner in both cases, so only the charm field tells them.
+//
+// Mutation this test catches: partyOwned reading Owner alone (the charmed party pet skipped as the party's, the
+// approach walking through a mob that is fighting it).
+func TestAgentPullApproachCharmedPets(t *testing.T) {
+	t.Run("a party pet charmed by an enemy is a pack", func(t *testing.T) {
+		rig := approachRig(t, livePullSkull, nil)
+		owner := rig.ports.Group.Roster()[0].GUID
+		rig.fake.AddUnit(Unit{GUID: fightGUID(41), Entry: 11979, Pos: approachPoint(3, 1), Owner: owner, CharmedBy: fightGUID(99)})
+		Play(context.Background(), rig.route, rig.ports, rig.cfg)
+		wantPackNear(t, rig)
+	})
+	t.Run("an enemy pet charmed by the party is not", func(t *testing.T) {
+		rig := approachRig(t, livePullSkull, nil)
+		member := rig.ports.Group.Roster()[0].GUID
+		rig.fake.AddUnit(Unit{GUID: fightGUID(42), Entry: 11978, Pos: approachPoint(3, 1), Owner: fightGUID(98), CharmedBy: member})
+		Play(context.Background(), rig.route, rig.ports, rig.cfg)
+		wantApproachClears(t, rig)
+	})
 }

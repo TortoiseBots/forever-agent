@@ -211,6 +211,10 @@ type serveUnitsParams struct {
 	Limit   int     `json:"limit,omitempty"`
 	// Owner keeps only the units whose owner (ServeUnit.Owner) is this GUID: a hunter's pet, a warlock's demon.
 	Owner GUID `json:"owner,omitempty"`
+	// Reaction adds each creature's reaction to this character (ServeUnit.Hostile): the mob's faction template
+	// against the character's own, the same lookup the hostile filter does. It costs one DB read per faction template
+	// the view carries (cached for the session afterwards), so only a caller that needs it asks.
+	Reaction bool `json:"reaction,omitempty"`
 }
 
 type serveUnitParams struct {
@@ -936,19 +940,25 @@ func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
 	}
 	// The hostile filter is a real lookup (CORE-GAINS-3): the mob's faction
 	// template against the character's own, fetched once and cached. Only
-	// callers that pass the filter pay the fetch.
-	hostile := map[int32]bool{}
+	// callers that pass the filter (or ask for each row's reaction) pay the fetch; the two share the lookups of one
+	// call through reactionOf.
+	reaction := map[int32]bool{}
+	reactionOf := func(id int32) (bool, bool, error) {
+		if h, ok := reaction[id]; ok {
+			return h, true, nil
+		}
+		h, err := s.hostileToSelf(id)
+		if err != nil {
+			return false, false, err
+		}
+		reaction[id] = h
+		return h, true, nil
+	}
 	if p.Hostile != nil {
 		for _, o := range s.world.Units(s.MoverX(), s.MoverY(), s.MoverZ()) {
-			id := o.Info.FactionTemplate
-			if _, done := hostile[id]; done {
-				continue
-			}
-			h, err := s.hostileToSelf(id)
-			if err != nil {
+			if _, _, err := reactionOf(o.Info.FactionTemplate); err != nil {
 				return nil, err
 			}
-			hostile[id] = h
 		}
 	}
 	now := s.Now()
@@ -959,6 +969,12 @@ func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
 		if within > 0 && u.Distance > within {
 			continue
 		}
+		if p.Reaction {
+			// A template the server does not hold leaves the field out (unknown), never a guess.
+			if h, ok, err := reactionOf(o.Info.FactionTemplate); err == nil && ok {
+				u.Hostile = &h
+			}
+		}
 		if p.Entry != 0 && u.Entry != p.Entry {
 			continue
 		}
@@ -966,7 +982,7 @@ func (s *session) serveUnits(p serveUnitsParams) ([]ServeUnit, error) {
 			continue
 		}
 		if p.Hostile != nil {
-			h, ok := hostile[o.Info.FactionTemplate]
+			h, ok, _ := reactionOf(o.Info.FactionTemplate)
 			if !ok || h != *p.Hostile {
 				continue
 			}

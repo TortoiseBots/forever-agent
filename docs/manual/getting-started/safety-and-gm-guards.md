@@ -142,6 +142,11 @@ The guard stays active for the whole run: a say echo at any later point resets i
 owner commands are the one family a normal player account may send without the GM confirmation; every other
 command text still needs it.
 
+A `gm` call (and `gm_revive`, `gm_kill`, `gm_set_hp`, `gm_aura`, `gm_evade`, `gm_respawn`, and `trial_units`) that
+arrives while a `dungeon_run` start is in its preflight answers `-32003` `busy: a run preflight holds the command
+channel, retry` without sending the line; the hand sent nothing and the guard is untouched. Retry after the
+preflight ([RPC basics](../daemon/rpc-basics.md#one-call-at-a-time)).
+
 ## The command
 
 ```bash

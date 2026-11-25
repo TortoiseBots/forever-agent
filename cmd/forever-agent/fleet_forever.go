@@ -174,12 +174,22 @@ var fleetGameAccounts = func(ctx context.Context, ext live.ServerExt, m fleetFor
 // fleetCheckGameAccounts errors before any serve starts when a member names no game account and its account holds
 // several: the serve would join the first listed and then fail on the character (#236 point 3, the live run's exit 5
 // after a login that was spent for nothing). The count is the login service's, so a member without game_account costs
-// a login, taken through the fleet's shared budget; a member that names one is not probed. The password is read the
-// way the child reads it and never printed.
+// a login, taken through the fleet's shared budget; a member that names one is not probed. The count belongs to the
+// account, not the member, so several characters of one account cost one probe (a fleet of five characters on one
+// account used to spend five logins on the same answer). The password is read the way the child reads it and never
+// printed.
 func fleetCheckGameAccounts(ctx context.Context, ext live.ServerExt, members []fleetForeverMember, budget *loginBudget,
 	now func() time.Time, stderr io.Writer) error {
+	checked := map[string]int{}
 	for i, m := range members {
 		if m.GameAccount != 0 {
+			continue
+		}
+		if n, seen := checked[m.Account]; seen {
+			if n > 1 {
+				return fmt.Errorf("member %d (%s): the account has %d game accounts and none is named: name game_account in the fleet file (the world joins the first listed)",
+					i+1, m.Character, n)
+			}
 			continue
 		}
 		password, err := servePassword(m.PasswordFile)
@@ -210,6 +220,7 @@ func fleetCheckGameAccounts(ctx context.Context, ext live.ServerExt, members []f
 		if err != nil {
 			return fmt.Errorf("member %d (%s): the login: %w", i+1, m.Character, err)
 		}
+		checked[m.Account] = n
 		if n > 1 {
 			return fmt.Errorf("member %d (%s): the account has %d game accounts and none is named: name game_account in the fleet file (the world joins the first listed)",
 				i+1, m.Character, n)

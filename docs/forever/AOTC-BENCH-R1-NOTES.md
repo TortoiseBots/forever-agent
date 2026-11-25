@@ -68,8 +68,12 @@ Known limits (the tables carry no item stats or armour type, only wearer choices
   plate piece shares a family with the feral's own leather. An outfit in the wrong armour class but
   the right stat family passes.
 - an enhancement shaman in hunter-only agility mail FAILs in Wrist, Hands, Waist and Feet, where
-  the shaman's own slot data names only a caster family at the floor; the agility mail its own
-  players wear is FINE by the own-data rule.
+  the shaman's own slot data names a caster family above the floor; the same mail is FINE in the
+  other four armour slots (Shoulders, Chest, Legs and the ones without such an item; measured on
+  the shipped tables, 2026-11-25), and the agility mail its own players wear is FINE by the
+  own-data rule. The largest-family clause adds no family on the shipped data at all: every
+  acceptable set and every item reading is the 20% floor's alone (the outfit and data-sweep tests
+  say so).
 
 Both need the item read-out of #20 (item stats), not a threshold change.
 

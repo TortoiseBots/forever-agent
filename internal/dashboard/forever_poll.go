@@ -92,7 +92,7 @@ func (p *Poller) pollForeverOne(ctx context.Context, a Agent, cl *serveclient.Cl
 	}, &cmdOK)
 	call(func() error {
 		var err error
-		units, err = cl.Units(ctx, serveclient.UnitsParams{Within: 100})
+		units, err = cl.Units(ctx, serveclient.UnitsParams{Within: 100, Reaction: true})
 		return err
 	}, &unitsOK)
 	call(func() error { var err error; page, err = cl.EventLog(ctx, since, foreverEventCap, 0); return err }, &pageOK)

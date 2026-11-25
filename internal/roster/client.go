@@ -447,11 +447,13 @@ func (c *Client) Roster(ctx context.Context) (*Roster, error) {
 
 // statusHeartbeat reads the heartbeat off GET /api/v1/status. It is best effort: the bots roster is the read that
 // matters, so a dashboard without the route (or a bad answer there) is a roster without a heartbeat. Its read gets
-// heartbeatTimeout, not the client's request timeout, so a hanging status route cannot hold the roster.
+// heartbeatTimeout, not the client's request timeout, so a hanging status route cannot hold the roster, and it never
+// renews the session: a status route that answers a redirect (or a 401) would otherwise cost a full login on every
+// sample of a watch.
 func (c *Client) statusHeartbeat(ctx context.Context) *Heartbeat {
 	ctx, cancel := context.WithTimeout(ctx, heartbeatTimeout)
 	defer cancel()
-	raw, err := c.dash.GetJSON(ctx, statusPath, nil)
+	raw, err := c.dash.GetJSONOnce(ctx, statusPath, nil)
 	if err != nil {
 		return nil
 	}

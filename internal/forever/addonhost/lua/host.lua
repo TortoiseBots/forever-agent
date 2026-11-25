@@ -27,9 +27,11 @@
 --
 -- Ops:
 --   hello   {}                        the host has read its scripts and is ready
---   load    {world, in_world, addon, reserved}
+--   load    {world, in_world, addon, reserved, own}
 --                                     run the addon's files (name, title, version, files:[{name,source}]); reserved
---                                     lists the session's prefixes, which the add-on may not use; fire
+--                                     lists the session's prefixes, which the add-on may not use; own lists the
+--                                     prefixes the caller registered up front (they count against the add-on's
+--                                     share); fire
 --                                     ADDON_LOADED, then PLAYER_LOGIN and PLAYER_ENTERING_WORLD when the
 --                                     character is in world
 --   world   {world}                   the units the add-on may ask about (player, target, party, raid); fires
@@ -320,8 +322,10 @@ function ops.load(p)
     if addon.title ~= nil then title = boundedText(addon.title, MAX_IDENTITY) end
     version = boundedText(addon.version or "", MAX_IDENTITY)
     setWorld(p.world)
-    -- The prefixes this session held before the add-on started are the session's, not the add-on's.
+    -- The prefixes this session held before the add-on started are the session's, not the add-on's; the ones the
+    -- caller registered up front are the add-on's and count against its share.
     addonhost_set_reserved(p.reserved)
+    addonhost_set_own(p.own)
     for _, file in ipairs_(addon.files or {}) do
         local name = boundedText(file.name)
         local chunk, err = loadChunk(tostring_(file.source), name)

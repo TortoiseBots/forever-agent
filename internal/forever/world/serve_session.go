@@ -343,6 +343,11 @@ func (s *session) serveWalkTo(ctx context.Context, x, y, z float32) (ServeWalkTo
 	if s.mover == nil {
 		return ServeWalkTo{}, errors.New("world: no mover (the character's create block never arrived)")
 	}
+	// A walk asked right after a teleport that left the character in the air waits for the landing first: teleport
+	// answers at the fall's start (so status can see it), and a real client cannot walk in the air.
+	if err := s.waitFallLanded(ctx); err != nil {
+		return ServeWalkTo{}, err
+	}
 	disarm := s.armWalkTriggers([][3]float32{{x, y, z}})
 	defer disarm()
 	between := s.betweenMaps()
@@ -402,6 +407,11 @@ func (s *session) serveWalkPath(ctx context.Context, x, y, z float32) (ServePath
 	switch path.Status {
 	case string(navmesh.RoutePartial), string(navmesh.RouteNone):
 		return ServePath{}, fmt.Errorf("walk_path: no full route to %.1f %.1f %.1f (%s)", x, y, z, path.Status)
+	}
+	// A path walked right after a teleport that left the character in the air waits for the landing first (teleport
+	// answers at the fall's start), as an ordinary walk does.
+	if err := s.waitFallLanded(ctx); err != nil {
+		return ServePath{}, err
 	}
 	disarm := s.armWalkTriggers(path.Points)
 	defer disarm()

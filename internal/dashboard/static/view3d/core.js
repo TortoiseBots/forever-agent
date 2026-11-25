@@ -209,6 +209,14 @@
       note: s.note || "", low: isFinite(lo) ? lo : 0, high: isFinite(hi) ? hi : 0 };
   }
 
+  // recordLabel is one entry of the record picker: the name, the map when the record names one (map 0 is a real
+  // map: only an absent map is left out) and the start.
+  function recordLabel(r) {
+    const map = numberOrNull(r && r.map);
+    const start = r && r.start ? String(r.start) : "";
+    return (r && r.name ? String(r.name) : "") + (map != null ? " · map " + map : "") + (start ? " · " + start : "");
+  }
+
   // The nine commands of the page's status line, so the page and its check agree on the words.
   function statusText(mode, state, reason, map) {
     if (mode === "replay") return "Replay of a recorded run" + (map != null ? " (map " + map + ")" : "");
@@ -222,6 +230,6 @@
 
   const api = { TILE_YARDS, TILE_GRID, MAX_TILES, SPEEDS, KINDS, worldPos, tileOf, tileExtent, selectTiles, sceneURL, liveURL,
     recordsURL, replayURL, markerModel, facingYaw, answerMap, fraction, interpolate, shortAngle, newTimeline, setRate, seek, playPause, advance,
-    cleanText, setText, normalizeAnswer, normalizeScene, statusText, pollDue };
+    cleanText, setText, normalizeAnswer, normalizeScene, statusText, recordLabel, pollDue };
   if (typeof module !== "undefined" && module.exports) module.exports = api; else root.View3DCore = api;
 })(typeof self !== "undefined" ? self : this);

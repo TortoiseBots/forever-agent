@@ -389,20 +389,21 @@ func (w dungeonWorld) Units() []driver.Unit {
 		ux, uy, uz := o.Position(now)
 		owner, _ := unitOwner(o.Info)
 		u := driver.Unit{
-			GUID:     o.GUID,
-			Entry:    uint32(o.Info.Entry),
-			Pos:      driver.Vec3{ux, uy, uz},
-			HP:       int(o.Info.Health),
-			MaxHP:    int(o.Info.MaxHealth),
-			Target:   o.Info.Target,
-			Combat:   o.InCombat,
-			Dead:     w.s.world.DeadAt(o.GUID),
-			Ghost:    w.s.world.GhostAt(o.GUID),
-			Friendly: friendlyUnit(o),
-			Owner:    owner,
-			Faction:  o.Info.FactionTemplate,
-			Flags:    o.Info.Flags,
-			Critter:  o.Info.HasUnit && o.Info.CreatureType == creatureTypeCritter,
+			GUID:      o.GUID,
+			Entry:     uint32(o.Info.Entry),
+			Pos:       driver.Vec3{ux, uy, uz},
+			HP:        int(o.Info.Health),
+			MaxHP:     int(o.Info.MaxHealth),
+			Target:    o.Info.Target,
+			Combat:    o.InCombat,
+			Dead:      w.s.world.DeadAt(o.GUID),
+			Ghost:     w.s.world.GhostAt(o.GUID),
+			Friendly:  friendlyUnit(o),
+			Owner:     owner,
+			CharmedBy: o.Info.CharmedBy,
+			Faction:   o.Info.FactionTemplate,
+			Flags:     o.Info.Flags,
+			Critter:   o.Info.HasUnit && o.Info.CreatureType == creatureTypeCritter,
 		}
 		if cs, ok := w.s.world.Combat(o.GUID); ok && cs.Cast != nil {
 			u.Cast = uint32(cs.Cast.SpellID)

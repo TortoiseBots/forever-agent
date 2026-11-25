@@ -195,6 +195,11 @@ func (s *session) armedVolume(id int32) (srvTrigger, bool) {
 	return srvTrigger{}, false
 }
 
+// clearTriggerSends drops every area-trigger send record: a map change ends the crossing the hold is about (a
+// character that zones in and straight back out within triggerSendHold stands at the portal again, and that is a new
+// crossing).
+func (s *session) clearTriggerSends() { s.trigSends = nil }
+
 // triggerSendHeld reports whether id's trigger already went out from the volume the character still stands in, on
 // the same map, less than triggerSendHold ago: a second send is the same crossing heard twice. A record that no
 // longer holds (the character left the volume, the map changed, the hold passed) is dropped here.
