@@ -359,7 +359,7 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 	if err != nil {
 		return serveAddonHostState{}, err
 	}
-	res, outs, err := h.Load(prep.world, true, reserved)
+	res, outs, err := h.LoadWith(prep.world, true, reserved, p.Prefixes)
 	if err != nil {
 		h.Close()
 		return serveAddonHostState{}, fmt.Errorf("addon_start: loading the add-on: %w", err)
@@ -410,7 +410,11 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 		return nil, nil
 	})
 	if err != nil {
+		// The load's own sends may already have registered prefixes on the session before a later check refused
+		// the start (its share, a bad one): take them off before returning, so a failed start leaves the session's
+		// list as it was.
 		a.stop()
+		_, _ = st.call(context.WithoutCancel(ctx), func(s *session) (any, error) { return nil, a.unregister(s) })
 		return serveAddonHostState{}, fmt.Errorf("addon_start: registering the add-on's prefixes: %w", err)
 	}
 	return st.addonStateNow(ctx)
@@ -985,10 +989,20 @@ func (a *serveAddonHost) registerAddonPrefixes(s *session, wanted []string) erro
 	if a.regSession == s && slices.Equal(have, a.regList) && slices.Equal(wanted, a.regWanted) {
 		return nil
 	}
-	set := make(map[string]struct{}, len(have)+len(wanted))
+	set := make(map[string]struct{}, len(have)+len(wanted)+len(a.reserved))
 	next := append([]string(nil), have...)
 	for _, prefix := range have {
 		set[prefix] = struct{}{}
+	}
+	// The session's own prefixes are always part of the list this host writes: a session whose list became unknown
+	// (a failed registration packet) reports none, and the re-register would otherwise drop the reserved protocol
+	// prefixes the session holds.
+	for _, prefix := range a.reserved {
+		if _, ok := set[prefix]; ok {
+			continue
+		}
+		set[prefix] = struct{}{}
+		next = append(next, prefix)
 	}
 	for _, prefix := range wanted {
 		if _, ok := set[prefix]; ok {

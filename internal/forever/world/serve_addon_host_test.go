@@ -931,8 +931,12 @@ func TestServeAddonHostBoundsAddonPrefixes(t *testing.T) {
 	if accepted != limit || len(a.registered) != limit {
 		t.Fatalf("registered %d prefixes (%d accepted), want %d", len(a.registered), accepted, limit)
 	}
-	if held := s.addonRegisteredPrefixes(); len(held) != limit {
-		t.Fatalf("the session holds %d prefixes, want %d", len(held), limit)
+	// The session's list is the add-on's share plus the session's own reserved prefixes, which the host always writes.
+	if held := s.addonRegisteredPrefixes(); len(held) != limit+len(a.reserved) {
+		t.Fatalf("the session holds %d prefixes, want %d (the share plus the %d reserved)", len(held), limit+len(a.reserved), len(a.reserved))
+	}
+	if held := s.addonRegisteredPrefixes(); !containsString(held, pbc.Prefix) || !containsString(held, tbmproto.Prefix) {
+		t.Fatalf("the session's list %v lost a reserved prefix", held)
 	}
 	if !a.throttled {
 		t.Fatal("the add-on kept asking past its share and is not marked throttled")
@@ -1127,4 +1131,69 @@ func TestServeAddonHostBoundsSentRows(t *testing.T) {
 			t.Fatalf("a row keeps %d bytes of text without the cut marker", len(row.Text))
 		}
 	}
+}
+
+// A session whose registered list became unknown mid-run (a registration packet failed) is re-registered with the
+// session's own prefixes beside the add-on's: the reserved protocol prefixes are not dropped by the rewrite.
+//
+// Mutation this test catches: merging only the list the session reports (nil while unknown), which writes the
+// add-on's prefixes alone over the session's.
+func TestServeAddonHostReregisterKeepsTheReservedPrefixes(t *testing.T) {
+	s, tr := addonTestSession()
+	if err := s.RegisterAddonPrefixes("KEEP:"); err != nil {
+		t.Fatalf("first registration: %v", err)
+	}
+	tr.fail = map[int]error{3: errAddonSend} // the second pair's register: the list is unknown from here
+	if err := s.RegisterAddonPrefixes("LOST:"); err == nil {
+		t.Fatal("the registration reported success")
+	}
+	a := &serveAddonHost{reserved: []string{pbc.Prefix, tbmproto.Prefix}, registered: []string{"MINE:"}}
+	if err := a.ensureRegistered(s); err != nil {
+		t.Fatalf("re-registering with an unknown list: %v", err)
+	}
+	got := s.addonRegisteredPrefixes()
+	want := []string{pbc.Prefix, tbmproto.Prefix, "MINE:"}
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("the session's list after the re-register is %v, want %v", got, want)
+	}
+}
+
+// A thousand distinct prefixes an add-on tries to hold end to end (the real sidecar, the session's own registration
+// packets) leave the add-on's share and the session's list at the cap, marked throttled, and status keeps answering
+// at once: the unit test's 500 is the bound itself, this is the whole path a real add-on's flood takes.
+func TestServeAddonHostPrefixFloodEndToEnd(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	hook := &addonHostWire{t: t}
+	a := startAddonHostServe(t, f, hook)
+	dir := addonFileDir(t, "FloodAddon", `
+local fr = CreateFrame("Frame", "FloodFrame")
+fr:RegisterEvent("ADDON_LOADED")
+fr:RegisterEvent("PLAYER_LOGIN")
+fr:SetScript("OnEvent", function()
+    if event == "ADDON_LOADED" then
+        for i = 1, 1000 do RegisterAddonMessagePrefix(string.format("Q%04d", i)) end
+    elseif event == "PLAYER_LOGIN" then
+        SendAddonMessage("Q0001", "hi", "PARTY")
+    end
+end)
+`)
+	var st serveAddonHostState
+	json.Unmarshal(a.mustCall(t, "addon_start", map[string]any{"dir": dir, "clock": "manual"}), &st)
+	if len(st.Prefixes) != addonHostPrefixShare {
+		t.Fatalf("the flood left %d prefixes, want the share %d", len(st.Prefixes), addonHostPrefixShare)
+	}
+	waitRegistered(t, hook, "Q0001", true)
+	began := time.Now()
+	if _, rerr, err := a.tryCall("status", nil); err != nil || rerr != nil {
+		t.Fatalf("status after the flood: %v %v", err, rerr)
+	}
+	if elapsed := time.Since(began); elapsed > time.Second {
+		t.Fatalf("status took %s after the flood", elapsed)
+	}
+	a.stop(t)
+	f.wait(t)
 }

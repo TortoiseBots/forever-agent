@@ -1268,3 +1268,77 @@ SlashCmdList["BAD"] = function() error(setmetatable({}, mt)) end
 		}
 	}
 }
+
+// A prefix the add-on only sends under is its own, and counts against its share: past the cap the send answers a Lua
+// error the add-on can see, and the prefix is not added. The share is the mock's own account of the daemon's cap, so
+// an add-on that fills it with sends cannot then register one more, and the daemon refuses none it was told was fine.
+//
+// Mutations these tests catch: a SendAddonMessage that never counts its prefix (the daemon's row carries the refusal,
+// the add-on sees a send that "worked"), and a mock that lets one more register through than the daemon takes.
+func TestHostCountsThePrefixesSentUnder(t *testing.T) {
+	// The load registers the whole share (32 with nothing reserved), so the first send under a new prefix is over it.
+	src := `
+for i = 1, 40 do RegisterAddonMessagePrefix(string.format("R%02d", i)) end
+SLASH_OVER1 = "/over"
+SlashCmdList["OVER"] = function()
+    local ok, err = pcall(SendAddonMessage, "S01", "hi", "PARTY")
+    print("send " .. tostring(ok) .. " " .. tostring(err))
+    print("register " .. tostring(RegisterAddonMessagePrefix("S02")))
+end
+`
+	h := startAddon(t, "Share", src)
+	res, _, err := h.Load(World{}, true, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Prefixes) != AddonPrefixShare {
+		t.Fatalf("the load registered %d prefixes, want the share %d: %v", len(res.Prefixes), AddonPrefixShare, res.Prefixes)
+	}
+	if _, err := h.Command("/over"); err == nil {
+		t.Fatal("the over-share send answered without an error")
+	}
+	st, _, err := h.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, c := range st.Chat {
+		lines = append(lines, c.Text)
+	}
+	joined := strings.Join(lines, "\n")
+	if !strings.Contains(joined, "send false") || !strings.Contains(joined, "already holds") {
+		t.Fatalf("chat %q does not carry the send's own refusal", joined)
+	}
+	if !strings.Contains(joined, "register false") {
+		t.Fatalf("chat %q does not carry the register's refusal", joined)
+	}
+	if len(st.Prefixes) != AddonPrefixShare {
+		t.Fatalf("the add-on's prefixes %v grew past the share", st.Prefixes)
+	}
+	if !st.Throttled {
+		t.Fatal("a send over the prefix share is not marked throttled")
+	}
+}
+
+// The prefixes the caller registered up front are the add-on's own: they count against its share in the mock, so the
+// registrations it makes past them are refused there, the way the daemon refuses them.
+//
+// Mutation this test catches: a load that seeds only the reserved list (the add-on's own prefixes are not counted,
+// so the mock answers true to a registration the daemon then refuses).
+func TestHostCountsThePrefixesRegisteredUpFront(t *testing.T) {
+	src := `
+for i = 1, 40 do RegisterAddonMessagePrefix(string.format("N%02d", i)) end
+`
+	h := startAddon(t, "Own", src)
+	res, _, err := h.LoadWith(World{}, true, nil, []string{"MINE"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Prefixes) != AddonPrefixShare {
+		t.Fatalf("the load answered %d prefixes, want the share %d (MINE and %d registrations): %v",
+			len(res.Prefixes), AddonPrefixShare, AddonPrefixShare-1, res.Prefixes)
+	}
+	if !slices.Contains(res.Prefixes, "MINE") {
+		t.Fatalf("the up-front prefix is not in the list: %v", res.Prefixes)
+	}
+}

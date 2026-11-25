@@ -63,6 +63,11 @@ const DefaultLua = "lua5.1"
 // session.
 var CallTimeout = 3 * time.Second
 
+// AddonPrefixShare is the mock's cap on the add-on's own prefixes (the server's 64 less the session's reserved
+// ones, never more than 32): the same share the daemon gives it (world's addonHostPrefixShare). A registration or a
+// send past it is refused in the sidecar, so the add-on sees the refusal the daemon would give.
+const AddonPrefixShare = 32
+
 // MemoryLimit is the address space one sidecar may use, in bytes. It is enforced by the kernel before lua5.1
 // starts (RLIMIT_AS on Linux); 0 leaves the sidecar unlimited.
 var MemoryLimit int64 = 256 << 20
@@ -551,9 +556,16 @@ func under(root, resolved string) bool {
 // register them nor send under them (the sidecar refuses both with a Lua error), because they belong to the
 // session (the bot module's protocol prefixes, for one) and not to the loaded code.
 func (h *Host) Load(world World, inWorld bool, reserved []string) (LoadResult, []Out, error) {
+	return h.LoadWith(world, inWorld, reserved, nil)
+}
+
+// LoadWith is Load with the prefixes the caller registered for the add-on up front (addon_start's own list): the
+// sidecar counts them against the add-on's share exactly as the daemon does, so a registration past the share is
+// refused there too instead of answering true to a prefix the daemon then refuses.
+func (h *Host) LoadWith(world World, inWorld bool, reserved, own []string) (LoadResult, []Out, error) {
 	var res LoadResult
 	raw, outs, err := h.Call("load", map[string]any{"world": world, "in_world": inWorld, "addon": h.addon,
-		"reserved": reserved})
+		"reserved": reserved, "own": own})
 	if err != nil {
 		return res, outs, err
 	}

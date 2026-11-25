@@ -57,6 +57,20 @@ function addonhost_set_reserved(list)
     end
 end
 
+-- addonhost_set_own names the prefixes the caller registered up front (addon_start's own list): they are the
+-- add-on's, so they count against the same share (a register past it answers false here, exactly as the daemon
+-- refuses it) and a send under one of them needs no new entry. host.lua calls it once, before the load.
+function addonhost_set_own(list)
+    for _, p in ipairs(list or {}) do
+        p = tostring(p)
+        if not reserved[p] then
+            local known = false
+            for _, q in ipairs(prefixes) do if q == p then known = true break end end
+            if not known then prefixes[#prefixes + 1] = p end
+        end
+    end
+end
+
 -- addonhost_set_loading says whether the load op is running. During the load the add-on's registrations are part
 -- of the load's own answer (the daemon registers them with the session as it installs the host); one after the
 -- load is a request of its own, an "register" out the daemon performs as soon as the call answers.
@@ -215,6 +229,22 @@ local chatSink = function() end
 function addonhost_on_chat(fn) chatSink = fn end
 
 -- ── what the add-on asks the client to do ───────────────────────────────────
+-- noteSendPrefix makes a prefix the add-on's own when it sends under it: the client registers a sent prefix with the
+-- send, so it counts against the add-on's share exactly as one it registers does, and a send past the share is
+-- refused here with a Lua error (the daemon refuses the row too, but only this reaches the add-on).
+local function noteSendPrefix(prefix)
+    for _, p in ipairs(prefixes) do
+        if p == prefix then return end
+    end
+    local cap = prefixCap()
+    if #prefixes >= cap then
+        throttled = true
+        error("the client refused the send: the add-on already holds " .. cap .. " add-on message prefixes of its own (the server's "
+            .. MAX_PREFIXES .. " less the " .. reservedCount .. " this session holds)", 3)
+    end
+    prefixes[#prefixes + 1] = prefix
+end
+
 function SendAddonMessage(prefix, text, channel, target)
     prefix, text, channel = tostring(prefix or ""), tostring(text or ""), tostring(channel or "")
     if reserved[prefix] then
@@ -228,6 +258,7 @@ function SendAddonMessage(prefix, text, channel, target)
         to = tostring(target)
         if #to > MAX_TARGET then oversize("add-on message target", MAX_TARGET) end
     end
+    noteSendPrefix(prefix)
     pushOut({ out = "addon", prefix = prefix, text = text, channel = channel, to = to })
 end
 
