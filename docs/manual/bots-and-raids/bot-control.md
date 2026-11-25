@@ -267,6 +267,11 @@ makes its verbs answer `not-available`; no verb is emulated with another.
   with `.bot ` or `.tb`; a `.bot` line is an owner command and needs no GM
   confirmation, every other line confirms the GM guard on first use.
 
+A `bot`, `gm` or `commander` call that arrives while a `dungeon_run` start is in its preflight answers `-32003`
+`busy: a run preflight holds the command channel, retry`, having sent nothing; retry it after the preflight (the
+refusal names the window, and `status` keeps answering). See
+[RPC basics](../daemon/rpc-basics.md#one-call-at-a-time).
+
 The daemon methods are described in [RPC basics](../daemon/rpc-basics.md).
 
 # Examples
