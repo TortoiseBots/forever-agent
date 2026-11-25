@@ -670,6 +670,7 @@ func battlefieldListPayload(master wire.GUID) []byte {
 // TestBankInteractionReplacedRefusesBankCommands: the core keeps one interaction per player and every StartInteraction
 // replaces it (SendListInventory, ItemHandler.cpp:626; SendTrainerList, NPCHandler.cpp:125; SendGossipMenu,
 // GossipDef.cpp:220-222; SendTaxiMenu, TaxiHandler.cpp:100; SendQuestGiverQuestDetails, GossipDef.cpp:484;
+// SendQuestGiverQuestList, :420; SendQuestGiverRequestItems, :671; SendQuestGiverOfferReward, :588;
 // SendAuctionHello, AuctionHouseHandler.cpp:999; SendBattlegroundList, BattlegroundMgr.cpp:510; the mailbox's list).
 // CanUseBank then reads the interaction's source unit (ItemHandler.cpp:1229-1248), so a bank opened for the banker
 // stops being answered and every mutating method must refuse before sending. The same unit with another window (a
@@ -696,6 +697,15 @@ func TestBankInteractionReplacedRefusesBankCommands(t *testing.T) {
 		}},
 		{"quest details", func(b *bankWorld) {
 			b.handlePacket(wire.SMSGQuestGiverQuestDetails, questDetailsFrom(other, 5001, 4, 1, "Elsewhere"))
+		}},
+		{"quest request items", func(b *bankWorld) {
+			b.handlePacket(wire.SMSGQuestGiverRequestItems, questRequestFrom(other, 5001, 1, 1))
+		}},
+		{"quest offer reward", func(b *bankWorld) {
+			b.handlePacket(wire.SMSGQuestGiverOfferReward, questOfferFrom(other, 5001))
+		}},
+		{"quest list", func(b *bankWorld) {
+			b.handlePacket(wire.SMSGQuestGiverQuestList, questListFor(other, "Greetings."))
 		}},
 		{"auction hello", func(b *bankWorld) { b.handlePacket(wire.SMSGAuctionHelloResponse, auctionHelloPayload(other)) }},
 		{"battlefield list", func(b *bankWorld) { b.handlePacket(wire.SMSGBattlefieldList, battlefieldListPayload(other)) }},

@@ -348,7 +348,7 @@ func TestSessionExclusiveHoldsTheChannel(t *testing.T) {
 	release := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- q.Exclusive(func() error {
+		done <- q.Exclusive(context.Background(), func() error {
 			close(inside)
 			<-release
 			return nil
@@ -372,6 +372,49 @@ func TestSessionExclusiveHoldsTheChannel(t *testing.T) {
 	<-ran
 	if len(tr.entered) != 1 {
 		t.Fatalf("the run did not start after the release")
+	}
+}
+
+// TestSessionTryRunRefusesWhileExclusive: a caller whose own goroutine an exclusive holder's queued calls need must
+// not wait for the channel. TryRun takes it only when free and answers ErrBusy at once otherwise, having sent
+// nothing; once the holder is done it runs normally. Mutation: a blocking take makes the call wait for the whole
+// exclusive window (the daemon deadlock this exists to prevent).
+func TestSessionTryRunRefusesWhileExclusive(t *testing.T) {
+	tr := &enteredTransport{entered: make(chan struct{}, 1)}
+	q := NewSession(tr)
+	inside := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		done <- q.Exclusive(context.Background(), func() error {
+			close(inside)
+			<-release
+			return nil
+		})
+	}()
+	<-inside
+	opts := Options{Deadline: 100 * time.Millisecond, Quiet: 10 * time.Millisecond}
+	startedAt := time.Now()
+	if _, err := q.TryRun(context.Background(), ".server info", opts); !errors.Is(err, ErrBusy) {
+		t.Fatalf("TryRun while the channel was exclusive: %v, want ErrBusy", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf("TryRun waited %s on an exclusive channel", elapsed)
+	}
+	if len(tr.entered) != 0 {
+		t.Fatal("TryRun sent a run while the channel was exclusive")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.TryRun(context.Background(), ".server info", opts); errors.Is(err, ErrBusy) {
+		t.Fatalf("TryRun on a free channel: %v", err)
+	}
+	select {
+	case <-tr.entered:
+	default:
+		t.Fatal("the run did not start after the release")
 	}
 }
 

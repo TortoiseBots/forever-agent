@@ -432,6 +432,83 @@ func TestServeDungeonRunPreflightConsoleSilentReplyRefuses(t *testing.T) {
 	f.wait(t)
 }
 
+// TestServeDungeonRunPreflightRefusesAConcurrentRunAtOnce: the `bot`, `gm` and `commander` methods execute on the
+// session goroutine, and the preflight's own queued calls need that goroutine while its tokenless read holds the
+// command channel. A run arriving in that window must not wait for the channel: it answers the busy error at once,
+// so the preflight still finishes its read and status keeps answering. Mutation: a blocking take in serveRunLine
+// deadlocks this test — the bot call never answers, and the read's queued slices never run either.
+func TestServeDungeonRunPreflightRefusesAConcurrentRunAtOnce(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	started := &atomic.Int32{}
+	f.serveCommander = serveRunScenes(started)
+	asked := make(chan struct{})
+	var once sync.Once
+	pinfoAnswer(f, func(string) (string, bool) {
+		once.Do(func() { close(asked) })
+		return "", true // the console stays silent: the read runs its whole bound with the channel held
+	})
+	defer f.close()
+	scene := &servePreflightScene{probe: servePreflightProbe{pid: 42, alive: true, listening: true}}
+	dir := t.TempDir()
+	a, steps := newDungeonPreflightDaemon(t, f, scene, writePlans(t), dir)
+	writeServeSlot(t, dir, a.port(t), "forever", "")
+
+	type call struct {
+		rerr *rpcError
+		err  error
+	}
+	dungeon := make(chan call, 1)
+	go func() {
+		_, rerr, err := a.tryCall("dungeon_run", map[string]any{"plan": "ragefire_chasm", "lead_bot": "Tanka"})
+		dungeon <- call{rerr: rerr, err: err}
+	}()
+	select {
+	case <-asked:
+	case <-time.After(20 * time.Second):
+		t.Fatalf("the console was never asked\n%s", steps.joined())
+	}
+
+	bot := make(chan call, 1)
+	go func() {
+		_, rerr, err := a.tryCall("bot", map[string]any{"line": ".bot state"})
+		bot <- call{rerr: rerr, err: err}
+	}()
+	select {
+	case c := <-bot:
+		if c.err != nil {
+			t.Fatalf("bot: %v", c.err)
+		}
+		if c.rerr == nil || c.rerr.Code != -32003 ||
+			!strings.Contains(c.rerr.Message, "busy: a run preflight holds the command channel, retry") {
+			t.Fatalf("bot during the preflight: %+v, want the busy refusal", c.rerr)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("a bot call waited on the preflight's command channel\n%s", steps.joined())
+	}
+
+	startedAt := time.Now()
+	var st ServeStatus
+	json.Unmarshal(a.mustCall(t, "status", nil), &st)
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf("status took %s while the preflight held the channel", elapsed)
+	}
+
+	c := <-dungeon
+	if c.err != nil {
+		t.Fatalf("dungeon_run: %v", c.err)
+	}
+	if c.rerr == nil || c.rerr.Code != -32003 || !strings.Contains(c.rerr.Message, "no answer within "+serveConsoleWait.String()) {
+		t.Fatalf("dungeon_run: %+v, want the console's no-answer refusal", c.rerr)
+	}
+	mustNoRunStart(t, f)
+	if started.Load() != 0 {
+		t.Fatalf("a run was started with no console answer\n%s", steps.joined())
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
 // TestServeDungeonRunPreflightRefusals: each failed check refuses the call and sends no start. One daemon serves every
 // case: the scene and the slot dir are changed between calls, exactly as a changed server or lease would be.
 func TestServeDungeonRunPreflightRefusals(t *testing.T) {

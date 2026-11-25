@@ -227,10 +227,22 @@ func (s *session) serveCommandOptions(ctx context.Context, line string, opts com
 	return s.serveRunLine(ctx, line, opts)
 }
 
+// errPreflightBusy is what a session-side run answers while the dungeon_run preflight owns the command channel: these
+// methods execute on the session goroutine, and the preflight's own queued calls (its send, its 50 ms pump slices) need
+// that goroutine while its tokenless read holds the channel. Waiting here would stop every method (status included)
+// and the packet loop for the read's whole window — forever when the read hangs — so the run is refused at once and
+// nothing is sent.
+var errPreflightBusy = errors.New("busy: a run preflight holds the command channel, retry")
+
 // serveRunLine puts one line on the serialised command channel, whose link enforces the guard for every line but
-// a `.bot` owner command.
+// a `.bot` owner command. The channel is taken without waiting: only the preflight holds it off this goroutine, and a
+// wait would deadlock the preflight's next slice against this call (errPreflightBusy).
 func (s *session) serveRunLine(ctx context.Context, line string, opts command.Options) (*command.Reply, error) {
-	return s.serveRT.st.q.Run(ctx, line, s.commandOptions(opts))
+	rep, err := s.serveRT.st.q.TryRun(ctx, line, s.commandOptions(opts))
+	if errors.Is(err, command.ErrBusy) {
+		return nil, errPreflightBusy
+	}
+	return rep, err
 }
 
 // servePath plans a walking route on the current map.

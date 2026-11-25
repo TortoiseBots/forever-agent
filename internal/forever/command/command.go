@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
@@ -240,32 +239,80 @@ func Run(ctx context.Context, conn Transport, line string, opts Options) (*Reply
 // last line of any earlier run that did not end with its own marker; only then is an untagged refusal in the new
 // run accepted as its own (Options.allowRefusal).
 type Session struct {
-	mu        sync.Mutex
+	// hold is the channel's one-run token: Run, TryRun and Exclusive take it for as long as their lines may be on
+	// the wire. It is a channel, not a sync.Mutex, so every wait can end on its context (a queued run whose caller
+	// went away stops waiting) and TryRun can refuse instead of waiting at all.
+	hold      chan struct{}
 	conn      Transport
 	tailUntil time.Time // no untagged line of an earlier run can still arrive before this
 	// sleep waits for the tail window; nil means a real timer. Tests drive it with their clock.
 	sleep func(time.Duration)
 }
 
+// ErrBusy is TryRun's answer when the channel is held by another run: it returns it at once and sends nothing.
+var ErrBusy = errors.New("command: the channel is held by another run")
+
 // NewSession wraps conn so Run calls are serialised.
-func NewSession(conn Transport) *Session { return &Session{conn: conn} }
+func NewSession(conn Transport) *Session {
+	return &Session{hold: make(chan struct{}, 1), conn: conn}
+}
+
+// take waits for the channel until ctx ends.
+func (s *Session) take(ctx context.Context) error {
+	select {
+	case s.hold <- struct{}{}:
+		if err := ctx.Err(); err != nil {
+			s.release()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Session) release() { <-s.hold }
 
 // Exclusive runs fn with the session's one-run lock held, so no Run begins while fn runs. It is for a caller with its
 // own transport that still has to own the channel for one reply: the daemon's preflight reads a tokenless console
 // command beside the queue, and a tokenless reply carries no marker to tell its lines from another command's (the
 // reason this Session runs one command at a time), so the exclusion is what keeps another command's answer out of
-// its quiet window. fn must not call Run: the lock is not reentrant. A wait for the lock is a command in flight, and
-// every run is bounded by its own deadline.
-func (s *Session) Exclusive(fn func() error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// its quiet window. fn must not call Run: the lock is not reentrant. The wait for the lock ends with ctx, whose error
+// is returned when it expires first (fn did not run); a caller whose own code runs on a goroutine the holder's calls
+// need must use TryRun instead of waiting.
+func (s *Session) Exclusive(ctx context.Context, fn func() error) error {
+	if err := s.take(ctx); err != nil {
+		return err
+	}
+	defer s.release()
 	return fn()
+}
+
+// TryRun is Run for a caller that must not wait for the channel: it takes the channel only if it is free and answers
+// ErrBusy at once otherwise, having sent nothing. The daemon's own run methods use it: they execute on the session
+// goroutine that the preflight's queued calls need while the preflight holds the channel off the queue, so a wait
+// here would stop every method and the packet loop until that read ended.
+func (s *Session) TryRun(ctx context.Context, line string, opts Options) (*Reply, error) {
+	select {
+	case s.hold <- struct{}{}:
+	default:
+		return nil, ErrBusy
+	}
+	defer s.release()
+	return s.runLocked(ctx, line, opts)
 }
 
 // Run is Run on the session's connection, one at a time.
 func (s *Session) Run(ctx context.Context, line string, opts Options) (*Reply, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	if err := s.take(ctx); err != nil {
+		return nil, err
+	}
+	defer s.release()
+	return s.runLocked(ctx, line, opts)
+}
+
+// runLocked is Run's body with the channel held.
+func (s *Session) runLocked(ctx context.Context, line string, opts Options) (*Reply, error) {
 	if err := opts.normalise(); err != nil {
 		return nil, err
 	}
