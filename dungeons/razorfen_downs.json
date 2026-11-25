@@ -3,7 +3,7 @@
   "name": "razorfen_downs",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-25: 51 units of the Turtle-only entries 62676/62677/62678/62679 have no ForeverCore map-129 spawn, 4 more unit rows (7343, 7353, 7354) miss a core spawn of their entry and 38 of 264 points fail on the Forever map-129 tiles)",
   "map": 129,
   "entrance": {"x": 2593.68, "y": 1111.23, "z": 50.9518},
   "entrance_trigger": 442,
@@ -35,7 +35,8 @@
     "Needs: Tuten'kash (7355) has no spawn row: the Gong (GO_GONG) summons him after two waves of spider adds (instance script DATA_GONG_WAVES 1 and 10, then the boss). The plan does not ring it; the boss is not a leg.",
     "Needs: Belnistrasz idol-room ritual (GO_BELNISTRASZ_BRAZIER, GO_IDOL_*_FIRE) summons Plaguemaw the Rotting; escort quest, optional",
     "Adds not in the spawn data: the Death's Head Necromancer 7337 casts Summon Skeletal Servant (12420) on spawn; the Skeletal Summoner 7342 summons a Shadowcaster (12258) every 15-20 s; Amnennar summons Frost Spectres (12642) at 66 % and 33 %. No plan row can name them.",
-    "Lady Falther'ess (14686, spawn 2351 at 2582.7 695.8 56.9) is game event 81 (Scourge Invasion boss activation), whose start and end are 0000-00-00: she is never spawned (same as Scorn in the Graveyard). Leg 0's last pull stands 19 yd from her spawn; nothing to do."
+    "Lady Falther'ess (14686, spawn 2351 at 2582.7 695.8 56.9) is game event 81 (Scourge Invasion boss activation), whose start and end are 0000-00-00: she is never spawned (same as Scorn in the Graveyard). Leg 0's last pull stands 19 yd from her spawn; nothing to do.",
+    "Forever check (2026-11-25, issue #223 batch 3, ForeverCore world DB, tools/dungeongen/export-forever.sh map 129: 270 normal spawns): plan-export --forever writes 4 legs, 260 steps, 79 pulls, 177 moves, 234 pack units and 4 boss rows and refuses no field. plan-probe --forever on the Forever map-129 tiles misses a core spawn for 55 of 281 unit rows: the Turtle-only 62676 Death's Head Worshipper (19), 62677 Death's Head Servitor (15), 62678 Death's Head Battleguard (16) and 62679 Death Prophet Rakameg (1); the patrol-start rows of 7343 Splinterbone Skeleton (2) and 7353 Freezing Spirit (1, the core keeps that guid 60.0 yd north at 2392.46 993.458); and 7354 Ragglesnout (the core's spawn stands 88.1 yd from the plan's spot). 44 of 259 segments are bad. plan-check --forever fails 38 of 264 points (the Rakameg room, 2145-2302 800-944, has no floor on the Forever tiles) with 354 findings (74 fail: 161 edge, 83 short hop, 58 joiners, 27 patrol, 11 climb_anchor, 6 hop_len, 5 ledge, 2 off-floor, 1 aggro); trash-check reports 199 danger, 22 patrol, 31 clear and 7 own segments of 259."
   ],
   "legs": [
     {
