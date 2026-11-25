@@ -129,9 +129,12 @@ const (
 	PlayLosEyeYd          = 2.0
 	PlayAgentLeadYd       = 2.0
 	PlaySightLeadArriveYd = 0.5
-	PlayTankSightTries    = 8
-	PlayTankSightTime     = 60 * time.Second
-	PlayTankSightSpots    = 24
+	// PlaySightPastStandYd is how far past the plan's stand the sight search may sample for every pull (30 yd, the
+	// fallback approach's own bound): a boss and a stranger have no group, and their own stand is where the agent stands.
+	PlaySightPastStandYd = PlayAgentApproachPastYd
+	PlayTankSightTries   = 8
+	PlayTankSightTime    = 60 * time.Second
+	PlayTankSightSpots   = 24
 )
 
 // pull is the pack in the way: the agent first walks to the plan's stand with the party beside it, then the skull goes
@@ -141,6 +144,8 @@ const (
 // answered with an explicit sight refusal (through the refusal's own bounds) is the pull the leading player's own
 // (agentPull) — a fallback, never taken from nearness alone — and a pull that fails there too stops the run.
 func (p *playRun) pull(ctx context.Context) string {
+	// The sight work is one budget per pull: the pick, the stand walk and the refusals' leads share it.
+	p.sight = nil
 	if !p.stranger.IsZero() {
 		return p.pullStranger(ctx)
 	}
@@ -579,12 +584,14 @@ func (p *playRun) pointSight(at Vec3, u Unit) (in bool, dist float64, known bool
 	return p.ports.ServerSight.PointSees(Vec3{at[0], at[1], at[2] + float32(PlayLosEyeYd)}, u.GUID)
 }
 
-// sightBudget is one pull's whole pre-order sight search in one budget: PlayTankSightSpots queries and
-// PlayTankSightTime from the first look cover the pick and the stand walk together, so a large member list cannot
-// outrun the bounds the stand search is documented with. take claims one query; false means the caller falls back to
-// the navmesh flow (or goes on as it stands) because the budget is spent.
+// sightBudget is one PULL's whole sight work in one budget: PlayTankSightSpots queries and PlayTankSightTime from the
+// first look cover the skull pick, the stand walk and every refusal's lead together, so neither a large member list
+// nor a run of refusals can outrun the bounds the search is documented with. limit is the refusal path's own bound
+// (PlayRefuseTime from the pull's first refusal), set when it starts, and it caps what is left. take claims one
+// query; false means the caller falls back to the navmesh flow (or goes on as it stands) because the budget is spent.
 type sightBudget struct {
 	start time.Time
+	limit time.Time
 	used  int
 }
 
@@ -593,6 +600,9 @@ func (b *sightBudget) take(now time.Time) bool {
 		return false
 	}
 	if !b.start.IsZero() && now.Sub(b.start) >= PlayTankSightTime {
+		return false
+	}
+	if !b.limit.IsZero() && !now.Before(b.limit) {
 		return false
 	}
 	b.used++
@@ -668,7 +678,14 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 		// goes on as it stands (the module is the judge).
 		return false, true
 	}
-	samples := p.tankSightSamples(group, route.Points, u)
+	samples, blocker := p.tankSightSamples(group, route.Points, u)
+	if !blocker.GUID.IsZero() {
+		// Another pack's clearance cut the search: the trace says which unit's ground would have been walked into.
+		p.rec.Event(p.now(), "pull_sight_cut", map[string]any{
+			"group": group, "target": u.GUID.String(),
+			"blocker": map[string]any{"guid": guidText(blocker.GUID), "entry": blocker.Entry, "yd": dist3(blocker.Pos, u.Pos)},
+		})
+	}
 	stand := Vec3{}
 	walked := false
 	for _, at := range samples {
@@ -736,20 +753,33 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget 
 }
 
 // tankSightSamples is the path points the sight search may use: every PlaySrvSightStepYd along the path, cut where it
-// comes within PlaySightTouchYd of the unit (a stand nearer than a body's reach is its own feet), and, for a pack pull,
-// cut where it is further than PlayAgentApproachPastYd past the plan's stand.
-func (p *playRun) tankSightSamples(group int, points []Vec3, u Unit) []Vec3 {
+// comes within PlaySightTouchYd of the unit (a stand nearer than a body's reach is its own feet), cut where it first
+// enters another pack's clearance (packOnPath's own rule, the one the fallback approach keeps; the blocker is returned
+// for the trace), and never further than PlaySightPastStandYd past the stand — every pull's, a boss's and a
+// stranger's too, whose stand is where the agent stands.
+func (p *playRun) tankSightSamples(group int, points []Vec3, u Unit) ([]Vec3, Unit) {
+	cut := math.Inf(1)
+	var blocker Unit
+	if enter, b, blocked := p.packOnPath(group, u.Pos, points, 0); blocked {
+		cut, blocker = math.Max(0, enter-PlayAgentPullMarginYd), b
+	}
 	out := make([]Vec3, 0, len(points))
+	walked, prev := 0.0, points[0]
 	for _, at := range sightSamples(points, PlaySrvSightStepYd) {
+		walked += dist3(prev, at)
+		prev = at
+		if walked >= cut {
+			break
+		}
 		if dist3(at, u.Pos) < PlaySightTouchYd {
 			break
 		}
-		if group >= 0 && dist3(at, p.pullStand) > PlayAgentApproachPastYd {
+		if dist3(at, p.pullStand) > PlaySightPastStandYd {
 			continue
 		}
 		out = append(out, at)
 	}
-	return out
+	return out, blocker
 }
 
 // leadPoint is the next spot the agent steps to in the sight search: the first path sample ahead of the agent's own
@@ -804,7 +834,10 @@ func (p *playRun) tankSightBefore(ctx context.Context, group int, members []Unit
 	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 || len(members) == 0 {
 		return fallback()
 	}
-	budget := &sightBudget{start: p.now()}
+	if p.sight == nil {
+		p.sight = &sightBudget{start: p.now()}
+	}
+	budget := p.sight
 	skull, _, seen, ok := p.tankSightPick(members, budget)
 	if !ok {
 		return fallback()
@@ -970,6 +1003,9 @@ func (p *playRun) pullBoss(ctx context.Context, b *Boss) string {
 	if !p.restWait(ctx) {
 		return ""
 	}
+	// The boss pull's own stand is where the party gathered: the sight search's past-stand bound is every pull's, and a
+	// pack pull's stand is no part of this one.
+	p.pullStand = p.self
 	members := p.bossMembers(b, u)
 	// The plan's entries to kill before the boss are the skull first, in its order; the boss is the skull once they are
 	// down, and the cross goes on the next unit of the order.
@@ -1232,7 +1268,15 @@ func (p *playRun) engageSeen(ctx context.Context, group int, members []Unit, sku
 			return false
 		}
 		skull = u
-		if seen, known := p.tankSightStand(ctx, group, u, &sightBudget{start: p.now()}); known {
+		if p.sight == nil {
+			p.sight = &sightBudget{start: p.now()}
+		}
+		if p.sight.limit.IsZero() {
+			// One budget per pull, and the refusal path's own bound caps what is left of it: a search begun late in
+			// the refusals cannot run its 60 s past PlayRefuseTime from the first refusal.
+			p.sight.limit = first.Add(PlayRefuseTime)
+		}
+		if seen, known := p.tankSightStand(ctx, group, u, p.sight); known {
 			if p.stopReason != "" || p.stall != "" {
 				return false
 			}

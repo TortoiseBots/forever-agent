@@ -9,11 +9,13 @@ package driver
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
 // tankSightPlan is playFightPlan with the pull's stand at (40,5): the pack looks north from there.
@@ -405,5 +407,95 @@ func TestPlayAgentPullPackNearNamesTheBlocker(t *testing.T) {
 	}
 	if !failed {
 		t.Fatal("no agent_pull_failed pack-near in the trace")
+	}
+}
+
+// TestPlayTankSightSamplesKeepAnotherPacksClearance: the stand search's samples are cut where the path first enters
+// another pack's clearance (packOnPath's own rule, the one the fallback approach keeps), so the sight walk never drags
+// a patrol standing beside the path into the pull. The blocker is returned for the trace.
+func TestPlayTankSightSamplesKeepAnotherPacksClearance(t *testing.T) {
+	patrol := Unit{GUID: fightGUID(7), Entry: 11322, Pos: Vec3{55, 30, 0}}
+	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) { f.AddUnit(patrol) })
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports}
+	p.pullStand = Vec3{0, 0, 0}
+	skull := Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{40, 22, 0}}
+	path := []Vec3{{0, 0, 0}, {40, 22, 0}}
+	samples, blocker := p.tankSightSamples(0, path, skull)
+	if len(samples) == 0 {
+		t.Fatal("the search has no sample at all before the patrol's clearance")
+	}
+	if blocker.GUID != patrol.GUID {
+		t.Fatalf("the cut named %v as its blocker; want the patrol %v", blocker.GUID, patrol.GUID)
+	}
+	for _, at := range samples {
+		if d := dist3(at, patrol.Pos); d < PlayAgentApproachPackYd {
+			t.Fatalf("sample %v stands %.1f yd from the patrol; want the search cut before its %.0f-yd clearance", at, d, PlayAgentApproachPackYd)
+		}
+	}
+}
+
+// TestPlayTankSightSamplesBoundEveryPullPastTheStand: the past-stand bound is every pull's, not a pack's alone: a boss
+// and a stranger have no group, and their stand is where the agent stands, so the search never walks more than the
+// fallback approach's PlayAgentApproachPastYd beyond it.
+func TestPlayTankSightSamplesBoundEveryPullPastTheStand(t *testing.T) {
+	rig := newPlayFightRig(t, tankSightPlan(), nil)
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports}
+	p.pullStand = Vec3{0, 0, 0}
+	skull := Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{0, 60, 0}}
+	for _, group := range []int{-1, 0} {
+		samples, _ := p.tankSightSamples(group, []Vec3{{0, 0, 0}, {0, 60, 0}}, skull)
+		if len(samples) == 0 {
+			t.Fatalf("group %d: no sample inside the bound", group)
+		}
+		for _, at := range samples {
+			if d := dist3(at, p.pullStand); d > PlaySightPastStandYd {
+				t.Fatalf("group %d: sample %v stands %.1f yd past the stand; want at most %.0f", group, at, d, PlaySightPastStandYd)
+			}
+		}
+		if last := samples[len(samples)-1]; dist3(last, p.pullStand) < PlaySightPastStandYd-PlaySrvSightStepYd {
+			t.Fatalf("group %d: the samples stop at %v, %.1f yd from the stand; want the bound walked up to", group, last, dist3(last, p.pullStand))
+		}
+	}
+}
+
+// TestPlayTankSightBudgetIsOnePerPull: the pull's sight work is ONE budget (PlayTankSightSpots queries and
+// PlayTankSightTime from the first look) however many times the tank refuses: the searches of the refusals in a row
+// cannot each start a fresh one. The module refuses every order, and the path to the stranger is a long way round the
+// server clears no spot of, so every search wants the whole sample walk; a stranger's pull goes on after each refusal
+// (a pack's and a boss's stop at theirs), so the refusals really repeat.
+func TestPlayTankSightBudgetIsOnePerPull(t *testing.T) {
+	stranger := petGUID(12)
+	spot := Vec3{40, 15, 0}
+	rig := newPlayFightRig(t, playStrangerPlan(), func(f *PlayFake) {
+		f.SpawnBosses()
+		f.AddUnit(Unit{GUID: stranger, Entry: 700, Pos: spot, Owner: wire.GUID{Low: 0x999}})
+		f.TrailYd = PlayTankBesideYd
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		f.SrvSight = func(Vec3, Vec3) bool { return false } // the server clears no spot on the way
+		f.ModuleSight = func(Vec3, Vec3) bool { return false }
+		f.RefuseOrders = 4 * PlayTankSightSpots // the module refuses every order it gets
+		// The way to the stranger is a long dogleg: a search that never clears spends its whole sample walk.
+		f.PathFunc = func(from, to Vec3) navmesh.Route {
+			pts := []Vec3{from, to}
+			if dist3(to, spot) < 3 {
+				pts = []Vec3{from, {from[0] + 25, from[1] + 10, from[2]}, to}
+			}
+			var length float64
+			for i := 1; i < len(pts); i++ {
+				length += dist3(pts[i-1], pts[i])
+			}
+			return navmesh.Route{Kind: navmesh.RouteComplete, Corners: len(pts), Start: from, End: to, Points: pts, Length: float32(length)}
+		}
+	})
+	rig.ports.Sight, rig.ports.ServerSight, rig.ports.Refusals = rig.fake, rig.fake, rig.fake
+	rig.cfg.Out = t.TempDir()
+	_ = Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if n := rig.fake.SightRefusals(strings.ToLower(playBots[0])); n < 3 {
+		dumpPlay(t, rig)
+		t.Fatalf("the module refused %d order(s); want at least 3 so the budget test means something", n)
+	}
+	if n := len(rig.fake.SrvQueries); n > PlayTankSightSpots {
+		dumpPlay(t, rig)
+		t.Fatalf("%d sight queries in one pull; want at most the one budget of %d", n, PlayTankSightSpots)
 	}
 }

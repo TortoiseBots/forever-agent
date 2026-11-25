@@ -378,7 +378,10 @@ type playRun struct {
 	pullStand Vec3
 	// skullPick is the skull the server's own sight put on a member of the pull in hand (the first of the kill order
 	// the tank sees): the marks go on it while it lives, and a pull whose skull died forgets it.
-	skullPick       wire.GUID
+	skullPick wire.GUID
+	// sight is the pull in hand's ONE sight budget: the skull pick, the stand walk and every refusal's lead spend it
+	// together, so a run of refusals cannot start a fresh search each time. nil between pulls.
+	sight           *sightBudget
 	agentPulled     map[int]bool
 	agentPulledUnit map[wire.GUID]bool
 	// approachBase is how far the agent's own approach stood from each hostile at the first plan that stood inside its
