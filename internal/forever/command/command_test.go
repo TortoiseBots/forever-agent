@@ -338,6 +338,123 @@ func (c *concurrentTransport) Pump(ctx context.Context, feed func(chat.Line), do
 	return nil
 }
 
+// TestSessionExclusiveRunHoldsTheChannel: no queued run starts while ExclusiveRun holds the channel — that is what
+// keeps another command's reply out of a tokenless run's quiet window (the daemon's preflight read runs beside the
+// queue and takes its lines from a tap) — while a caller on the goroutine the holder's queued calls need answers
+// ErrBusy at once instead of waiting. Mutation: a blocking take in TryRun makes the daemon deadlock this test
+// prevents (the preflight's next slice against the waiting method).
+func TestSessionExclusiveRunHoldsTheChannel(t *testing.T) {
+	tr := &enteredTransport{entered: make(chan struct{}, 2)}
+	q := NewSession(tr)
+	inside := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		_, err := q.ExclusiveRun(context.Background(), Options{}, func() (*Reply, error) {
+			close(inside)
+			<-release
+			return &Reply{End: "quiet", Raw: []string{"held"}}, nil
+		})
+		done <- err
+	}()
+	<-inside
+	// An ordinary queued run waits its turn.
+	ran := make(chan struct{})
+	go func() {
+		_, _ = q.Run(context.Background(), ".server info", Options{Deadline: 100 * time.Millisecond, Quiet: 10 * time.Millisecond})
+		close(ran)
+	}()
+	select {
+	case <-tr.entered:
+		t.Fatal("a run started while the channel was exclusive")
+	case <-time.After(20 * time.Millisecond):
+	}
+	// A run on the holder's own goroutine refuses at once.
+	opts := Options{Deadline: 100 * time.Millisecond, Quiet: 10 * time.Millisecond}
+	startedAt := time.Now()
+	if _, err := q.TryRun(context.Background(), ".server info", opts); !errors.Is(err, ErrBusy) {
+		t.Fatalf("TryRun while the channel was exclusive: %v, want ErrBusy", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf("TryRun waited %s on an exclusive channel", elapsed)
+	}
+	if len(tr.entered) != 0 {
+		t.Fatal("TryRun sent a run while the channel was exclusive")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	<-ran
+	if len(tr.entered) != 1 {
+		t.Fatalf("the queued run did not start after the release")
+	}
+	if _, err := q.TryRun(context.Background(), ".server info", opts); errors.Is(err, ErrBusy) {
+		t.Fatalf("TryRun on a free channel: %v", err)
+	}
+	select {
+	case <-tr.entered:
+	default:
+		t.Fatal("TryRun did not run after the release")
+	}
+}
+
+// TestSessionExclusiveRunKeepsTheTailRule: an exclusive run with its own transport is still one run on the channel:
+// it waits out an earlier run's open quiet window before it sends, and its own reply opens the window a later run
+// waits out. Mutation: an exclusive take that skips the rule lets an earlier run's late line enter the reply (a
+// stray "Player not found!" refuses a preflight) and a cut-off reply's tail enter the next tokened run.
+func TestSessionExclusiveRunKeepsTheTailRule(t *testing.T) {
+	start := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	clock := start
+	now := func() time.Time { return clock }
+	tr := &scriptTransport{clock: &clock, step: 100 * time.Millisecond, lines: []chat.Line{sys("Module: line one")}}
+	q := NewSession(tr)
+	q.sleep = func(d time.Duration) { clock = clock.Add(d) }
+	// A tokenless run ended at its line cap leaves its quiet window open.
+	if _, err := q.Run(context.Background(), ".tb status", Options{Quiet: 500 * time.Millisecond, MaxLines: 1, Deadline: 5 * time.Second, Now: now}); err != nil {
+		t.Fatalf("the tokenless run: %v", err)
+	}
+	tail := q.tailUntil
+	if !tail.After(clock) {
+		t.Fatalf("the tokenless run left no tail (until %s, now %s)", tail, clock)
+	}
+	// The exclusive run waits that window out before its own send.
+	sentAt := time.Time{}
+	rep, err := q.ExclusiveRun(context.Background(),
+		Options{Quiet: 500 * time.Millisecond, Deadline: time.Second, Now: now},
+		func() (*Reply, error) {
+			sentAt = now()
+			return &Reply{End: "deadline"}, nil // cut off: its own tail is still open
+		})
+	if err != nil || rep == nil {
+		t.Fatalf("ExclusiveRun: %v %v", rep, err)
+	}
+	if sentAt.Before(tail) {
+		t.Fatalf("the exclusive run sent at %s, inside the earlier tail (until %s)", sentAt, tail)
+	}
+	if want := sentAt.Add(500 * time.Millisecond); !q.tailUntil.Equal(want) {
+		t.Fatalf("the exclusive run left its tail until %s, want %s", q.tailUntil, want)
+	}
+	// The next tokened run waits that window out before it sends.
+	before := clock
+	if _, err := q.Run(context.Background(), ".tb state #t9", Options{Token: "t9", EndKind: "state-end", Deadline: 200 * time.Millisecond, Now: now}); err == nil {
+		t.Fatalf("the tokened run succeeded without an end line")
+	}
+	if got := tr.sentAt[len(tr.sentAt)-1].Sub(before); got < 500*time.Millisecond {
+		t.Fatalf("the tokened run was sent %s after the exclusive one, want its 500ms quiet window", got)
+	}
+}
+
+// enteredTransport signals the pump's start.
+type enteredTransport struct{ entered chan struct{} }
+
+func (t *enteredTransport) SendCommand(context.Context, string) error { return nil }
+
+func (t *enteredTransport) Pump(context.Context, func(chat.Line), func() bool) error {
+	t.entered <- struct{}{}
+	return nil
+}
+
 func TestSessionSerialisesRuns(t *testing.T) {
 	conn := &concurrentTransport{}
 	q := NewSession(conn)

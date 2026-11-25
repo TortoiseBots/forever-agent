@@ -23,6 +23,10 @@ const (
 	FirstTabSlot uint8 = 63
 	// MaxCharacterTabSlots is BANK_SLOT_BAG_END - BANK_SLOT_BAG_START: the tab bag slots a character bank has.
 	MaxCharacterTabSlots = 9
+	// TabBagEntry is ITEM_CHARACTER_BANK_TAB_BAG (ItemTemplate.h:859): the item a bought tab is stored as in one of
+	// its 63-71 slots (Player.cpp:2403-2406 equips it there). It is the bank's own furniture — the bag the tab's
+	// slots live in — and never an item a character withdraws.
+	TabBagEntry int32 = 242709
 )
 
 // BuildBankerActivate is CMSG_BANKER_ACTIVATE (BankerActivate::Read, BankPackets.cpp:49-54): the banker's packed GUID,

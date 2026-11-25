@@ -34,15 +34,25 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/serveclient"
 )
 
-// The preflight's own session waits: the console's quiet window after the last `.pinfo` line, and how long a console
-// read or the module probe may take. Neither wait runs on the session queue: the send is one short queued call and
-// the reply is collected off the queue in servePreflightPump slices (preflightCommand), so status and every other
-// call keep answering while the console or the module is heard from.
+// The preflight's own session waits: the console's quiet window after the last `.pinfo` line, how long a console
+// read or the module probe may take, and the two bounds that keep every wait on this path finite (the RPC's context
+// carries no deadline of its own). No wait runs on the session queue: the send is one short queued call and the reply
+// is collected off the queue in servePreflightPump slices (preflightCommand), so a slow console or module does not
+// stop the other methods. The run methods themselves answer errPreflightBusy while the channel is held (the lock is
+// taken without waiting) and come back on their own once it is released.
 const (
 	serveConsoleQuiet       = 500 * time.Millisecond
 	serveConsoleWait        = 5 * time.Second
 	servePreflightPump      = 50 * time.Millisecond
 	servePreflightCloseWait = 2 * time.Second
+	// servePreflightLockWait bounds the wait for the command channel's one-run lock: a run already in flight is a
+	// command with its own deadline (a `bot` call may ask for 30 s), so a longer wait is a channel that is not
+	// coming back. The preflight then refuses like a session method does instead of hanging the call.
+	servePreflightLockWait = 35 * time.Second
+	// servePreflightSlop is what one preflight command adds to its own collector deadline for the send and the last
+	// pump slice: every queued call of the run waits on that context, so a session that stops serving ends the
+	// command here instead of holding the preflight forever.
+	servePreflightSlop = 2 * time.Second
 )
 
 // serveModule is fpreflight.Module over the session's own command channel: the `.tb state party` probe is sent the
@@ -84,18 +94,62 @@ func (c serveConsole) Run(ctx context.Context, line string) (string, error) {
 	return strings.Join(rep.RawText, "\n"), nil
 }
 
-// servePreflightCommand runs one tokenless command for the preflight without holding the session queue for the
+// preflightCommand runs one tokenless command for the preflight without holding the session queue for the
 // reply's whole wait. It is the command-channel shape of the TBM methods' off-queue wait (tbm_adapter.go): the GM
 // guard, the send and each packet-pump slice are separate short calls, and a chat tap queues the reply lines as the
 // session goroutine sees them while Pump hands them to the collector on its own goroutine. A tokenless reply ends
 // at its quiet window, so the tap is the only way to hear it without owning the queue.
+//
+// The run holds the command channel's one-run lock (command.Session.ExclusiveRun), so no other command starts inside
+// its reply: the core's console answer carries no marker that would tell its lines from a dashboard `bot` call's or a
+// module probe's, and a stray "Player not found!" from another command would refuse the preflight (a "not found" is
+// the report's own "does not exist" row). The lock is the channel's serialisation, not the session queue: every
+// other call still answers while the read waits, and a session-side run arriving in the window is refused with
+// errPreflightBusy at once (serveRunLine) rather than waiting on this goroutine's own slices.
+//
+// Both waits are bounded: the lock is taken on a context that ends after servePreflightLockWait, and the run's
+// send and pump slices run on one that ends servePreflightSlop after its collector deadline.
 func (st *serveState) preflightCommand(ctx context.Context, line string, opts command.Options) (*command.Reply, error) {
+	if opts.Deadline <= 0 {
+		opts.Deadline = command.DefaultDeadline
+	}
+	// One budget for the command's whole path: the GM guard and the queued calls wait for the session goroutine, which
+	// may be busy with a run in flight for as long as the lock wait allows. The run's own deadline is taken when it
+	// starts (below), not here, so a long wait for the channel does not eat into the reply's window. The RPC's context
+	// has no deadline, so this budget is what ends a session that stops serving.
+	cmdCtx, cancelCmd := context.WithTimeout(ctx, servePreflightLockWait+opts.Deadline+servePreflightSlop)
+	defer cancelCmd()
+	lockCtx, cancelLock := context.WithTimeout(cmdCtx, servePreflightLockWait)
+	defer cancelLock()
 	c := &preflightCommand{st: st}
-	if err := c.prepare(ctx, opts); err != nil {
+	if err := c.prepare(cmdCtx, opts); err != nil {
 		return nil, err
 	}
 	defer c.close()
-	return command.Run(ctx, c, line, c.opts)
+	return st.exclusiveCommand(lockCtx, c.opts, func() (*command.Reply, error) {
+		runCtx, cancelRun := context.WithTimeout(cmdCtx, opts.Deadline+servePreflightSlop)
+		defer cancelRun()
+		return command.Run(runCtx, c, line, c.opts)
+	})
+}
+
+// exclusiveCommand runs fn as the command channel's only run, keeping the channel's tail rule for it
+// (command.Session.ExclusiveRun: an earlier run's quiet window is waited out before fn sends, and fn's reply opens the
+// window a later run waits out). A daemon that never installed a channel (no session yet) has nothing to exclude, so
+// fn runs alone. The wait for the lock is ctx's: when it ends first, fn did not run and the refusal names the wait,
+// never a hang.
+func (st *serveState) exclusiveCommand(ctx context.Context, opts command.Options, fn func() (*command.Reply, error)) (*command.Reply, error) {
+	if st.q == nil {
+		return fn()
+	}
+	rep, err := st.q.ExclusiveRun(ctx, opts, fn)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return rep, fmt.Errorf("busy: the command channel stayed busy for %s (another command is running), retry",
+				servePreflightLockWait)
+		}
+	}
+	return rep, err
 }
 
 // preflightCommand is a command.Transport over the serving session that never waits on the session queue: prepare
@@ -138,7 +192,13 @@ func (c *preflightCommand) prepare(ctx context.Context, base command.Options) er
 	return nil
 }
 
-// SendCommand sends the line and installs the tap in one queued call, so no reply line can arrive between them.
+// SendCommand sends the line and installs the tap in one queued call, so the tap's window starts with its own command:
+// no line the session handled before the send reaches it. The command channel's one-run lock keeps other commands out
+// of the window (preflightCommand), and the run waits out an earlier run's open quiet window first
+// (command.Session.ExclusiveRun); what none of that can exclude is a line from a command sent outside the channel (the
+// GM guard's own probe) or an unsolicited system line (an announcement, another player's GM output). A tokenless core
+// reply carries no marker to tell those from its own answer, so the quiet window can still take one: a stray "Player
+// not found!" would be read as the bot not existing.
 func (c *preflightCommand) SendCommand(ctx context.Context, text string) error {
 	_, err := c.st.call(ctx, func(s *session) (any, error) {
 		if s.gmStop != nil {
