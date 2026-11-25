@@ -9,7 +9,7 @@
 
 - [ ] `make test` passes (or the CI `test` check is green), and the evidence I ran is below.
 - [ ] Docs: the pages under `docs/manual/` (and `README.md` where it carries the same text) are updated for every
-      change a user can see, **or** the next line says why none was needed.
+      change a user can see, **or** you uncomment the next line and give the reason no doc was needed.
 - [ ] No private data: no hosts, accounts, character names, paths or capture files in this PR.
 
 <!-- Docs: not needed, because <the reason> — leave this line commented out unless nothing user-visible changed. -->
