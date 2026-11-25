@@ -77,6 +77,15 @@ instance portal or a scripted trigger.
 |---|---|---|
 | `id` | int | Trigger id, above 0. |
 
+The answer is `{"already_sent": bool}`. `already_sent` is `true` when nothing went out: the same trigger already
+did, from a volume the character still stands in, less than 10 s ago — the watch's own crossing of a walked portal,
+or an earlier call. One crossing is one packet, so the explicit call that follows a walk into the portal (a follow
+loop zoning after its lead, a ghost run taking its corpse's entrance) does not repeat it.
+
+The hold clears as soon as the character leaves the volume, the map changes, a volume of that id is armed again, or
+10 s pass, so a transfer that really failed is retried by the next attempt. A trigger the watch never armed has no
+volume to hold, and every explicit call sends it.
+
 There is no server answer to wait for: check `status.map` afterwards. A map change appears in `event_log` as
 a `session` row whose `data.state` is `map_change`.
 
@@ -109,10 +118,11 @@ Three things arm it:
 
 - **This call.** `area_trigger_watch` arms a volume until `clear` (or the session ends). Use it for a trigger the
   daemon's plans do not name, or to aim one at a point of your own.
-- **A walk, by itself.** `walk_to`, `walk_path` and every walking leg of `dungeon_run` arm the instance-portal
-  volumes of the current map that the walk's route crosses — its destination or the line or polyline it follows — and
-  remove them again when the walk ends. That is why a plain `walk_to` into an instance portal fires its trigger with
-  no call first: the walk arms the portal's volume, sends `CMSG_AREA_TRIGGER` on the step in, and the map changes.
+- **A walk, by itself.** The daemon's own walk methods, `walk_to` and `walk_path`, arm the instance-portal volumes
+  of the current map that the walk's route crosses — its destination or the line or polyline it follows — and remove
+  them again when the walk ends. That is why a plain `walk_to` into an instance portal fires its trigger with no call
+  first: the walk arms the portal's volume, sends `CMSG_AREA_TRIGGER` on the step in, and the map changes. Automatic
+  arming is the daemon's walk methods' alone: a leg of `dungeon_run` (the module walks the party) arms nothing.
 - **Nothing else.** Standing still, a fight, a follow loop or a teleport arms no volume: there is no movement of the
   character's own to cross one. A plan's `area_trigger` step is not armed by a walk either: its own step fires it
   once, after its own walk to the step's `stand`, and a remote run's `by` guard stays the only way a `bot` or `auto`
@@ -130,6 +140,11 @@ hand keeps the caller's volume and is not removed by the walk: one state per id 
 firing twice, and re-arming an id moves it. A walk that finds the 32-volume bound full arms no more and says so in
 the daemon log. A daemon whose plan folder is missing or holds no plan for the current map arms nothing on a walk —
 the explicit call above is then the way.
+
+The walk's own packet is held for 10 s: an [`area_trigger`](#area_trigger) call for the same id while the character
+still stands in that volume answers `already_sent: true` and sends nothing, so a follow loop or a ghost run that
+walks in and then sends the trigger does not repeat the walk's packet. Leaving the volume, a map change, arming a
+volume of that id again, or the 10 s passing ends the hold, and the next call sends.
 
 # mount and dismount
 

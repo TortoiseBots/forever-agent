@@ -343,6 +343,13 @@ type serveAreaTriggerParams struct {
 	ID int32 `json:"id"`
 }
 
+// ServeAreaTrigger is area_trigger's answer. AlreadySent is true when nothing was sent: the same trigger already
+// went out from the volume the character still stands in, less than triggerSendHold ago (the watch's own crossing
+// of a walked portal, or an earlier call).
+type ServeAreaTrigger struct {
+	AlreadySent bool `json:"already_sent"`
+}
+
 type serveAttackParams struct {
 	GUID  GUID   `json:"guid,omitempty"`
 	Name  string `json:"name,omitempty"`
@@ -829,11 +836,15 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("walk_path", serveCallTyped(st, func(s *session, ctx context.Context, p serveWalkParams) (ServePath, error) {
 		return s.serveWalkPath(ctx, p.X, p.Y, p.Z)
 	}))
-	srv.Register("area_trigger", serveCallTyped(st, func(s *session, _ context.Context, p serveAreaTriggerParams) (serveEmpty, error) {
+	srv.Register("area_trigger", serveCallTyped(st, func(s *session, _ context.Context, p serveAreaTriggerParams) (ServeAreaTrigger, error) {
 		if p.ID <= 0 {
-			return serveEmpty{}, errors.New("area_trigger: needs a trigger id")
+			return ServeAreaTrigger{}, errors.New("area_trigger: needs a trigger id")
 		}
-		return serveEmpty{}, s.EnterAreaTrigger(p.ID)
+		sent, err := s.enterAreaTrigger(p.ID)
+		if err != nil {
+			return ServeAreaTrigger{}, err
+		}
+		return ServeAreaTrigger{AlreadySent: !sent}, nil
 	}))
 	registerTriggerWatch(srv, st)
 	srv.Register("death_status", serveReadTyped(st, func(s *session, _ context.Context, _ serveEmpty) (ServeDeath, error) {

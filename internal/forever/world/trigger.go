@@ -10,12 +10,18 @@ package world
 // crossing, and at most one volume state per armed id, which a repeated arm keeps). A volume smaller than the gap
 // between two heartbeats is crossed by asking the mover to report the line's closest approach to its centre first
 // (triggerSamples), because the server accepts the packet only from a position inside the volume.
+//
+// The send itself is held for triggerSendHold (enterAreaTrigger): the explicit area_trigger call that follows a walk
+// into the volume — a follow loop zoning after its lead, a ghost run taking the corpse's entrance — is the same
+// crossing, not a second one. The hold clears when the character leaves the volume, the map changes, a volume of
+// that id is armed again, or the hold passes, so a transfer that failed can still be retried.
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/rpc"
@@ -32,7 +38,19 @@ const (
 	triggerMaxRadius float32 = 100
 	// triggerWatchMax bounds the armed volumes one session carries.
 	triggerWatchMax = 32
+	// triggerSendHold is how long a trigger that just went out from a volume is not sent again while the character
+	// still stands in it: one crossing is one send, and the explicit call that follows a walk (a follow loop's
+	// zoning, a ghost run's entrance) repeats what the watch already did. It is short enough that a transfer that
+	// really failed can be retried by the next attempt.
+	triggerSendHold = 10 * time.Second
 )
+
+// triggerSend is one area-trigger send the session keeps for triggerSendHold: the armed volume it went out from,
+// and when.
+type triggerSend struct {
+	vol srvTrigger
+	at  time.Time
+}
 
 // srvTrigger is one armed trigger volume.
 type srvTrigger struct {
@@ -72,7 +90,7 @@ func registerTriggerWatch(srv *rpc.Server, st *serveState) {
 // serveAreaTriggerWatch arms (or clears) the crossing watch.
 func (s *session) serveAreaTriggerWatch(p serveAreaTriggerWatchParams) (ServeAreaTriggerWatch, error) {
 	if p.Clear {
-		s.triggers, s.triggersIn = nil, nil
+		s.triggers, s.triggersIn, s.trigSends = nil, nil, nil
 		return ServeAreaTriggerWatch{Triggers: []srvTrigger{}}, nil
 	}
 	if p.ID <= 0 {
@@ -127,16 +145,23 @@ func (s *session) serveAreaTriggerWatch(p serveAreaTriggerWatchParams) (ServeAre
 }
 
 // armTrigger stores v: a volume with the same id is replaced in place (its entered state is kept, so a retried arm is
-// not a second crossing), a new one is appended and starts outside every volume.
+// not a second crossing), a new one is appended and starts outside every volume. A volume that is not the one a send
+// was recorded from (a new id, or the same id at a changed point or reach) drops that record: the send belonged to a
+// volume that is no longer armed, and arming under the character is a crossing of its own. An identical retry keeps
+// the record, so the explicit call after it is still held.
 func (s *session) armTrigger(v srvTrigger) {
 	for i := range s.triggers {
 		if s.triggers[i].ID == v.ID {
 			s.triggers[i] = v
+			if rec, ok := s.trigSends[v.ID]; ok && rec.vol != v {
+				delete(s.trigSends, v.ID)
+			}
 			return
 		}
 	}
 	s.triggers = append(s.triggers, v)
 	delete(s.triggersIn, v.ID)
+	delete(s.trigSends, v.ID)
 }
 
 // disarmTrigger removes one armed volume and its entered state: the walk that armed it ended.
@@ -160,10 +185,89 @@ func (s *session) triggerArmed(id int32) bool {
 	return false
 }
 
+// armedVolume returns the armed volume of id, if there is one.
+func (s *session) armedVolume(id int32) (srvTrigger, bool) {
+	for i := range s.triggers {
+		if s.triggers[i].ID == id {
+			return s.triggers[i], true
+		}
+	}
+	return srvTrigger{}, false
+}
+
+// triggerSendHeld reports whether id's trigger already went out from the volume the character still stands in, on
+// the same map, less than triggerSendHold ago: a second send is the same crossing heard twice. A record that no
+// longer holds (the character left the volume, the map changed, the hold passed) is dropped here.
+func (s *session) triggerSendHeld(id int32) bool {
+	rec, ok := s.trigSends[id]
+	if !ok {
+		return false
+	}
+	if s.mover == nil {
+		delete(s.trigSends, id)
+		return false
+	}
+	x, y, z, _ := s.mover.Position()
+	if !s.triggerSendLive(rec, [3]float32{x, y, z}) {
+		delete(s.trigSends, id)
+		return false
+	}
+	return true
+}
+
+// triggerSendLive reports whether rec still holds at pos: less than triggerSendHold ago, on the record's map, and
+// the character inside the record's volume.
+func (s *session) triggerSendLive(rec triggerSend, pos [3]float32) bool {
+	if time.Since(rec.at) >= triggerSendHold {
+		return false
+	}
+	var mapID uint32
+	if s.world != nil {
+		mapID = s.world.MapID()
+	}
+	if rec.vol.Map != mapID {
+		return false
+	}
+	return objects.Distance(pos[0], pos[1], pos[2], rec.vol.X, rec.vol.Y, rec.vol.Z) <= rec.vol.Radius
+}
+
+// noteTriggerSend records a send of id when it went out from an armed volume the character stands in: that volume
+// is what a repeat would be sent from. A send from no armed volume (a trigger the watch never armed) clears the
+// record, so such a trigger behaves exactly as it did before the hold.
+func (s *session) noteTriggerSend(id int32) {
+	v, ok := s.armedVolume(id)
+	if !ok || s.mover == nil {
+		delete(s.trigSends, id)
+		return
+	}
+	x, y, z, _ := s.mover.Position()
+	rec := triggerSend{vol: v, at: time.Now()}
+	if !s.triggerSendLive(rec, [3]float32{x, y, z}) {
+		delete(s.trigSends, id)
+		return
+	}
+	if s.trigSends == nil {
+		s.trigSends = map[int32]triggerSend{}
+	}
+	s.trigSends[id] = rec
+}
+
+// pruneTriggerSends drops the send records that no longer hold at pos: the character left the volume, or the map
+// changed, or the hold passed. The mover calls it after every movement packet, before any crossing is judged.
+func (s *session) pruneTriggerSends(pos [3]float32) {
+	for id, rec := range s.trigSends {
+		if !s.triggerSendLive(rec, pos) {
+			delete(s.trigSends, id)
+		}
+	}
+}
+
 // triggerCrossing sends CMSG_AREA_TRIGGER for every armed volume the mover has just entered, once per crossing: a
 // volume the mover is outside of clears its state, so stepping out and back in sends again. The mover calls it after
-// every movement packet, so the packet goes out with the server holding the same position.
+// every movement packet, so the packet goes out with the server holding the same position. The same call drops the
+// send records that no longer hold at pos (the character left a volume, the map changed, the hold passed).
 func (s *session) triggerCrossing(pos [3]float32) error {
+	s.pruneTriggerSends(pos)
 	if len(s.triggers) == 0 {
 		return nil
 	}

@@ -189,24 +189,6 @@ func TestWalkToArmsThePortalTriggerAndSendsIt(t *testing.T) {
 	}
 }
 
-// TestCancelledDungeonWalkDisarmsItsVolumes: the dungeon's walking port disarms in a defer, so a walk that ends in a
-// cancelled context (or any error) leaves no volume and no entered state behind. Without it the next walk would find
-// the volume armed as the caller's and never send.
-func TestCancelledDungeonWalkDisarmsItsVolumes(t *testing.T) {
-	s, _, _ := planTriggerSession(t, "auto")
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := (dungeonWalker{s: s}).Walk(ctx, [][3]float32{{1010, 2000, 50}}); err == nil {
-		t.Fatal("a walk on a cancelled context answered success")
-	}
-	if len(s.triggers) != 0 {
-		t.Fatalf("the cancelled walk left its volume armed: %+v", s.triggers)
-	}
-	if len(s.triggersIn) != 0 {
-		t.Fatalf("the cancelled walk left entered state behind: %v", s.triggersIn)
-	}
-}
-
 // TestServeWalkToArmsThePlansPortalTrigger: the live row's shape over the daemon. The plans folder names the portal's
 // trigger at the point the walk goes to, and the walk alone — no area_trigger_watch call — sends CMSG_AREA_TRIGGER
 // from inside the volume, once.

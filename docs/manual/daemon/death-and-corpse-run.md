@@ -59,7 +59,7 @@ sends a packet.
 | `reclaim_corpse` | `{}` | `{}` | `world: the character's spirit is not released` when alive or dead without a release; `world: the corpse's location is not known`; `world: the corpse is on another map`; `world: the character is farther from its corpse than the reclaim radius` (39 yd); `world: the corpse cannot be reclaimed yet` while the announced delay runs; `world: the server refused the corpse reclaim` when the server answers nothing. |
 | `accept_resurrect` | `{}` | the `death_status` object (`dead`, `ghost`, `phase`, `released`, `resurrect`, ...) | `world: the character is not dead` when alive; `world: there is no resurrection offer to answer` when the offer expired or none arrived; `world: the resurrection did not happen` when the answer did not revive the character. |
 | `accept_summon` | `accept` (bool, default `true`) | `{summoner, accepted}` | `world: there is no summon offer to answer`; the character not being in the world. |
-| `area_trigger` | `id` (int, required) | `{}` | `area_trigger: needs a trigger id` for `0` or less; a send error. |
+| `area_trigger` | `id` (int, required) | `{already_sent}` | `area_trigger: needs a trigger id` for `0` or less; a send error. `already_sent` is `true` when the trigger already went out from the volume the character stands in (the walk into the portal that ran ahead of this call), so nothing was sent. |
 
 `release_spirit` waits for the server's answer and the graveyard transfer (up to 10 s). A same-map graveyard works; a
 graveyard on another map is followed through the map change. `accept_resurrect` also follows the teleport to the
@@ -101,7 +101,9 @@ checks the 39-yard radius before sending, and then waits for the resurrection.
 
    A dungeon corpse is reached the way a player reaches it: walk the ghost to the entrance and send the entrance
    portal's trigger (`area_trigger {"id": 2230}` for Ragefire Chasm, read from the plan's `entrance_trigger`). The
-   server revives the character on the way in.
+   server revives the character on the way in. A walk whose route crosses the portal's volume already sends the
+   trigger (`walk_to` and `walk_path`, see [travel](travel.md#when-the-watch-is-armed)); the call then answers
+   `{"already_sent": true}` and sends nothing.
 
    ```sh
    forever-agent rpc ./slot area_trigger '{"id": 2230}'

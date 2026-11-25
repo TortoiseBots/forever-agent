@@ -680,13 +680,30 @@ func (s *session) sendRealm(core uint32, payload []byte) error {
 // ragefire_chasm.json carries the entrance trigger — because this round keeps no table of them. The server ignores
 // the packet when the character is not standing in the trigger (MiscHandler.cpp:556-561), so a walker must walk
 // there first.
+//
+// A trigger that just went out from an armed volume the character still stands in is not sent again (the watch's
+// crossing and the caller's explicit call are one send; triggerSendHeld). A caller that reports the answer uses
+// enterAreaTrigger.
 func (s *session) EnterAreaTrigger(id int32) error {
+	_, err := s.enterAreaTrigger(id)
+	return err
+}
+
+// enterAreaTrigger is EnterAreaTrigger with its answer: sent is false when nothing went out because the trigger
+// already did, from the volume the character still stands in, less than triggerSendHold ago.
+func (s *session) enterAreaTrigger(id int32) (sent bool, err error) {
+	if s.triggerSendHeld(id) {
+		s.opts.logf("world: CMSG_AREA_TRIGGER %d not sent again: it went out from this volume less than %s ago",
+			id, triggerSendHold)
+		return false, nil
+	}
 	if err := s.sendOn(sideInstance, wire.CMSGAreaTrigger, objects.BuildAreaTrigger(id, true, true)); err != nil {
-		return fmt.Errorf("world: CMSG_AREA_TRIGGER: %w", err)
+		return false, fmt.Errorf("world: CMSG_AREA_TRIGGER: %w", err)
 	}
 	s.report.AreaTriggers++
 	s.opts.logf("world: CMSG_AREA_TRIGGER %d (entered, from the client)", id)
-	return nil
+	s.noteTriggerSend(id)
+	return true, nil
 }
 
 // navPlanner returns the navmesh planner of this run, building it on first use. A map change drops it, so the next

@@ -689,10 +689,6 @@ func (w dungeonWalker) Walk(ctx context.Context, pts [][3]float32) error {
 	if w.s.mover == nil {
 		return fmt.Errorf("world: no mover for the walk")
 	}
-	// A leg that crosses a trigger volume the plans name arms it for the leg, so the portal fires on the step in
-	// (trigger_plan.go); the leg's own end disarms it.
-	disarm := w.s.armWalkTriggers(pts)
-	defer disarm()
 	err := w.s.mover.WalkPath(ctx, pts)
 	switch {
 	case err == nil:
