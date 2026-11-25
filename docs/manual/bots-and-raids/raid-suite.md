@@ -47,7 +47,9 @@ the same suite command and the same verdict rules as the Turtle form (see the
    a run never keeps a slot it no longer holds. That raid is reported `failed` with the renewal's error, and its
    record's `exit_code` is non-zero (the error is never the watch's own `0`). The lease's holder is this run's own
    (the process and its start instant), so two suites walking one plan never adopt each other's lease: the second is
-   refused the held slot. The lease is released however the watch ends, a panic in the watch included.
+   refused the held slot. The lease is released however the watch ends, a panic in the watch included. A cancelled
+   watch that does not return within a minute (`raidSuiteWatchStop`) is reported failed with that reason, and the
+   suite walks no further raid: a session that may still sit at the account is not left running beside a new one.
 3. Builds the attempt's slot dir with `slot setup --forever` (the same call the autopilot's attempt makes), then runs
    `forever raid-watch` in this process: the plan file, `--leader`, the slots file's connection flags, the slot's
    account and character, the slot dir and the attempt's folder. No `--until`, `--from`, `--place` or

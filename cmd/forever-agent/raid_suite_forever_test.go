@@ -438,3 +438,42 @@ func TestRaidSuiteForeverHolderIsPerInvocation(t *testing.T) {
 		t.Fatalf("the other suite's lease = %+v; want it left alone", l)
 	}
 }
+
+// TestRaidSuiteForeverUncooperativeWatchIsBounded: a watch that ignores its cancellation does not hold the suite. The
+// lease is released, the raid is failed with the renewal's error, the suite walks no further raid, and the command
+// still returns (a process exit is what ends the stuck call).
+func TestRaidSuiteForeverUncooperativeWatchIsBounded(t *testing.T) {
+	raidForeverLeaseRenew(t, 10*time.Millisecond)
+	prevStop := raidSuiteWatchStop
+	raidSuiteWatchStop = 30 * time.Millisecond
+	t.Cleanup(func() { raidSuiteWatchStop = prevStop })
+	rig := newRaidForeverRig(t)
+	slotsPath := raidForeverSlots(t)
+	unblock := make(chan struct{})
+	watched := make(chan struct{})
+	rig.watch = func(ctx context.Context, args []string, out string) int {
+		defer close(watched)
+		<-unblock // a session stuck in a read: cancellation is never observed
+		writeSuiteSummary(t, out, suiteSummary(raidSuiteForeverUntil, time.Now(), 300))
+		return exitOK
+	}
+	code, rep, stderr := raidForeverRun(t, slotsPath, raidForeverEntry(), raidForeverEntry())
+	close(unblock)
+	<-watched
+	if code == exitOK {
+		t.Fatalf("exit %d; a watch that never stopped is a failure (stderr %q)", code, stderr)
+	}
+	if len(rep.Raids) != 1 {
+		t.Fatalf("raids = %d; want the suite stopped after the failed one", len(rep.Raids))
+	}
+	if !strings.Contains(rep.Raids[0].Reason, "did not stop") {
+		t.Fatalf("reason = %q; want the watch's shutdown named", rep.Raids[0].Reason)
+	}
+	if rep.Raids[0].ExitCode == nil || *rep.Raids[0].ExitCode == 0 {
+		t.Fatalf("exit code = %v; want non-zero", rep.Raids[0].ExitCode)
+	}
+	store := raidForeverStore(t, slotsPath)
+	if l, err := store.Get("fv1", "2"); err != nil || l != nil {
+		t.Fatalf("the lease after the stuck watch = %+v, %v; want released", l, err)
+	}
+}

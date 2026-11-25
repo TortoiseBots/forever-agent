@@ -170,8 +170,11 @@ type raidSuite struct {
 	// holder is this invocation's lease holder: the process and its start instant, so two suites running one plan
 	// never share a holder name and cannot adopt each other's lease.
 	holder string
-	stdout io.Writer
-	stderr io.Writer
+	// aborted is set when a cancelled watch did not stop inside raidSuiteWatchStop: it may still sit at its account,
+	// so the suite walks no further raid and the command ends after the report.
+	aborted bool
+	stdout  io.Writer
+	stderr  io.Writer
 }
 
 // raidSuiteCmd is the command line entry: flags, the raids, one walk (or comparison) each, the report.
@@ -249,6 +252,9 @@ func raidSuiteCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	for i, e := range entries {
 		r, walked := s.raid(ctx, e)
 		rep.Raids = append(rep.Raids, r)
+		if s.aborted {
+			break
+		}
 		// The gap is between two raids: after a walk, when another raid follows and the run was not interrupted.
 		if walked && i < len(entries)-1 && ctx.Err() == nil {
 			_ = s.env.sleep(ctx, o.gap)
@@ -592,6 +598,11 @@ var raidSuiteLeaseRenew = autoForeverLeaseRenew
 // store or lock error that passes is retried and a lease another run really took ends the watch inside its TTL.
 const raidSuiteLeaseRenewTries = 3
 
+// raidSuiteWatchStop bounds the wait for a cancelled watch to return after its lease was lost. The watch is this
+// process's own call, but cancellation is cooperative: a session stuck in a network read would otherwise hold the
+// suite (and its record) forever while another run holds the slot. A test shortens it.
+var raidSuiteWatchStop = time.Minute
+
 // raidSuiteRenewHeld renews the lease this suite holds for one raid; a test replaces it to fail once and pass.
 var raidSuiteRenewHeld = func(w *autoForeverWorld, f autoForeverSlot) error { return w.renewHeld(f) }
 
@@ -711,8 +722,16 @@ func (s *raidSuite) superviseForeverWatch(cancel context.CancelFunc, f autoForev
 				continue
 			}
 			cancel()
-			res := <-done
-			return res, fmt.Errorf("renew %s/%s: %v (after %d consecutive failures)", f.server, f.slot, err, failures)
+			select {
+			case res := <-done:
+				return res, fmt.Errorf("renew %s/%s: %v (after %d consecutive failures)", f.server, f.slot, err, failures)
+			case <-time.After(raidSuiteWatchStop):
+				// The watch ignored its cancellation: release the lease and stop the suite here, rather than start
+				// another raid beside a session that may still sit at the account (the process end closes it).
+				s.aborted = true
+				return raidSuiteWatchResult{}, fmt.Errorf("renew %s/%s: %v (after %d consecutive failures; the watch did not stop within %s)",
+					f.server, f.slot, err, failures, raidSuiteWatchStop)
+			}
 		}
 	}
 }
