@@ -11,6 +11,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
@@ -74,6 +75,38 @@ func TestPlayPullSkullOnTheMemberTheTankSees(t *testing.T) {
 	}
 	if got := playEvents(t, rig)["pull_tank_sight"]; got.Ev == "" {
 		t.Fatal("the pull recorded no pull_tank_sight event")
+	}
+}
+
+// sightPort counts the ServerSight queries one test asks and answers every one from its rule.
+type sightPort struct {
+	calls  int
+	answer func() (bool, float64, bool)
+}
+
+func (s *sightPort) TankSees(string, wire.GUID) (bool, float64, bool) { s.calls++; return s.answer() }
+func (s *sightPort) PointSees(Vec3, wire.GUID) (bool, float64, bool)  { s.calls++; return s.answer() }
+
+// TestPlayTankSightPickSharesTheSearchBudget: the pick and the stand walk spend one budget, so a large all-NO pack
+// stops at PlayTankSightSpots queries and hands the pull back to the navmesh flow instead of asking one query per
+// member without bound.
+func TestPlayTankSightPickSharesTheSearchBudget(t *testing.T) {
+	port := &sightPort{answer: func() (bool, float64, bool) { return false, 0, true }}
+	p := &playRun{
+		cfg:   PlayConfig{Bots: []string{"Botone"}},
+		route: &Route{},
+		ports: PlayPorts{ServerSight: port, Clock: NewVClock(time.Unix(0, 0))},
+	}
+	members := make([]Unit, PlayTankSightSpots+8)
+	for i := range members {
+		members[i] = Unit{GUID: fightGUID(uint64(i + 1)), Entry: 11320, Pos: Vec3{float32(i), 0, 0}}
+	}
+	budget := &sightBudget{start: p.now()}
+	if _, _, _, ok := p.tankSightPick(members, budget); ok {
+		t.Fatal("a pick past the budget still claimed an answer")
+	}
+	if port.calls != PlayTankSightSpots {
+		t.Fatalf("%d sight queries; want the %d-query budget", port.calls, PlayTankSightSpots)
 	}
 }
 

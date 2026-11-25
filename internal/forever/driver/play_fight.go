@@ -575,16 +575,39 @@ func (p *playRun) pointSight(at Vec3, u Unit) (in bool, dist float64, known bool
 	return p.ports.ServerSight.PointSees(Vec3{at[0], at[1], at[2] + float32(PlayLosEyeYd)}, u.GUID)
 }
 
+// sightBudget is one pull's whole pre-order sight search in one budget: PlayTankSightSpots queries and
+// PlayTankSightTime from the first look cover the pick and the stand walk together, so a large member list cannot
+// outrun the bounds the stand search is documented with. take claims one query; false means the caller falls back to
+// the navmesh flow (or goes on as it stands) because the budget is spent.
+type sightBudget struct {
+	start time.Time
+	used  int
+}
+
+func (b *sightBudget) take(now time.Time) bool {
+	if b.used >= PlayTankSightSpots {
+		return false
+	}
+	if !b.start.IsZero() && now.Sub(b.start) >= PlayTankSightTime {
+		return false
+	}
+	b.used++
+	return true
+}
+
 // tankSightPick is the pull's marks read from the server's own sight: the skull on the first live member of the kill
 // order the TANK sees from where it stands, the cross on the next one in that order. seen is false when the tank sees
 // none (the caller's search then walks it into sight of the first). ok is false when the module cannot answer at all,
-// and the caller keeps the navmesh flow exactly as it was.
-func (p *playRun) tankSightPick(members []Unit) (skull, cross Unit, seen, ok bool) {
+// when the budget is spent, and the caller keeps the navmesh flow exactly as it was.
+func (p *playRun) tankSightPick(members []Unit, budget *sightBudget) (skull, cross Unit, seen, ok bool) {
 	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 || len(members) == 0 {
 		return Unit{}, Unit{}, false, false
 	}
 	order := p.killOrder(members)
 	for i, u := range order {
+		if !budget.take(p.now()) {
+			return Unit{}, Unit{}, false, false
+		}
 		in, _, known := p.tankSight(u)
 		if !known {
 			return Unit{}, Unit{}, false, false
@@ -613,11 +636,15 @@ func (p *playRun) tankSightPick(members []Unit) (skull, cross Unit, seen, ok boo
 // at PlayLosEyeYd), never nearer than PlaySightTouchYd to the unit to pull from and never more than
 // PlayAgentApproachPastYd past the plan's stand (a pack pull only); the agent walks to the first sample the server
 // clears, then steps PlayAgentLeadYd along the path until the TANK itself sees the unit, so the follow advances with
-// it. Bounded by PlayTankSightTries and PlayTankSightTime. seen is whether the tank sees the unit at the end; known is
-// false when the module stopped answering (a rate refusal, an error), and the caller then keeps its older flow. A stop
-// of the run's own is the run's.
-func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit) (seen, known bool) {
+// it. Bounded by PlayTankSightTries and the shared sightBudget (PlayTankSightSpots queries and PlayTankSightTime from
+// the pull's first look, the pick included). seen is whether the tank sees the unit at the end; known is false when the
+// module stopped answering (a rate refusal, an error) or the budget is spent, and the caller then keeps its older flow.
+// A stop of the run's own is the run's.
+func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit, budget *sightBudget) (seen, known bool) {
 	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 {
+		return false, false
+	}
+	if !budget.take(p.now()) {
 		return false, false
 	}
 	if in, _, ok := p.tankSight(u); !ok {
@@ -626,7 +653,6 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit) (seen, 
 		return true, true
 	}
 	p.refreshSelf()
-	start := p.now()
 	tries := 0
 	from := p.self
 	if at, ok := p.tankPos(); ok {
@@ -641,13 +667,11 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit) (seen, 
 	samples := p.tankSightSamples(group, route.Points, u)
 	stand := Vec3{}
 	walked := false
-	spots := 0
 	for _, at := range samples {
-		// The search's own bound is read before every query: a long, wholly blocked path is no unbounded loop.
-		if spots >= PlayTankSightSpots || p.now().Sub(start) >= PlayTankSightTime {
+		// The budget is read before every query: a long, wholly blocked path is no unbounded loop.
+		if !budget.take(p.now()) {
 			return false, true
 		}
-		spots++
 		in, _, ok := p.pointSight(at, u)
 		if !ok {
 			return false, false
@@ -677,6 +701,10 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit) (seen, 
 		})
 	}
 	for {
+		if !budget.take(p.now()) {
+			record(false, true)
+			return false, true
+		}
 		if seen, _, ok := p.tankSight(u); !ok {
 			record(false, false)
 			return false, false
@@ -684,7 +712,7 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit) (seen, 
 			record(true, true)
 			return true, true
 		}
-		if tries >= PlayTankSightTries || p.now().Sub(start) >= PlayTankSightTime {
+		if tries >= PlayTankSightTries {
 			record(false, true)
 			return false, true
 		}
@@ -750,7 +778,8 @@ func (p *playRun) tankSightBefore(ctx context.Context, group int, members []Unit
 	if p.ports.ServerSight == nil || len(p.cfg.Bots) == 0 || len(members) == 0 {
 		return fallback()
 	}
-	skull, _, seen, ok := p.tankSightPick(members)
+	budget := &sightBudget{start: p.now()}
+	skull, _, seen, ok := p.tankSightPick(members, budget)
 	if !ok {
 		return fallback()
 	}
@@ -758,7 +787,7 @@ func (p *playRun) tankSightBefore(ctx context.Context, group int, members []Unit
 	seenNow := seen
 	if !seen {
 		var known bool
-		seenNow, known = p.tankSightStand(ctx, group, skull)
+		seenNow, known = p.tankSightStand(ctx, group, skull, budget)
 		if p.stopReason != "" || p.stall != "" {
 			return false
 		}
@@ -1177,7 +1206,7 @@ func (p *playRun) engageSeen(ctx context.Context, group int, members []Unit, sku
 			return false
 		}
 		skull = u
-		if seen, known := p.tankSightStand(ctx, group, u); known {
+		if seen, known := p.tankSightStand(ctx, group, u, &sightBudget{start: p.now()}); known {
 			if p.stopReason != "" || p.stall != "" {
 				return false
 			}
