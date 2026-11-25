@@ -14,10 +14,11 @@ export GOTOOLCHAIN := local
 test: fmt-check vet nocgo tools-test
 	$(GO) test -race -count=1 -timeout 20m ./...
 
-# The Python tool tests: the automatic label rules and the label sync (no network, no `gh`; both inject a runner).
-# CI's `lint` job runs this too, so a rule change cannot merge without its tests.
+# The Python tool tests: the automatic label rules, the label sync and the two labelling workflows' invariants (no
+# network, no `gh`; both scripts inject a runner, the workflow test reads the YAML text). CI's `lint` job runs this
+# too, so a rule change cannot merge without its tests.
 tools-test:
-	python3 -m unittest tools/test_label_issue.py tools/test_sync_labels.py
+	python3 -m unittest tools/test_label_issue.py tools/test_sync_labels.py tools/test_workflows.py
 
 fmt:
 	$(GOFMT) -w .

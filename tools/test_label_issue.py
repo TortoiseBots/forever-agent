@@ -398,13 +398,16 @@ class PruneTest(unittest.TestCase):
             items, added, removed = label_issue.backfill("o/r", 500, True, runner, prune=True)
         self.assertEqual((2, 3, 3), (items, added, removed))
         self.assertFalse([c for c in calls if c[:2] == ["api", "--method"]])
+        lines = out.getvalue().splitlines()
+        # The warning comes before the first item line; its exact wording is the script's to change.
+        self.assertIn("does not record who added it", lines[0])
         self.assertEqual([
             "issue 115: -raid",
             "issue 115: +testing,enhancement",
             "issue 216: -dungeon,-documentation",
             "issue 216: +enhancement",
             "dry-run: 2 issues and pull requests, 3 labels added, 3 removed",
-        ], out.getvalue().splitlines())
+        ], lines[1:])
 
     def test_applies_the_removals_and_keeps_everything_else(self):
         runner, calls = self._runner()
