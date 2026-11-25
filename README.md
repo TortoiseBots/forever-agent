@@ -54,6 +54,7 @@ write or child process. The Turtle packages and documents are listed in
 | Raid watcher (round #108 R3) | **Works against the scripted world; no live raid run yet** (`forever-agent forever raid-watch`: the dungeon watch over a raid plan's 10, 20 or 40 bots — the module's commander card checked for `raid` and the plan's size before PREPARE, one `convert_raid` when this character leads the group, a `--layout` applied with `raid_move`, and a `summary.json` in the Turtle tools' `tb-raid-walk` shape at every end; see [docs/forever/RAID-R3-NOTES.md](docs/forever/RAID-R3-NOTES.md)) |
 | Raid autopilot on Forever (round #108 R4) | **Wired against the fake binary; no live raid run yet** (`forever-agent raid-autopilot --forever`: Forever targets take their lease and slot dir from the slots file (`slot setup --forever`) and launch `forever raid-watch`, and the watch's missing placement/resume/GM-clear flags are refused at target load; see [docs/forever/RAID-R4-NOTES.md](docs/forever/RAID-R4-NOTES.md)) |
 | Run report card (round S7-B) | **Works against the scripted world** (`forever-agent forever dungeon-watch` writes a card after every run and `forever run-report RECORD` builds it offline from the saved record: per-leg time, pulls and re-pulls, deaths with the member's slot and step, wipes, pauses with reasons, flags with their evidence lines, a one-line verdict, and `--compare A B` for what got better or worse — see [docs/forever/REPORTCARD-R1-NOTES.md](docs/forever/REPORTCARD-R1-NOTES.md)) |
+| Tactics check on a watched run (T13) | **Works against the scripted world** (`forever dungeon-watch --module-tactics FILE` judges the plan's boss fight steps against the module's `ai_boss_tactic` rows after the run and names every step the module contradicts or does not carry; without the file the report says the check was not made — see [docs/forever/TACTICS-CHECK-NOTES.md](docs/forever/TACTICS-CHECK-NOTES.md)) |
 | Dungeon driver (rounds D1-D2) | **Works against the scripted world; the live mode is wired, not yet run** (`forever-agent forever dungeon-run`: the run loop as a state machine over a plan — party checks, entry, legs, pulls, fights, rest, deaths, wipes, bosses, the safety rules and the run's trace and summary; `--dry` runs it over the scripted world, the live mode binds the ports to a world session and the command channel — see [docs/forever/DRIVER-R1-NOTES.md](docs/forever/DRIVER-R1-NOTES.md) and [docs/forever/DRIVER-R2-NOTES.md](docs/forever/DRIVER-R2-NOTES.md)) |
 | Character screen (round 6) | **Works** (`forever-agent forever char-create` and `char-delete`: create, delete and the name-availability check with every result code named; a create with no customization choices is valid; see [docs/forever/CHARCREATE-R1-NOTES.md](docs/forever/CHARCREATE-R1-NOTES.md)) |
 | Game layer on the new packets | **Works** (round 3 onward: objects, movement, inventory, chat, quests, vendors, trainers, flight paths, loot and game objects; each row says what has been proved live) |
@@ -759,6 +760,23 @@ next tick retries it, so no failure can skip rows the summary would call complet
 `combat_truncated` with `combat_bytes`, the size the file stopped at. The trace's events carry the watch's own
 anchors: `run_start` at the run-start action's reply time (the module's clock zero, which a map reader uses to place
 the module's `at_s` on the trace's clock) and one `wipe` at the module's own second for every wipe it reports.
+
+The report also judges the plan's fight steps. A plan's bosses[].tactics block is the agent's own (it is never
+exported: the module's bots fight by their own `ai_boss_tactic` rows), so a plan step the module's rows contradict or
+do not carry is a step nobody runs. With `--module-tactics FILE` — the module's `ai_boss_tactic` rows as a JSON array,
+one object per row with the table's column names (`map`, `boss_entry`, `kind`, `target_entry`, `spell_id`, `priority`,
+`param`, `hp_min`, `hp_max`; the health band is part of the table's key and is read but not compared, and an export of
+`SELECT map, boss_entry, kind, target_entry, spell_id, priority, param, hp_min, hp_max FROM ai_boss_tactic` gives it)
+— the watch's report checks every plan fight step (one interrupt entry, one kill_first or never_target entry,
+one move_out row) against those rows once the run ends: the interrupts a plan names, the kill order (the entries and
+their order by the module's priorities), a never_target the module kills first (one it has no row for is not checked:
+the table has no never_target kind), and a move_out whose spell the module has no avoid_cast row for or whose yards
+are smaller than the widest row's (a name's every id is checked). Each disagreement is one `tactics:` line naming
+the leg, the boss, the plan's step and the module's answer, and the lines are written beside the record as
+`<run_id>.tactics-check.txt`. A plan step no module row can answer (a dispel or no_dispel step, a ground rule, a boss
+the file does not name) is listed as not checked, and without the flag the report says the check was not made: the
+section never reads as an agreement it did not test. The module's command link has no command that returns
+`ai_boss_tactic`, which is why the rows arrive as a file. See [docs/forever/TACTICS-CHECK-NOTES.md](docs/forever/TACTICS-CHECK-NOTES.md).
 
 `forever-agent forever raid-watch --leader NAME --plan RAID.json --character NAME [--layout FILE] [flags of dungeon-watch]`
 watches a raid plan (kind `raid`, 10, 20 or 40 bots) the module's own run leads; every dungeon-watch flag, budget and
