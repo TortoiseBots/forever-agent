@@ -238,8 +238,11 @@ type Unit struct {
 	// Owner is whichever of the unit's SummonedBy, CreatedBy and CharmedBy names its owner, with OwnerKind naming
 	// that field ("summoned_by", "created_by" or "charmed_by"); Pet is the unit's own Summon, the pet it controls.
 	// The three pet fields are the pet's own PetNumber, CreatedBySpell and CreatureFamily.
-	Owner          GUID   `json:"owner,omitempty"`
-	OwnerKind      string `json:"owner_kind,omitempty"`
+	Owner     GUID   `json:"owner,omitempty"`
+	OwnerKind string `json:"owner_kind,omitempty"`
+	// Hostile is the unit's reaction to the caller's character (units with `reaction`): nil when the caller did not
+	// ask or the server could not tell.
+	Hostile        *bool  `json:"hostile,omitempty"`
 	Pet            GUID   `json:"pet,omitempty"`
 	PetNumber      uint32 `json:"pet_number,omitempty"`
 	CreatedBySpell int32  `json:"created_by_spell,omitempty"`
@@ -314,6 +317,9 @@ type UnitsParams struct {
 	Limit   int     `json:"limit,omitempty"`
 	// Owner keeps only the units whose owner (Unit.Owner) is this GUID: a hunter's pet, a warlock's demon.
 	Owner GUID `json:"owner,omitempty"`
+	// Reaction fills each unit's Hostile (its faction's relation to the character), one DB read per faction
+	// template in view, cached for the session: only a caller that draws units by side pays it.
+	Reaction bool `json:"reaction,omitempty"`
 }
 
 // PartyMember is one party row.

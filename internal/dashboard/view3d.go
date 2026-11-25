@@ -17,6 +17,8 @@ package dashboard
 // Nothing here reads a game client file: a tile holds the walkable polygons the server's own mmaps carry.
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -30,6 +32,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/forever/serveclient"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/trace"
@@ -371,7 +374,7 @@ func scenePolygon(p navmesh.Polygon) bool {
 
 // scene answers the tiles, building once and serving the cache after that. Two requests for one key share one
 // build; at most view3DBuilds builds run at once, so a page cannot start an unbounded number of navmesh reads.
-func (s *view3DSceneService) scene(mapID uint32, tiles [][2]int) (body []byte, errText string) {
+func (s *view3DSceneService) scene(ctx context.Context, mapID uint32, tiles [][2]int) (body []byte, errText string) {
 	key := sceneKey(mapID, tiles)
 	s.mu.Lock()
 	if b, ok := s.m[key]; ok {
@@ -380,36 +383,75 @@ func (s *view3DSceneService) scene(mapID uint32, tiles [][2]int) (body []byte, e
 	}
 	if in := s.builds[key]; in != nil {
 		s.mu.Unlock()
-		<-in.done
+		if !waitClosed(ctx, in.done) {
+			return nil, view3DClientGone
+		}
 		return in.body, in.err
 	}
 	in := &view3DBuild{done: make(chan struct{})}
 	s.builds[key] = in
 	s.mu.Unlock()
 
-	s.sem <- struct{}{}
-	b, errText := s.buildScene(mapID, tiles)
-	<-s.sem
-
-	s.mu.Lock()
-	in.body, in.err = b, errText
-	delete(s.builds, key)
-	if b != nil && len(b) <= view3DCacheEntryMax {
-		if _, ok := s.m[key]; !ok {
-			s.m[key] = b
-			s.order = append(s.order, key)
-			s.bytes += len(b)
-			for len(s.order) > view3DCacheEntries || s.bytes > view3DCacheBytes {
-				old := s.order[0]
-				s.bytes -= len(s.m[old])
-				delete(s.m, old)
-				s.order = s.order[1:]
+	// The in-flight slot and the answer are released however this returns, a panic included: a build that panics must
+	// not leave its key in flight (every later request for it would wait on a channel nothing closes). The panic goes
+	// on to the server's own recover, so only this request sees it.
+	publish := func() {
+		s.mu.Lock()
+		in.body, in.err = body, errText
+		delete(s.builds, key)
+		if body != nil && len(body) <= view3DCacheEntryMax {
+			if _, ok := s.m[key]; !ok {
+				s.m[key] = body
+				s.order = append(s.order, key)
+				s.bytes += len(body)
+				for len(s.order) > view3DCacheEntries || s.bytes > view3DCacheBytes {
+					old := s.order[0]
+					s.bytes -= len(s.m[old])
+					delete(s.m, old)
+					s.order = s.order[1:]
+				}
 			}
 		}
+		close(in.done)
+		s.mu.Unlock()
 	}
-	close(in.done)
-	s.mu.Unlock()
-	return b, errText
+	defer func() {
+		if r := recover(); r != nil {
+			body, errText = nil, fmt.Sprintf("the scene build failed: %v", r)
+			publish()
+			panic(r)
+		}
+		publish()
+	}()
+	if !takeWithCtx(ctx, s.sem) {
+		return nil, view3DClientGone
+	}
+	defer func() { <-s.sem }()
+	return s.buildScene(mapID, tiles)
+}
+
+// view3DClientGone is the answer a waiting request gets when its client went away before the shared build or read it
+// was waiting on landed: nothing is read or written for it, and the build goes on for the requests still waiting.
+const view3DClientGone = "the client went away before the answer was ready"
+
+// waitClosed waits for done, or for the request's own client to go away. It reports whether done closed.
+func waitClosed(ctx context.Context, done <-chan struct{}) bool {
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
+// takeWithCtx takes one permit of a bounded semaphore, or gives up when the request's client goes away.
+func takeWithCtx(ctx context.Context, sem chan struct{}) bool {
+	select {
+	case sem <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // view3DReplayService limits and caches replay reads: at most view3DReplayReads run at once, and the last
@@ -438,7 +480,7 @@ func newView3DReplayService() *view3DReplayService {
 
 // read answers one replay body, running load under the read limit unless the key is cached. key names the
 // trace file's identity (name, size, modification time), so a changed file is read again.
-func (s *view3DReplayService) read(key string, load func() ([]byte, string)) ([]byte, string) {
+func (s *view3DReplayService) read(ctx context.Context, key string, load func() ([]byte, string)) (body []byte, errText string) {
 	s.mu.Lock()
 	if b, ok := s.m[key]; ok {
 		s.mu.Unlock()
@@ -446,36 +488,50 @@ func (s *view3DReplayService) read(key string, load func() ([]byte, string)) ([]
 	}
 	if in := s.loads[key]; in != nil {
 		s.mu.Unlock()
-		<-in.done
+		if !waitClosed(ctx, in.done) {
+			return nil, view3DClientGone
+		}
 		return in.body, in.err
 	}
 	in := &view3DReplayLoad{done: make(chan struct{})}
 	s.loads[key] = in
 	s.mu.Unlock()
 
-	s.sem <- struct{}{}
-	b, errText := load()
-	<-s.sem
-
-	s.mu.Lock()
-	in.body, in.err = b, errText
-	delete(s.loads, key)
-	if b != nil && len(b) <= view3DReplayCacheEntryMax {
-		if _, ok := s.m[key]; !ok {
-			s.m[key] = b
-			s.order = append(s.order, key)
-			s.bytes += len(b)
-			for len(s.order) > view3DReplayCacheEntries || s.bytes > view3DReplayCacheBytes {
-				old := s.order[0]
-				s.bytes -= len(s.m[old])
-				delete(s.m, old)
-				s.order = s.order[1:]
+	// As the scene's: the in-flight slot and the answer are released however this returns, a panic in the loader
+	// included (the loader runs the trace's parser, the one place a malformed record could still surprise it).
+	publish := func() {
+		s.mu.Lock()
+		in.body, in.err = body, errText
+		delete(s.loads, key)
+		if body != nil && len(body) <= view3DReplayCacheEntryMax {
+			if _, ok := s.m[key]; !ok {
+				s.m[key] = body
+				s.order = append(s.order, key)
+				s.bytes += len(body)
+				for len(s.order) > view3DReplayCacheEntries || s.bytes > view3DReplayCacheBytes {
+					old := s.order[0]
+					s.bytes -= len(s.m[old])
+					delete(s.m, old)
+					s.order = s.order[1:]
+				}
 			}
 		}
+		close(in.done)
+		s.mu.Unlock()
 	}
-	close(in.done)
-	s.mu.Unlock()
-	return b, errText
+	defer func() {
+		if r := recover(); r != nil {
+			body, errText = nil, fmt.Sprintf("the replay read failed: %v", r)
+			publish()
+			panic(r)
+		}
+		publish()
+	}()
+	if !takeWithCtx(ctx, s.sem) {
+		return nil, view3DClientGone
+	}
+	defer func() { <-s.sem }()
+	return load()
 }
 
 // replayService is the replay limit and cache in force.
@@ -505,7 +561,7 @@ func serveView3DScene(w http.ResponseWriter, r *http.Request, p *Poller) {
 		jsonError(w, http.StatusBadRequest, "%s", why)
 		return
 	}
-	b, errText := svc.scene(uint32(mapID), tiles)
+	b, errText := svc.scene(r.Context(), uint32(mapID), tiles)
 	if b == nil {
 		jsonError(w, http.StatusServiceUnavailable, "scene: %s", errText)
 		return
@@ -657,6 +713,11 @@ func powerTypeName(t uint8) string {
 func liveUnits(f *liveFrameCache) []view3DUnit {
 	out := make([]view3DUnit, 0, len(f.units))
 	for _, u := range f.units {
+		// Kind is the side the marker is drawn in: the agent, its party, a hostile, anything else neutral. A player
+		// outside the party is neutral (another player in the world is not the party); a creature is hostile only
+		// when its faction says so (units' reaction), so a friendly NPC or a critter is neutral, and a creature whose
+		// reaction the server could not tell stays hostile (the view keeps its old reading rather than inventing a
+		// friendship).
 		kind := "neutral"
 		switch {
 		case strings.EqualFold(u.Type, "player") && f.lead != "" && strings.EqualFold(string(u.GUID), f.lead):
@@ -664,9 +725,9 @@ func liveUnits(f *liveFrameCache) []view3DUnit {
 		case strings.EqualFold(u.Type, "player") && f.party[strings.ToUpper(string(u.GUID))]:
 			kind = "party"
 		case strings.EqualFold(u.Type, "creature"):
-			kind = "hostile"
-		case strings.EqualFold(u.Type, "player"):
-			kind = "party"
+			if u.Hostile == nil || *u.Hostile {
+				kind = "hostile"
+			}
 		}
 		unit := view3DUnit{ID: string(u.GUID), Name: u.Name, Kind: kind, Level: int(u.Level),
 			X: float64(u.X), Y: float64(u.Y), Z: float64(u.Z), Facing: float64(u.O),
@@ -894,8 +955,15 @@ func serveView3DReplay(w http.ResponseWriter, r *http.Request, p *Poller) {
 		jsonError(w, http.StatusUnprocessableEntity, "run trace: %v", err)
 		return
 	}
-	key := fmt.Sprintf("%s|%d|%d", name, st.Size(), st.ModTime().UnixNano())
-	body, errText := p.replayService().read(key, func() ([]byte, string) {
+	// The key names the plan's identity too: the body carries the plan's planned path, so a plan edited, removed or
+	// added after a request must be read again, not answered from the cache the old plan filled.
+	planID, plan, planWhy := p.replayPlan(replayHeaderPlan(f))
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		jsonError(w, http.StatusUnprocessableEntity, "run trace: %v", err)
+		return
+	}
+	key := fmt.Sprintf("%s|%d|%d|%s", name, st.Size(), st.ModTime().UnixNano(), planID)
+	body, errText := p.replayService().read(r.Context(), key, func() ([]byte, string) {
 		data, err := io.ReadAll(io.LimitReader(f, view3DReplayMax+1))
 		if err != nil {
 			return nil, err.Error()
@@ -907,7 +975,7 @@ func serveView3DReplay(w http.ResponseWriter, r *http.Request, p *Poller) {
 		if err != nil {
 			return nil, err.Error()
 		}
-		b, err := json.Marshal(buildReplayAnswer(name, tr))
+		b, err := json.Marshal(buildReplayAnswer(name, tr, plan, planWhy))
 		if err != nil {
 			return nil, err.Error()
 		}
@@ -920,9 +988,99 @@ func serveView3DReplay(w http.ResponseWriter, r *http.Request, p *Poller) {
 	writeJSON(w, body)
 }
 
-// buildReplayAnswer turns a parsed trace into the replay contract: evenly thinned frames, the party's names,
-// the chat and the run's events.
-func buildReplayAnswer(name string, tr *trace.File) view3DAnswer {
+// replayHeaderPlan reads the plan name a trace's header record carries, from an open file, without parsing the whole
+// trace: the replay's cache key needs it first. "" when the first line is not a readable header (the full read then
+// reports why).
+func replayHeaderPlan(f *os.File) string {
+	line, err := bufio.NewReader(io.LimitReader(f, 64<<10)).ReadString('\n')
+	if err != nil && line == "" {
+		return ""
+	}
+	var head struct {
+		Kind string `json:"k"`
+		Plan string `json:"plan"`
+	}
+	if json.Unmarshal([]byte(line), &head) != nil || head.Kind != "header" {
+		return ""
+	}
+	return head.Plan
+}
+
+// replayPlan is the plan a record names, when the dashboard's folders hold it, with an identity for the replay cache
+// key (the plan's source path, hash and modification time, or its load error) so a plan edited on disk is read again.
+// A record without a plan name draws no path and says nothing (it never carried one); a plan this dashboard cannot
+// read is a note, so a missing path is explained instead of silently absent.
+func (p *Poller) replayPlan(name string) (id string, plan *dungeon.Plan, why string) {
+	if p == nil || p.plans == nil || name == "" {
+		return "none", nil, ""
+	}
+	plan, _, src, loadErr := p.plans.lookup(p.plans.dirs, name, "dashboard")
+	if plan == nil {
+		return "none|" + src.Path + "|" + loadErr, nil, fmt.Sprintf("the plan %q is not readable here: %s", name, loadErr)
+	}
+	return "plan|" + src.Role + "|" + src.Path + "|" + src.SHA256 + "|" + src.Modified, plan, ""
+}
+
+// replayPaths is each leg's planned path as the plan writes it: the approach point, its waypoints in order, and the
+// leg's target. The start is the previous leg's target (the plan's entrance for the first leg), which is where the
+// party stands when the leg begins.
+func replayPaths(plan *dungeon.Plan) [][][3]float64 {
+	if plan == nil || len(plan.Legs) == 0 {
+		return nil
+	}
+	out := make([][][3]float64, len(plan.Legs))
+	at := [3]float64{float64(plan.Entrance.X), float64(plan.Entrance.Y), float64(plan.Entrance.Z)}
+	for i := range plan.Legs {
+		leg := &plan.Legs[i]
+		path := [][3]float64{at}
+		for _, via := range leg.Via {
+			path = append(path, [3]float64{float64(via.X), float64(via.Y), float64(via.Z)})
+		}
+		path = append(path, [3]float64{float64(leg.To.X), float64(leg.To.Y), float64(leg.To.Z)})
+		out[i] = path
+		at = path[len(path)-1]
+	}
+	return out
+}
+
+// replayLegAt is the leg a record is on at t seconds: the index of the latest leg-start event at or before t, -1
+// before the first one (the run is still in its prepare states).
+func replayLegAt(starts []replayLegStart, t float64) int {
+	leg := -1
+	for _, st := range starts {
+		if st.t > t {
+			break
+		}
+		leg = st.leg
+	}
+	return leg
+}
+
+type replayLegStart struct {
+	t   float64
+	leg int
+}
+
+// replayLegStarts reads the run's leg-start events ("leg", phase start), in order.
+func replayLegStarts(tr *trace.File) []replayLegStart {
+	var out []replayLegStart
+	for _, ev := range tr.Events {
+		if ev.Ev != "leg" || fmt.Sprint(ev.D["phase"]) != "start" {
+			continue
+		}
+		switch v := ev.D["leg"].(type) {
+		case float64:
+			out = append(out, replayLegStart{t: float64(ev.T) / 1000, leg: int(v)})
+		case int:
+			out = append(out, replayLegStart{t: float64(ev.T) / 1000, leg: v})
+		}
+	}
+	return out
+}
+
+// buildReplayAnswer turns a parsed trace into the replay contract: evenly thinned frames, the party's names, the
+// chat, the run's events, and each frame's planned path when the record names a plan this dashboard has.
+func buildReplayAnswer(name string, tr *trace.File, plan *dungeon.Plan, planWhy string) view3DAnswer {
 	mapID := tr.Header.Map
 	ans := view3DAnswer{Mode: "replay", Map: &mapID, Duration: tr.Seconds()}
 	if tr.Header.StartUnix > 0 {
@@ -954,11 +1112,16 @@ func buildReplayAnswer(name string, tr *trace.File) view3DAnswer {
 	if len(frames) > view3DReplayFrames {
 		step = (len(frames) + view3DReplayFrames - 1) / view3DReplayFrames
 	}
+	paths := replayPaths(plan)
+	starts := replayLegStarts(tr)
 	for i, f := range frames {
 		if step > 1 && i%step != 0 && i != len(frames)-1 {
 			continue
 		}
 		fr := view3DFrame{T: float64(f.T) / 1000, Units: make([]view3DUnit, 0, len(f.Bots)+len(f.Mobs))}
+		if leg := replayLegAt(starts, fr.T); leg >= 0 && leg < len(paths) {
+			fr.Path = paths[leg]
+		}
 		for _, b := range f.Bots {
 			if b.NoPos {
 				continue
@@ -968,10 +1131,14 @@ func buildReplayAnswer(name string, tr *trace.File) view3DAnswer {
 			if b.Lead || (lead != "" && key == lead) {
 				kind = "agent"
 			}
-			fr.Units = append(fr.Units, view3DUnit{ID: b.G, Name: names[key], Kind: kind, Class: roles[key],
+			unit := view3DUnit{ID: b.G, Name: names[key], Kind: kind, Class: roles[key],
 				X: float64(b.X), Y: float64(b.Y), Z: float64(b.Z), HP: int64(b.HP), MaxHP: int64(b.MaxHP),
 				Power: int64(b.Power), MaxPower: int64(b.MaxPow), Target: b.Target,
-				Dead: !b.Alive || b.State == "d"})
+				Dead: !b.Alive || b.State == "d"}
+			if b.Orient != nil {
+				unit.Facing = float64(*b.Orient)
+			}
+			fr.Units = append(fr.Units, unit)
 		}
 		for _, m := range f.Mobs {
 			if m.NP {
@@ -1005,6 +1172,9 @@ func buildReplayAnswer(name string, tr *trace.File) view3DAnswer {
 		ans.Events = ans.Events[len(ans.Events)-100:]
 	}
 	ans.Notes = traceNotes(tr)
+	if planWhy != "" {
+		ans.Notes = append(ans.Notes, planWhy+"; the planned path is not drawn")
+	}
 	return ans
 }
 

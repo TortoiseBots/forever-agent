@@ -94,10 +94,12 @@ Lists units in view, nearest first.
 | `name` | string | — | Case-insensitive substring of the unit's name. |
 | `hostile` | bool | unset (both) | `true` keeps only units hostile to the character, `false` only non-hostile ones. |
 | `owner` | GUID | empty | Keep only units whose `owner` is this GUID (a hunter's pet, a warlock's demon). |
+| `reaction` | bool | `false` | Fill each row's `hostile` (see below). One faction read per faction template in view, cached for the session. |
 | `limit` | int | `100` | Page size; a negative limit is refused. |
 
 The `hostile` filter compares the mob's faction template with the character's own faction; the server answer
-is fetched once and cached for the session, so the first filtered call is slower than later ones.
+is fetched once and cached for the session, so the first filtered call is slower than later ones. `reaction`
+pays the same read without filtering, to fill each row's `hostile` field (the 3D view draws its sides from it).
 
 Order is distance, then GUID. A row is a `unit` row:
 
@@ -112,6 +114,7 @@ Order is distance, then GUID. A row is a `unit` row:
 | `auras`, `cc` | Every aura still up (`spell_id`, `caster`, `stacks`, `remaining_ms`; `0` for no duration), and `cc` present and `true` while one crowd-controls the unit. |
 | `mount_display_id` | Non-zero while the unit is mounted. |
 | `owner`, `owner_kind` | Owner and which field named it (`summoned_by`, `created_by`, `charmed_by`). |
+| `hostile` | The unit's reaction to the character (with `reaction`): `true` hostile, `false` not. Absent when the caller did not ask, or when the server holds no faction template for it. |
 | `pet`, `pet_number`, `created_by_spell`, `creature_family` | The unit's own pet, and a pet's own fields. |
 
 ```json

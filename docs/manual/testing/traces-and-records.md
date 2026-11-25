@@ -53,7 +53,7 @@ The kinds, in the order a run writes them:
 | `header` | once, first | scope, agent version and build, start time, sample interval, size caps, and the agent's own `mode`, `plan`, `options`, `meta`; also the capabilities (`caps`) the producer records, such as `facing`, `moving`, `threat`, `orders`, `walks`, `partylist` |
 | `party` | once per member, when first seen | guid, name, class, role, level, leader flag |
 | `mobs` | once per hostile, when first seen | guid, entry, name |
-| `frame` | about once a second | the bots (health, power, position, movement, order, casting, facing, auras) and the mobs (health, position, threat list); a player run's frames also carry its own character in `self` (`x`, `y`, `z`, `map`, `al`), so the distance from the party to its leader is in the record |
+| `frame` | about once a second | the bots (health, power, position, movement, order, casting, the facing `fa` and the orientation `o`, auras) and the mobs (health, position, threat list); a player run's frames also carry its own character in `self` (`x`, `y`, `z`, `map`, `al`), so the distance from the party to its leader is in the record |
 | `event` | when it happens | `ev` plus the event's own fields: orders, rest gates, walks, pulls, deaths, boss events |
 | `end` | once, last | `reason` and the counters |
 | `oracle` | after the end | one record per check (the trace scorer's verdicts) |

@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -191,10 +192,10 @@ func TestView3DSceneSharesOneBuild(t *testing.T) {
 		err  string
 	}
 	first := make(chan res, 1)
-	go func() { b, e := svc.scene(1, [][2]int{{31, 31}}); first <- res{b, e} }()
+	go func() { b, e := svc.scene(context.Background(), 1, [][2]int{{31, 31}}); first <- res{b, e} }()
 	<-src.entered
 	second := make(chan res, 1)
-	go func() { b, e := svc.scene(1, [][2]int{{31, 31}}); second <- res{b, e} }()
+	go func() { b, e := svc.scene(context.Background(), 1, [][2]int{{31, 31}}); second <- res{b, e} }()
 	time.Sleep(20 * time.Millisecond) // let the second request join the build in flight
 	close(src.gate)
 	a, b := <-first, <-second
@@ -208,7 +209,7 @@ func TestView3DSceneSharesOneBuild(t *testing.T) {
 		t.Fatalf("%d mesh reads for one tile set, want 1 (the two requests share the build)", calls)
 	}
 	// And the cache answers a third request without reading the mesh at all.
-	if body, errText := svc.scene(1, [][2]int{{31, 31}}); errText != "" || string(body) != string(a.body) {
+	if body, errText := svc.scene(context.Background(), 1, [][2]int{{31, 31}}); errText != "" || string(body) != string(a.body) {
 		t.Fatalf("after the build: %q", errText)
 	}
 	src.mu.Lock()
@@ -528,7 +529,7 @@ func TestView3DReplayReadsAreLimitedAndCached(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if b, errText := s.read(key, load(key)); b == nil || errText != "" {
+			if b, errText := s.read(context.Background(), key, load(key)); b == nil || errText != "" {
 				t.Errorf("%s: %q %q", key, b, errText)
 			}
 		}()
@@ -549,7 +550,7 @@ func TestView3DReplayReadsAreLimitedAndCached(t *testing.T) {
 	for i := 0; i < 8; i++ {
 		go func() {
 			defer wg.Done()
-			if _, errText := s.read("shared", load("shared")); errText != "" {
+			if _, errText := s.read(context.Background(), "shared", load("shared")); errText != "" {
 				t.Errorf("shared: %q", errText)
 			}
 		}()
@@ -602,5 +603,228 @@ func TestTileGridMath(t *testing.T) {
 	}
 	if r, c := tileOf(x1-1, y1-1); r != 30 || c != 31 {
 		t.Fatalf("the far corner is %d:%d", r, c)
+	}
+}
+
+// A build that panics releases its key: the next request builds again instead of waiting on a channel nothing closes,
+// and the requests that were waiting on it are woken with an error (never left blocked).
+//
+// Mutation this test catches: the in-flight slot cleaned up only on the success path (the key stays in flight and
+// every later request for it waits forever).
+func TestView3DScenePanicReleasesTheKey(t *testing.T) {
+	src := &panickingScene{entered: make(chan struct{}), gate: make(chan struct{})}
+	svc := newView3DSceneService(src, "x")
+	leaderDone := make(chan struct{})
+	go func() {
+		defer close(leaderDone)
+		defer func() { _ = recover() }() // the server's own recover, in miniature
+		src.panicNow = true
+		_, _ = svc.scene(context.Background(), 1, [][2]int{{31, 31}})
+	}()
+	<-src.entered
+	waiter := make(chan string, 1)
+	go func() {
+		_, e := svc.scene(context.Background(), 1, [][2]int{{31, 31}})
+		waiter <- e
+	}()
+	time.Sleep(20 * time.Millisecond) // let the second request join the build in flight
+	close(src.gate)
+	<-leaderDone
+	select {
+	case e := <-waiter:
+		if !strings.Contains(e, "failed") {
+			t.Fatalf("the waiting request answered %q, want the build's failure", e)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the waiting request was never woken")
+	}
+	// The key is free again: a later request builds.
+	src.panicNow = false
+	if body, errText := svc.scene(context.Background(), 1, [][2]int{{31, 31}}); errText != "" || len(body) == 0 {
+		t.Fatalf("after the panic: %q %q", body, errText)
+	}
+}
+
+// panickingScene is a scene source that panics while told to and answers one square otherwise.
+type panickingScene struct {
+	entered  chan struct{}
+	gate     chan struct{}
+	once     sync.Once
+	panicNow bool
+}
+
+func (p *panickingScene) Polygons(_ uint32, _, _, _, _ float32) ([]navmesh.Polygon, bool, error) {
+	p.once.Do(func() {
+		close(p.entered)
+		<-p.gate
+	})
+	if p.panicNow {
+		panic("scripted scene panic")
+	}
+	return []navmesh.Polygon{squarePoly(600, 600, 1, 40)}, false, nil
+}
+
+// A waiting request whose client goes away stops waiting instead of blocking on a build that may take long.
+//
+// Mutation this test catches: a wait on the shared channel with no context (a browser that closed its tab holds the
+// server goroutine until the build lands).
+func TestView3DSceneWaiterNoticesACancelledClient(t *testing.T) {
+	src := &blockingScene{entered: make(chan struct{}), gate: make(chan struct{})}
+	svc := newView3DSceneService(src, "x")
+	leader := make(chan struct{})
+	go func() {
+		close(leader)
+		_, _ = svc.scene(context.Background(), 1, [][2]int{{31, 31}})
+	}()
+	<-leader
+	<-src.entered
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	began := time.Now()
+	if _, errText := svc.scene(ctx, 1, [][2]int{{31, 31}}); errText != view3DClientGone {
+		t.Fatalf("a cancelled waiter answered %q, want %q", errText, view3DClientGone)
+	}
+	if waited := time.Since(began); waited > time.Second {
+		t.Fatalf("the cancelled waiter held %s", waited)
+	}
+	close(src.gate)
+}
+
+// TestView3DLiveSides: the marker's side comes from what the answer says, never from a guess. A player outside the
+// party is neutral (not party); a creature is hostile only when its faction says so, so a friendly NPC is neutral; a
+// creature whose reaction the server could not tell stays hostile (the view's old reading, not an invented
+// friendship).
+//
+// Mutation this test catches: every player painted as party and every creature as hostile (the friendly NPC drawn as
+// an enemy and a passing player drawn as a party member).
+func TestView3DLiveSides(t *testing.T) {
+	yes, no := true, false
+	f := newLiveFrameCache(time.Now(), 389, []serveclient.Unit{
+		{GUID: "0x01", Type: "player", Name: "Tank"},
+		{GUID: "0x02", Type: "player", Name: "Mate"},
+		{GUID: "0x03", Type: "player", Name: "Stranger"},
+		{GUID: "0xA1", Type: "creature", Name: "Scorpid", Hostile: &yes},
+		{GUID: "0xA2", Type: "creature", Name: "Questgiver", Hostile: &no},
+		{GUID: "0xA3", Type: "creature", Name: "Unknown"},
+	}, serveclient.Party{Members: []serveclient.PartyMember{{Name: "Tank", GUID: "0x01"}, {Name: "Mate", GUID: "0x02"}}}, true,
+		serveclient.CommanderResult{Card: &serveclient.CommanderCard{Members: []serveclient.CommanderMember{{Bot: "Tank", GUID: "0x01", Lead: true}}}}, true)
+	kinds := map[string]string{}
+	for _, u := range liveUnits(f) {
+		kinds[u.Name] = u.Kind
+	}
+	want := map[string]string{"Tank": "agent", "Mate": "party", "Stranger": "neutral",
+		"Scorpid": "hostile", "Questgiver": "neutral", "Unknown": "hostile"}
+	for name, kind := range want {
+		if kinds[name] != kind {
+			t.Errorf("%s is %q, want %q", name, kinds[name], kind)
+		}
+	}
+}
+
+// writeRecordWithPlan writes a record whose header names a plan and whose events start two legs, with the bots'
+// facing sampled.
+func writeRecordWithPlan(t *testing.T, root, name, planName string) string {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	lines := []string{
+		fmt.Sprintf(`{"v":1,"k":"header","run":%q,"src":"agent","t":0,"schema":"bt-trace","scope":"party","start_unix":1700000000,"map":389,"plan":%q,"caps":["facing"]}`, name, planName),
+		`{"v":1,"k":"party","run":"` + name + `","src":"agent","t":0,"g":"0x01","name":"Tank","lead":true,"class":"warrior"}`,
+		`{"v":1,"k":"frame","run":"` + name + `","src":"agent","t":0,"via":"session","bots":[{"g":"0x01","al":true,"st":"n","hp":100,"mhp":100,"x":1,"y":2,"z":3,"o":1.5}]}`,
+		`{"v":1,"k":"event","run":"` + name + `","src":"agent","t":0,"ev":"leg","leg":0,"name":"a","phase":"start"}`,
+		`{"v":1,"k":"frame","run":"` + name + `","src":"agent","t":800,"via":"session","bots":[{"g":"0x01","al":true,"st":"n","hp":100,"mhp":100,"x":5,"y":6,"z":7,"o":0.25}]}`,
+		`{"v":1,"k":"event","run":"` + name + `","src":"agent","t":900,"ev":"leg","leg":1,"name":"b","phase":"start"}`,
+		`{"v":1,"k":"frame","run":"` + name + `","src":"agent","t":1600,"via":"session","bots":[{"g":"0x01","al":true,"st":"n","hp":100,"mhp":100,"x":11,"y":12,"z":13,"o":0}]}`,
+		`{"v":1,"k":"end","run":"` + name + `","src":"agent","t":1600,"seconds":1.6}`,
+	}
+	if err := os.WriteFile(filepath.Join(dir, name+".jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// TestView3DReplayDrawsTheLegsPathAndFacing: a record that names a plan draws the leg it is on's planned path (the
+// plan's own points: the previous leg's target, its waypoints, its target), and each frame carries the bots' facing
+// as the trace sampled it.
+//
+// Mutation these tests catch: a replay with no planned path (the frames' path left empty although the record names a
+// plan the dashboard has), a path that ignores the leg starts (every frame drawn with the first leg), and a frame
+// whose facing is dropped.
+func TestView3DReplayDrawsTheLegsPathAndFacing(t *testing.T) {
+	root := t.TempDir()
+	plans := t.TempDir()
+	plan := `{"version":1,"name":"test_dungeon","map":389,
+		"entrance":{"x":0,"y":0,"z":0},
+		"legs":[
+			{"name":"a","to":{"x":10,"y":20,"z":30},"via":[{"x":4,"y":5,"z":6},{"x":7,"y":8,"z":9}],
+			 "steps":[{"wait_for":{"hostiles_gone":{"radius":10}}}]},
+			{"name":"b","to":{"x":40,"y":50,"z":60},"steps":[{"wait_for":{"hostiles_gone":{"radius":10}}}]}]}`
+	if err := os.WriteFile(filepath.Join(plans, "test_dungeon.json"), []byte(plan), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeRecordWithPlan(t, root, "run-plan", "test_dungeon")
+	p := NewPoller(Options{TestsDir: t.TempDir(), ConfigDir: t.TempDir(), RecordsDir: root, PlansDirs: []string{plans}})
+	h := Handler(p, "", nil)
+	code, body := getJSON(t, h, "/api/view3d/replay/run-plan")
+	if code != http.StatusOK {
+		t.Fatalf("%d: %s", code, body)
+	}
+	var rep view3DAnswer
+	if err := json.Unmarshal(body, &rep); err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Frames) != 3 {
+		t.Fatalf("frames %d", len(rep.Frames))
+	}
+	if len(rep.Notes) != 0 {
+		t.Fatalf("the replay left notes: %v", rep.Notes)
+	}
+	wantLeg0 := [][3]float64{{0, 0, 0}, {4, 5, 6}, {7, 8, 9}, {10, 20, 30}}
+	for i := range 2 {
+		got := rep.Frames[i].Path
+		if len(got) != len(wantLeg0) {
+			t.Fatalf("frame %d path %v, want %v", i, got, wantLeg0)
+		}
+		for j := range got {
+			if got[j] != wantLeg0[j] {
+				t.Fatalf("frame %d path point %d is %v, want %v", i, j, got[j], wantLeg0[j])
+			}
+		}
+	}
+	wantLeg1 := [][3]float64{{10, 20, 30}, {40, 50, 60}}
+	got := rep.Frames[2].Path
+	if len(got) != len(wantLeg1) || got[0] != wantLeg1[0] || got[1] != wantLeg1[1] {
+		t.Fatalf("the third frame's path %v, want the second leg %v", got, wantLeg1)
+	}
+	if f := rep.Frames[0].Units[0].Facing; f != 1.5 {
+		t.Fatalf("the first frame's facing %v, want 1.5", f)
+	}
+	if f := rep.Frames[1].Units[0].Facing; f != 0.25 {
+		t.Fatalf("the second frame's facing %v, want 0.25", f)
+	}
+
+	// The plan's identity is part of the replay's cache key: an edited plan is read again, not answered from the
+	// body the old one filled.
+	changed := `{"version":1,"name":"test_dungeon","map":389,
+		"entrance":{"x":0,"y":0,"z":0},
+		"legs":[
+			{"name":"a","to":{"x":10,"y":20,"z":31},"via":[{"x":4,"y":5,"z":6},{"x":7,"y":8,"z":9}],
+			 "steps":[{"wait_for":{"hostiles_gone":{"radius":10}}}]},
+			{"name":"b","to":{"x":40,"y":50,"z":60},"steps":[{"wait_for":{"hostiles_gone":{"radius":10}}}]}]}`
+	if err := os.WriteFile(filepath.Join(plans, "test_dungeon.json"), []byte(changed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, body = getJSON(t, h, "/api/view3d/replay/run-plan")
+	if code != http.StatusOK {
+		t.Fatalf("after the plan change: %d %s", code, body)
+	}
+	var again view3DAnswer
+	if err := json.Unmarshal(body, &again); err != nil {
+		t.Fatal(err)
+	}
+	if got := again.Frames[0].Path; len(got) == 0 || got[len(got)-1] != [3]float64{10, 20, 31} {
+		t.Fatalf("the edited plan's path %v was not drawn (the cached body answered)", got)
 	}
 }

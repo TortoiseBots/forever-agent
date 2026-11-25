@@ -70,10 +70,14 @@ status line instead of showing an empty scene.
 |---|---|
 | Yellow capsule, wedge, name and health bar | The agent's own character (the camera follows it) |
 | Blue capsules | Its party members |
-| Red capsules | Hostile creatures (the creatures the serve's `units` answer holds within 100 yards) |
-| Grey capsules | Anything else (a data feed may mark a unit neutral) |
+| Red capsules | Hostile creatures (the creatures the serve's `units` answer holds within 100 yards, whose faction is hostile to the character; a creature whose faction the server could not name is drawn hostile) |
+| Grey capsules | Anything else: a friendly creature or critter, and a player outside the party |
 | Line from the agent | The agent's current target |
-| Green line on the ground | The planned path, when the frames carry one |
+| Green line on the ground | The planned path of the leg the run is on, in a replay of a record whose header names a plan the dashboard can read (the plan's own points: the leg's approach point, its waypoints, its target) |
+
+A replay frame also carries each bot's facing as the record sampled it, so the wedges turn with the characters; a
+record written before the orientation was sampled shows no facing, and neither does a unit whose facing was not in
+view. The record list names each record's map, map 0 included.
 
 The HTML panels in the corners show the agent's and the target's health and power bars, a cast bar when the frames
 carry a cast, the last party chat lines and the agent's last events. Every name is shown as text: a name that holds
@@ -96,7 +100,10 @@ markup is displayed exactly as it came.
   is going.
 * Terrain is loaded around the focus, 49 tiles at a time (about 3.4 km a side), and dropped as the agent moves; the
   open world is far too big to load whole.
-* The live view shows the units the serve's `units` answer holds (within 100 yards of the character); a unit farther
-  away appears when it comes in range.
+* The live view shows the units the serve's `units` answer holds (within 100 yards of the character, asked with
+  `reaction` so each creature is drawn hostile or neutral by its faction); a unit farther away appears when it comes
+  in range.
+* The planned path is the plan's own polyline, not the navmesh route the run walked: it shows where the leg is meant to
+  go, never where the party actually went.
 * One scene request carries at most 240,000 triangles; a very busy area is cut to that and the page says the mesh was
   cut.

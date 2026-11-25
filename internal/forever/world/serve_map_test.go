@@ -215,3 +215,61 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// TestServeUnitsReaction is the 3D view's reading: with `reaction` each unit carries its faction's relation to the
+// character (the mob true, the character and its mate false), and a faction the server cannot tell leaves the field
+// out instead of guessing. Without the flag no row carries it (the lookup is not paid).
+//
+// Mutation this test catches: a reaction that is always filled from the hostile filter's table (a unit outside the
+// filter has no reading), and one that guesses a missing template.
+func TestServeUnitsReaction(t *testing.T) {
+	s, _ := newMapSession(t)
+	answerFactions(t, s)
+	units, err := s.serveUnits(serveUnitsParams{Reaction: true})
+	if err != nil {
+		t.Fatalf("units: %v", err)
+	}
+	got := map[GUID]*bool{}
+	for _, u := range units {
+		got[u.GUID] = u.Hostile
+	}
+	if h := got[GUID(mapMob)]; h == nil || !*h {
+		t.Fatalf("the mob's reaction is %v, want hostile", h)
+	}
+	if h := got[GUID(mapSelf)]; h == nil || *h {
+		t.Fatalf("the character's reaction is %v, want not hostile", h)
+	}
+	// Without the flag nothing pays the lookup: no row carries a reaction.
+	s2, _ := newMapSession(t) // no faction answers at all: the flag would have to fail
+	plain, err := s2.serveUnits(serveUnitsParams{})
+	if err != nil {
+		t.Fatalf("units without the flag: %v", err)
+	}
+	for _, u := range plain {
+		if u.Hostile != nil {
+			t.Fatalf("a row without `reaction` carries a reaction: %+v", u)
+		}
+	}
+	// A template the server does not hold is unknown: that row's field is left out, and the call still answers.
+	s3, _ := newMapSession(t)
+	go func() {
+		dbAnswer(t, s3, tables.TableFactionTemplate, 3, tables.StatusValid, hostileRecord(1|2, 2, 0))
+		dbAnswer(t, s3, tables.TableFactionTemplate, 29, tables.StatusInvalid, nil)
+	}()
+	unknown, err := s3.serveUnits(serveUnitsParams{Reaction: true})
+	if err != nil {
+		t.Fatalf("units with an unanswerable faction template: %v", err)
+	}
+	for _, u := range unknown {
+		switch GUID(u.GUID) {
+		case GUID(mapMob):
+			if u.Hostile != nil {
+				t.Fatalf("an unanswerable template produced a reaction: %+v", u)
+			}
+		case GUID(mapSelf):
+			if u.Hostile == nil || *u.Hostile {
+				t.Fatalf("the character's answered reaction is %v, want not hostile", u.Hostile)
+			}
+		}
+	}
+}
