@@ -173,9 +173,9 @@ func (c *Client) RunDecisions(ctx context.Context, target string, since int, has
 // follows next=, asks never more than the command allows and stops on more=no, on a page that brought no row, or at
 // decisionsMaxPages (Truncated then says so).
 //
-// Every page must agree with the protocol, or the pull is refused rather than written: the header repeats the cursor
-// asked for, next= is the newest row read (and the cursor asked for when no row came back), a later page starts above
-// the cursor, and the run, capture, leader and plan are the ones the first page named. A page that breaks one of
+// Every page must agree with the protocol, or the pull is refused rather than written: a page asked for rows above a
+// cursor repeats that cursor, next= is the newest row read (and the cursor asked for when no row came back), a later
+// page starts above the cursor, and the run, capture, leader and plan are the ones the first page named. A page that breaks one of
 // these would duplicate, drop or mix rows in a file that otherwise looks whole.
 func (c *Client) PullDecisions(ctx context.Context, target string, since int, hasSince bool, limit int) (DecisionsPull, error) {
 	pull := DecisionsPull{}
@@ -186,7 +186,9 @@ func (c *Client) PullDecisions(ctx context.Context, target string, since int, ha
 		if err != nil {
 			return pull, err
 		}
-		if rep.Header.Since != cursor {
+		// A page that was asked for rows above a cursor repeats that cursor; the first page of a pull that asked for
+		// none has no cursor to compare (the module answers its own window).
+		if hasCursor && rep.Header.Since != cursor {
 			return pull, fmt.Errorf("%w: the page says since=%d, the pull asked since=%d", ErrBadReport, rep.Header.Since, cursor)
 		}
 		if page == 0 {
