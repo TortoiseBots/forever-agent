@@ -889,3 +889,106 @@ func TestMoverReportsTheSampleSamplesNames(t *testing.T) {
 		t.Fatalf("the sample moved the mover's belief to %.2f %.2f %.2f", x, y, z)
 	}
 }
+
+// TestMoverSettleTeleportKeepsTheFirstOrigin: a real relocation followed by a small correction before the leg looks
+// at the flag is still a move, not a re-grounding (the second update must not replace the first one's origin).
+func TestMoverSettleTeleportKeepsTheFirstOrigin(t *testing.T) {
+	m := &Mover{walking: true}
+	m.X, m.Y, m.Z = 100, 100, 10
+	m.noteTeleport()
+	m.X, m.Y, m.Z = 600, 100, 10 // the server moved the character 500 yd
+	m.noteTeleport()
+	m.Z = 9.5 // a near re-grounding on top of the move
+	if m.settleTeleport() {
+		t.Fatal("a relocation followed by a small correction settled as a correction in place")
+	}
+	m.X, m.Y, m.Z = 100, 100, 10
+	m.noteTeleport()
+	m.Z = 9.5
+	if !m.settleTeleport() {
+		t.Fatal("a lone re-grounding no longer settles as a correction in place")
+	}
+}
+
+// TestMoverInterruptedLegLeavesNoPendingTeleport: a teleport the leg has not settled when it ends (a wait that fails,
+// a cancelled context) must not outlive the leg. The next leg starts clean: a lone re-grounding on it settles as a
+// correction in place against its OWN origin, not against where the character stood before the abandoned leg's
+// teleport (the first-origin rule only holds inside one leg).
+func TestMoverInterruptedLegLeavesNoPendingTeleport(t *testing.T) {
+	errWait := errors.New("the wait failed")
+	type leg func(ctx context.Context, m *Mover) error
+	moveTo := func(ctx context.Context, m *Mover) error { return m.MoveTo(ctx, 1000, 2060, 50) }
+	walkPath := func(ctx context.Context, m *Mover) error {
+		return m.WalkPath(ctx, [][3]float32{{1000, 2030, 50}, {1000, 2060, 50}})
+	}
+	chaseTo := func(ctx context.Context, m *Mover) error {
+		return m.ChaseTo(ctx, ChaseGoal{
+			Dest:    func(time.Time) (float32, float32, float32) { return 1000, 2060, 50 },
+			Arrived: func(time.Time) bool { return false },
+		})
+	}
+	cases := []struct {
+		name   string
+		run    leg
+		cancel bool // end the leg by cancelling the context in the wait instead of failing the wait
+	}{
+		{"MoveTo wait error", moveTo, false},
+		{"MoveTo cancelled", moveTo, true},
+		{"WalkPath wait error", walkPath, false},
+		{"WalkPath cancelled", walkPath, true},
+		{"ChaseTo wait error", chaseTo, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			start := time.Date(2026, 11, 18, 12, 0, 0, 0, time.UTC)
+			sender := &fakeSender{now: start}
+			m := &Mover{
+				GUID:       wire.GUID{Low: 1},
+				Sender:     sender,
+				ClientTime: func(now time.Time) uint32 { return uint32(now.Sub(start).Milliseconds()) },
+				X:          1000, Y: 2000, Z: 50, RunSpeed: 7, Flags: FlagTouchingGround,
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			waits := 0
+			sender.onWait = func(time.Time) {
+				if waits++; waits == 2 {
+					m.SetTeleport(2000, 3000, 60, 1.5, 7) // the server moved the character 1400 yd
+					if c.cancel {
+						cancel()
+					}
+				}
+			}
+			if !c.cancel {
+				sender.waitErr = func(time.Time) error {
+					if waits >= 2 {
+						return errWait
+					}
+					return nil
+				}
+			}
+			err := c.run(ctx, m)
+			if err == nil || errors.Is(err, ErrTeleported) {
+				t.Fatalf("the interrupted leg returned %v, want the wait's error or the cancellation", err)
+			}
+			if m.teleported {
+				t.Fatal("the interrupted leg left its teleport pending")
+			}
+
+			// The next leg: the character stands where the server put it, and a lone re-grounding on that leg must
+			// be a correction in place.
+			sender.onWait, sender.waitErr = nil, nil
+			m.X, m.Y, m.Z = 2000, 3000, 60
+			waits = 0
+			sender.onWait = func(time.Time) {
+				if waits++; waits == 2 {
+					x, y, z, _ := m.Position()
+					m.SetTeleport(x, y, z-0.62, 0, 8)
+				}
+			}
+			if err := m.MoveTo(context.Background(), 2000, 3060, 60); err != nil {
+				t.Fatalf("the next leg met a stale teleport origin: %v", err)
+			}
+		})
+	}
+}

@@ -48,7 +48,8 @@ after exactly 33 bytes of the first. A reader that walks the retail 38-byte row 
 the rows) loses it. A second fixture pins the whole body's length (the packed GUID, the type, the id, the count, two
 rows and the flushed 11-bit length), so a row size change fails by arithmetic too.
 
-The purchase's success is only a learned-spell answer that names the spell; a refusal is
+The purchase's success is a learned-spell answer that names the spell or the rank it teaches (a castable list spell is
+learned by casting, and the answer's `Superceded` link names the bought one); a refusal is
 `SMSG_TRAINER_BUY_FAILED` with the core's two reasons (`unavailable`, `not_enough_money`, Trainer.h:47-51). A learned
 spell joins the session's spellbook (`session.known` and the report's copy), which is what the mount and cast checks
 read (`SMSG_SEND_KNOWN_SPELLS` still replaces the list when it arrives).
@@ -57,8 +58,8 @@ read (`SMSG_SEND_KNOWN_SPELLS` still replaces the list when it arrives).
 
 | Step | Sends | Reads back |
 |---|---|---|
-| `trainer` | selection, then talk and select the Trainer option (or `CMSG_TRAINER_LIST` for a trainer without a gossip menu) | the list: the greeting, one line per spell (`trainer spell 1234: 250 copper, level 5, skill 171/75`), then the step line with the entry, trainer id and count |
-| `learn spell=<id>` | `CMSG_TRAINER_BUY_SPELL` with the list's `TrainerID` | `SMSG_LEARNED_SPELLS` naming the spell within 3 s (success, and the spell enters the spellbook) or `SMSG_TRAINER_BUY_FAILED` with its reason (failure) |
+| `trainer` | selection, then talk and select the Trainer option (or `CMSG_TRAINER_LIST` for a trainer without a gossip menu); `option=<id>` selects one of several Trainer rows, the first otherwise | the list: the greeting, one line per spell (`trainer spell 1234: 250 copper, level 5, skill 171/75`), then the step line with the entry, trainer id and count |
+| `learn spell=<id>` | `CMSG_TRAINER_BUY_SPELL` with the list's `TrainerID` | `SMSG_LEARNED_SPELLS` naming the spell or the rank it teaches (`Superceded` = the bought spell) within 3 s (success, and the spell enters the spellbook) or `SMSG_TRAINER_BUY_FAILED` with its reason (failure) |
 
 `learn` refuses before sending when no `trainer` step opened this NPC's list, when the spell is not on it, or when the
 trainer id does not fit the packet's int32. It also refuses a spell the character already knows and a row whose
@@ -232,7 +233,8 @@ one `forever act` run per stage, `.gm on` for the setup lines only, and the serv
 
 1. **A trainer for the character's class.** `npc entry=<a starting-zone class trainer>`; `open` prints a menu with a
    trainer option; `trainer` prints the greeting and one line per spell, and the step line names the trainer id and
-   count. A menu without the option fails with "the menu has no trainer option" and sends nothing.
+   count. A menu without the option fails with "the menu has no trainer option" and sends nothing. A creature with
+   several Trainer rows: `trainer option=<the row's option id>` opens that row's list; without it the first is taken.
 2. **A trainer for another class.** `trainer` fails the same way; the core added no option for this character
    (Player.cpp:15169-15172).
 3. **One spell.** `learn spell=<a low-level spell from the list>`: the step line says the spell was learned within 3 s
