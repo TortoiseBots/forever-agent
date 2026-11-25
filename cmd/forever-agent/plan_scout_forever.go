@@ -55,6 +55,7 @@ type scoutForeverClient interface {
 	PathTo(context.Context, float32, float32, float32) (serveclient.Path, error)
 	WalkPath(context.Context, float32, float32, float32) (serveclient.Path, error)
 	WalkRay(context.Context, *[3]float32, float32, float32, float32) (serveclient.WalkRay, error)
+	LOS(context.Context, serveclient.LOSParams) (serveclient.LOS, error)
 }
 
 // planScoutOpenForever opens the v16 planner of the Forever draft; the tests replace it.
@@ -267,6 +268,7 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 		Walks:      map[int]planscout.WalkResult{},
 		Units:      map[int][]world.Unit{},
 		LOS:        map[planscout.LOSKey]bool{},
+		ServerLOS:  map[planscout.LOSKey]bool{},
 	}
 	// --max-minutes is the pass's overall ceiling: every wait, read and walk below inherits its deadline.
 	if d := scoutForeverCeilingDur(o); d > 0 {
@@ -287,6 +289,9 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 	readStops, noteStops := 0, false
 	rayNoted := false
 	losOK := true // false once the serve answers that it has no walk_ray method
+	// sight is the module's own los query beside the ray: a serve whose module build has no los command, or that
+	// refuses for rate, is said once and then the pass asks no more (the ray stands alone).
+	sight := scoutForeverSight{ok: true}
 	noteStopCount := func() {
 		if noteStops || len(stops) == 0 {
 			return
@@ -376,21 +381,28 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 				wu = append(wu, foreverWorldUnit(u))
 			}
 			data.Units[spot.Step] = wu
-			if !losOK {
-				continue
+			if losOK {
+				ok, rayErr := foreverWalkRayAt(ctx, client, spot, wu, data.LOS)
+				if r := ceiling(); r != "" {
+					return abort(r)
+				}
+				if rayErr != nil && !rayNoted {
+					rayNoted = true
+					data.Notes = append(data.Notes, fmt.Sprintf("live sight: a walk_ray read from %.1f %.1f %.1f failed (%v); its steps stay unanswered and the pass goes on",
+						spot.LOSPoint.X, spot.LOSPoint.Y, spot.LOSPoint.Z, rayErr))
+				}
+				if !ok {
+					losOK = false
+					data.Notes = append(data.Notes, "live sight: this serve has no walk_ray method; no sight answer was read")
+				}
 			}
-			ok, rayErr := foreverWalkRayAt(ctx, client, spot, wu, data.LOS)
-			if r := ceiling(); r != "" {
-				return abort(r)
-			}
-			if rayErr != nil && !rayNoted {
-				rayNoted = true
-				data.Notes = append(data.Notes, fmt.Sprintf("live sight: a walk_ray read from %.1f %.1f %.1f failed (%v); its steps stay unanswered and the pass goes on",
-					spot.LOSPoint.X, spot.LOSPoint.Y, spot.LOSPoint.Z, rayErr))
-			}
-			if !ok {
-				losOK = false
-				data.Notes = append(data.Notes, "live sight: this serve has no walk_ray method; no sight answer was read")
+			// The server's own sight answer for the pull's pack, read from the stand it pulls from: it is recorded
+			// beside the ray, never instead of it, so the report can show where the two disagree.
+			if err := foreverServerSightAt(ctx, client, spot, units, &data, &sight); err != nil {
+				if r := ceiling(); r != "" {
+					return abort(r)
+				}
+				return abort(err.Error())
 			}
 		}
 		readStops++
@@ -501,6 +513,68 @@ func foreverWalkRayAt(ctx context.Context, c scoutForeverClient, spot planscout.
 		}
 	}
 	return true, err
+}
+
+// scoutForeverSight is the module's own sight query over one live pass: whether the module answers it at all, and
+// whether a refusal or a failure has been said already. Both stop the pass asking again, so a server without the
+// command costs one line, not one per spot, and never a retry loop.
+type scoutForeverSight struct {
+	ok   bool
+	said bool
+}
+
+// foreverServerSightAt records the server's own sight answer between a pull row's stand and every unit of its target
+// pack that the live read saw. Each answer is stored beside the navmesh ray under the same LOSKey, so the report shows
+// both. A serve whose module build has no los command, or that refuses or fails the query (rate, no access, a lost
+// line), is said once in the report's notes and the pass asks no more, recording the ray alone from then on. An error is
+// returned only for the pass's own context ending.
+func foreverServerSightAt(ctx context.Context, c scoutForeverClient, spot planscout.LiveSpot, units []serveclient.Unit,
+	data *planscout.LiveData, sight *scoutForeverSight) error {
+	if !sight.ok || len(spot.TargetGuids) == 0 {
+		return nil
+	}
+	byLow := make(map[uint32]string, len(units))
+	for _, u := range units {
+		if u.Dead {
+			continue
+		}
+		low := uint32(u.GUID.Key() & 0xFFFFFF)
+		if _, seen := byLow[low]; !seen {
+			byLow[low] = string(u.GUID)
+		}
+	}
+	stand := fmt.Sprintf("%s,%s,%s", foreverNum(spot.LOSPoint.X), foreverNum(spot.LOSPoint.Y), foreverNum(spot.LOSPoint.Z))
+	give := func(note string) {
+		sight.ok = false
+		if !sight.said {
+			sight.said = true
+			data.Notes = append(data.Notes, note)
+		}
+	}
+	for _, t := range spot.TargetGuids {
+		guid, ok := byLow[t.Guid]
+		if !ok {
+			continue // a pack unit the live read never saw: there is no guid to name it by
+		}
+		ans, err := c.LOS(ctx, serveclient.LOSParams{A: stand, B: guid})
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			give(fmt.Sprintf("live sight: the server does not answer los (%v); the sight answers are the navmesh ray's alone", err))
+			return nil
+		}
+		if ans.Reason != "" {
+			wait := ""
+			if ans.RetryAfterMS > 0 {
+				wait = fmt.Sprintf(" (retry after %d ms)", ans.RetryAfterMS)
+			}
+			give(fmt.Sprintf("live sight: the module refused the los query for %s%s; the sight answers from here on are the navmesh ray's alone", ans.Reason, wait))
+			return nil
+		}
+		data.ServerLOS[planscout.LOSKey{Step: spot.Step, Guid: t.Guid}] = ans.Clear
+	}
+	return nil
 }
 
 // foreverWaitOnline waits for the session to be in the world.

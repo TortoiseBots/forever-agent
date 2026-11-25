@@ -192,3 +192,61 @@ func TestMergeLiveJoiners(t *testing.T) {
 		t.Fatalf("live_joiners: %+v", c)
 	}
 }
+
+// TestLiveLOSCheckServerBesideTheRay is the server's own sight answer (#259): the pull row's check carries it beside
+// the navmesh ray, the server's answer is the verdict where the two disagree, and the pass gets one summary note.
+func TestLiveLOSCheckServerBesideTheRay(t *testing.T) {
+	st := &StepResult{Step: 1}
+	targets := []uint32{100, 101}
+	live := LiveData{
+		LOS:       map[LOSKey]bool{{Step: 1, Guid: 100}: false, {Step: 1, Guid: 101}: false},
+		ServerLOS: map[LOSKey]bool{{Step: 1, Guid: 100}: true, {Step: 1, Guid: 101}: false},
+	}
+	c := liveLOSCheck(st, targets, live)
+	if c.Data["answered"] != 2 || c.Data["in_sight"] != 0 {
+		t.Fatalf("ray data %v", c.Data)
+	}
+	if c.Data["server_answered"] != 2 || c.Data["server_in_sight"] != 1 || c.Data["disagree"] != 1 {
+		t.Fatalf("server data %v, want both answered, one in sight, one disagreement", c.Data)
+	}
+	if c.Verdict != VerdictOK {
+		t.Fatalf("verdict %q, want the server's sight to be the verdict", c.Verdict)
+	}
+	if !strings.Contains(c.Reason, "the server's sight") || !strings.Contains(c.Reason, "disagrees on 1 unit") {
+		t.Fatalf("reason %q", c.Reason)
+	}
+
+	// All the server's answers out of sight: the pull shot waits, whatever the ray said.
+	live.ServerLOS = map[LOSKey]bool{{Step: 1, Guid: 100}: false, {Step: 1, Guid: 101}: false}
+	if c := liveLOSCheck(st, targets, live); c.Verdict != VerdictWarn || !strings.Contains(c.Reason, "waits for sight") {
+		t.Fatalf("server out of sight: %+v", c)
+	}
+
+	// The ray alone keeps its own wording: no server answer, no server sentence.
+	rayOnly := liveLOSCheck(st, targets, LiveData{LOS: live.LOS})
+	if !strings.Contains(rayOnly.Reason, "the pull shot waits for sight") || strings.Contains(rayOnly.Reason, "server") {
+		t.Fatalf("ray-only reason %q", rayOnly.Reason)
+	}
+	if rayOnly.Data["server_answered"] != 0 {
+		t.Fatalf("ray-only data %v", rayOnly.Data)
+	}
+
+	// The pass's summary: disagreements counted, agreements counted, and nothing when no server answer came.
+	mixed := LiveData{
+		LOS:       map[LOSKey]bool{{Step: 1, Guid: 100}: false, {Step: 1, Guid: 101}: false},
+		ServerLOS: map[LOSKey]bool{{Step: 1, Guid: 100}: true, {Step: 1, Guid: 101}: false},
+	}
+	if note := liveSightSummary(mixed); !strings.Contains(note, "disagree on 1 of 2") {
+		t.Fatalf("summary %q", note)
+	}
+	agree := LiveData{
+		LOS:       map[LOSKey]bool{{Step: 1, Guid: 100}: true, {Step: 1, Guid: 101}: true},
+		ServerLOS: map[LOSKey]bool{{Step: 1, Guid: 100}: true, {Step: 1, Guid: 101}: true},
+	}
+	if note := liveSightSummary(agree); !strings.Contains(note, "agree on all 2") {
+		t.Fatalf("agreeing summary %q", note)
+	}
+	if note := liveSightSummary(LiveData{LOS: map[LOSKey]bool{}}); note != "" {
+		t.Fatalf("a pass with no server answer got the note %q", note)
+	}
+}

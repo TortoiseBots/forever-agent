@@ -126,6 +126,10 @@ type Options struct {
 	// status) would otherwise lose every body row to the "somebody else's line" rule. A line that carries another
 	// token is still not ours.
 	BareBody string
+	// OneLine makes a token run's first collected line the whole reply: the module's `los` record is one line with
+	// no begin/end markers (its documented exception to the report rule), so the run ends on the line that carries
+	// its token (End "line") instead of waiting for a marker the module never sends. An error line still ends it.
+	OneLine bool
 	// Now is the clock; nil means time.Now. Tests pass a fake clock.
 	Now func() time.Time
 
@@ -728,6 +732,13 @@ func (c *collector) Feed(line chat.Line) {
 	if c.token && IsEndKind(ln.Kind) && (c.o.EndKind == "" || ln.Kind == "error" || ln.Kind == c.o.EndKind) {
 		c.complete = true
 		c.end = ln.Kind
+		c.rawEnd = chat.Sanitise(vis, MaxLineBytes)
+		return
+	}
+	if c.token && c.o.OneLine {
+		// The module's one-line answer: there is nothing after it.
+		c.complete = true
+		c.end = "line"
 		c.rawEnd = chat.Sanitise(vis, MaxLineBytes)
 	}
 }

@@ -233,11 +233,11 @@ type ServeCommanderEvent struct {
 // the old session knew about the module's packages.
 type commanderCtl struct{ c cmdctl.Controller }
 
-// commanderRunner is the tbcmd transport of the commander method. Every line goes through the session's own
-// command channel and its GM guard, exactly as the `gm` and `bot` methods' lines do.
-type commanderRunner struct{ st *serveState }
+// serveTBRunner is the tbcmd transport of the methods that read the bot module (commander, los). Every line goes
+// through the session's own command channel and its GM guard, exactly as the `gm` and `bot` methods' lines do.
+type serveTBRunner struct{ st *serveState }
 
-func (r *commanderRunner) Run(ctx context.Context, line string, o command.Options) (*command.Reply, error) {
+func (r *serveTBRunner) Run(ctx context.Context, line string, o command.Options) (*command.Reply, error) {
 	s := r.st.session.Load()
 	if s == nil {
 		return nil, ErrLinkLost
@@ -250,7 +250,7 @@ func (r *commanderRunner) Run(ctx context.Context, line string, o command.Option
 // dropped; nothing else is kept between sessions.
 func (st *serveState) resetCommander(s *session) {
 	if st.cmdr == nil {
-		client := tbcmd.NewClient(&commanderRunner{st: st})
+		client := tbcmd.NewClient(&serveTBRunner{st: st})
 		st.cmdr = &commanderCtl{c: cmdctl.NewTB(client, s.report.Character.Name)}
 		return
 	}

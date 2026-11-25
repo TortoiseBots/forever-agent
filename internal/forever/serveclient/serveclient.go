@@ -19,6 +19,8 @@
 // (Act) and teardown (Teardown). Events reads the combat log; EventLog the
 // session's one ordered stream. A test in internal/forever/world pins the
 // daemon's table and decodes each of these methods against the real daemon.
+// LOS carries the bot module's own sight query (#259), which the plan scout's
+// Forever pass records beside the navmesh ray.
 package serveclient
 
 import (
@@ -304,6 +306,39 @@ func (c *Client) WalkRay(ctx context.Context, from *[3]float32, x, y, z float32)
 		From *[3]float32 `json:"from,omitempty"`
 	}{x, y, z, from}
 	err := c.call(ctx, "walk_ray", params, &l, defaultTimeout)
+	return l, err
+}
+
+// LOSParams is the los method's input: two sides of a sight query. A side is a character or bot name, "target" (the
+// character's own selection), a guid as the daemon prints it ("0x" and hex), or a ground spot "x,y,z"; Map is the map
+// id two spots need.
+type LOSParams struct {
+	A   string  `json:"a"`
+	B   string  `json:"b"`
+	Map *uint32 `json:"map,omitempty"`
+}
+
+// LOS is the los method's answer (serve's ServeLOS): the server's own line of sight between the two sides, the yards
+// apart, and whether they share a map and instance and are both in the world. It is the core's sight test (the one
+// the bots' attack gate uses), not the navmesh ray: it needs no --navmesh. A refusal the module writes into its line
+// arrives here as a result with Reason set (bad-argument, unknown-unit, not-in-world, different-maps, no-access,
+// rate), and a module build without the command is an *Error with -32003 and "not supported by this module build".
+type LOS struct {
+	A            string   `json:"a"`
+	B            string   `json:"b"`
+	Map          uint32   `json:"map,omitempty"`
+	Clear        bool     `json:"clear"`
+	DistYD       *float64 `json:"dist_yd,omitempty"`
+	SameMap      bool     `json:"same_map"`
+	InWorld      bool     `json:"in_world"`
+	Reason       string   `json:"reason,omitempty"`
+	RetryAfterMS int      `json:"retry_after_ms,omitempty"`
+}
+
+// LOS asks the server whether its line of sight is clear between the two sides.
+func (c *Client) LOS(ctx context.Context, p LOSParams) (LOS, error) {
+	var l LOS
+	err := c.call(ctx, "los", p, &l, defaultTimeout)
 	return l, err
 }
 

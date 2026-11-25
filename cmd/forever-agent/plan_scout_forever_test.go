@@ -103,6 +103,14 @@ type fakeForeverServe struct {
 	rayErr error
 	// unitsAt, when set, answers a units read from the session's own position (the way the serve reads around it).
 	unitsAt func(x, y float32) []serveclient.Unit
+	// los answers the module's own sight query (#259): nil answers every query with a clear line at 12.5 yd. losErr
+	// answers it with this error (the daemon's "not supported by this module build"), losRefusal with this reason, and
+	// loss logs every query as "a|b".
+	los        func(a, b string) serveclient.LOS
+	losErr     error
+	losRefusal string
+	losCalls   int
+	loss       []string
 	// rays logs every walk_ray read: the sight point and the target.
 	rays []fakeRay
 }
@@ -143,6 +151,25 @@ func (f *fakeForeverServe) WalkRay(_ context.Context, from *[3]float32, x, y, z 
 		return f.ray(at, x, y, z), nil
 	}
 	return serveclient.WalkRay{Known: true, In: true, Source: "navmesh_raycast"}, nil
+}
+
+// LOS answers the module's own sight query.
+func (f *fakeForeverServe) LOS(_ context.Context, p serveclient.LOSParams) (serveclient.LOS, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.losCalls++
+	f.loss = append(f.loss, p.A+"|"+p.B)
+	if f.losErr != nil {
+		return serveclient.LOS{}, f.losErr
+	}
+	if f.losRefusal != "" {
+		return serveclient.LOS{A: p.A, B: p.B, Reason: f.losRefusal}, nil
+	}
+	if f.los != nil {
+		return f.los(p.A, p.B), nil
+	}
+	dist := 12.5
+	return serveclient.LOS{A: p.A, B: p.B, Clear: true, DistYD: &dist, SameMap: true, InWorld: true}, nil
 }
 
 func newFakeForeverServe(units ...serveclient.Unit) *fakeForeverServe {
@@ -1020,5 +1047,189 @@ func TestScoutForeverOneRayErrorDoesNotAbortThePass(t *testing.T) {
 	defer fake.mu.Unlock()
 	if len(fake.paths) == 0 {
 		t.Fatal("the pass never reached its path reads after the failed ray")
+	}
+}
+
+// foreverScoutPackPlanFile writes a plan on map 700 whose pull group is the export's own pack (entry 4100, spawns 100
+// and 101 at x 0 and 3): the live pass has a target pack to ask the server about.
+func foreverScoutPackPlanFile(t *testing.T, dir, name string) {
+	t.Helper()
+	group := dungeon.PullGroup{
+		Entries:   []uint32{4100},
+		Positions: []dungeon.Point{{X: 0}},
+		Radius:    5,
+		Approach:  []dungeon.Point{{X: -10}},
+		StandPull: true,
+	}
+	leg := dungeon.Leg{Name: "one", To: dungeon.Point{X: 40}, PullGroups: []dungeon.PullGroup{group}}
+	b, err := dungeon.Marshal(&dungeon.Plan{Version: 1, Name: name, Map: 700, Legs: []dungeon.Leg{leg}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name+".json"), b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// foreverPackUnits are the export's pack: spawns 100 and 101 of entry 4100, at x 0 and 3.
+func foreverPackUnits() []serveclient.Unit {
+	return []serveclient.Unit{
+		{GUID: "0x00000000000000000000000000000064", Type: "creature", Entry: 4100, Name: "ForeverRat",
+			X: 0, Y: 0, Z: 0, Level: 30, Health: 100, MaxHealth: 100},
+		{GUID: "0x00000000000000000000000000000065", Type: "creature", Entry: 4100, Name: "ForeverRat",
+			X: 3, Y: 0, Z: 0, Level: 30, Health: 100, MaxHealth: 100},
+	}
+}
+
+// foreverLOSCheck is the pull row's live_los check in a report.
+func foreverLOSCheck(t *testing.T, rep planscout.Report, step int) planscout.Check {
+	t.Helper()
+	for _, st := range rep.Steps {
+		if st.Step != step {
+			continue
+		}
+		for _, c := range st.Checks {
+			if c.Name == planscout.CheckLiveLOS {
+				return c
+			}
+		}
+	}
+	t.Fatalf("step %d has no %s check", step, planscout.CheckLiveLOS)
+	return planscout.Check{}
+}
+
+// TestScoutForeverRecordsServerSightBesideTheRay: for the pull's stand the pass asks the module's los for every pack
+// unit the read saw, records the server's answer beside the navmesh ray under the same key, and the pull row's check
+// reports both plus the disagreement, with one note for the pass.
+func TestScoutForeverRecordsServerSightBesideTheRay(t *testing.T) {
+	dir := t.TempDir()
+	mmaps := foreverFlat(t)
+	foreverScoutPackPlanFile(t, dir, "scout_pack")
+	fake := newFakeForeverServe(foreverPackUnits()...)
+	// The mesh cannot say the pack is visible; the server sees spawn 101 only.
+	fake.ray = func(_ [3]float32, _, _, _ float32) serveclient.WalkRay {
+		return serveclient.WalkRay{Known: true, In: false, Hit: 3, Source: "navmesh_raycast"}
+	}
+	fake.los = func(_, b string) serveclient.LOS {
+		dist := 12.5
+		return serveclient.LOS{A: "stand", B: b, Clear: strings.HasSuffix(b, "65"), DistYD: &dist, SameMap: true, InWorld: true}
+	}
+	useFakeForeverServe(t, fake)
+	code, _, errOut := runCLI("plan-scout", "scout_pack", "--dir", dir, "--mmaps", mmaps,
+		"--spawns", foreverExport(), "--forever", "--out", filepath.Join(dir, "out"), "--live", "--slot", t.TempDir())
+	if code == exitLivePhaseRefused || code == exitPlanScoutLiveAborted {
+		t.Fatalf("live pass: code %d err %q", code, errOut)
+	}
+	fake.mu.Lock()
+	calls, queries := fake.losCalls, append([]string(nil), fake.loss...)
+	fake.mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("%d los query(ies), want one per pack unit (%q)", calls, queries)
+	}
+	for _, q := range queries {
+		if !strings.HasSuffix(q, "|0x00000000000000000000000000000064") && !strings.HasSuffix(q, "|0x00000000000000000000000000000065") {
+			t.Fatalf("a los query names %q, not a pack guid", q)
+		}
+		if !strings.HasPrefix(q, "-10,0,0|") {
+			t.Fatalf("a los query asks from %q, not the pull's stand", q)
+		}
+	}
+	rep := foreverReport(t, dir, "scout_pack")
+	// The pull row is the step whose check carries the two pack units.
+	var step int
+	for _, st := range rep.Steps {
+		for _, c := range st.Checks {
+			if c.Name == planscout.CheckLiveLOS {
+				step = st.Step
+			}
+		}
+	}
+	if step == 0 {
+		t.Fatal("the report has no live_los check")
+	}
+	c := foreverLOSCheck(t, rep, step)
+	if c.Data["server_answered"] != 2 || c.Data["server_in_sight"] != 1 || c.Data["disagree"] != 1 {
+		t.Fatalf("check data %v, want the server's two answers, one in sight, one disagreement", c.Data)
+	}
+	if c.Data["answered"] != 2 || c.Data["in_sight"] != 0 {
+		t.Fatalf("check data %v, want the ray's two answers, none in sight", c.Data)
+	}
+	if !strings.Contains(c.Reason, "the server's sight") || !strings.Contains(c.Reason, "disagrees on 1") {
+		t.Fatalf("check reason %q, want the server's verdict and the disagreement", c.Reason)
+	}
+	named := false
+	for _, n := range rep.Notes {
+		if strings.Contains(n, "disagree on 1 of 2 sight answers") {
+			named = true
+		}
+		if strings.Contains(n, "does not answer los") {
+			t.Fatalf("the report says the module has no los command: %q", n)
+		}
+	}
+	if !named {
+		t.Fatalf("the report has no disagreement summary: %q", rep.Notes)
+	}
+}
+
+// TestScoutForeverServerSightFallsBack: a module build without the los command is said once, the pass asks no more,
+// and the sight answers stay the navmesh ray's. A rate refusal is the same: one note, with the module's wait, no retry.
+func TestScoutForeverServerSightFallsBack(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		setup func(*fakeForeverServe)
+		want  string
+	}{
+		{"an older module", func(f *fakeForeverServe) {
+			f.losErr = &serveclient.Error{Code: rpc.CodeGame,
+				Message: "los: not supported by this module build (the server does not answer .tb los)", Method: "los"}
+		}, "does not answer los"},
+		{"a rate refusal", func(f *fakeForeverServe) { f.losRefusal = "rate" }, "refused the los query for rate"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			mmaps := foreverFlat(t)
+			foreverScoutPackPlanFile(t, dir, "scout_fallback")
+			fake := newFakeForeverServe(foreverPackUnits()...)
+			fake.ray = func(_ [3]float32, _, _, _ float32) serveclient.WalkRay {
+				return serveclient.WalkRay{Known: true, In: true, Source: "navmesh_raycast"}
+			}
+			tc.setup(fake)
+			useFakeForeverServe(t, fake)
+			code, _, errOut := runCLI("plan-scout", "scout_fallback", "--dir", dir, "--mmaps", mmaps,
+				"--spawns", foreverExport(), "--forever", "--out", filepath.Join(dir, "out"), "--live", "--slot", t.TempDir())
+			if code == exitLivePhaseRefused || code == exitPlanScoutLiveAborted {
+				t.Fatalf("live pass: code %d err %q", code, errOut)
+			}
+			fake.mu.Lock()
+			calls := fake.losCalls
+			fake.mu.Unlock()
+			if calls != 1 {
+				t.Fatalf("%d los queries, want one: the pass must not ask again", calls)
+			}
+			rep := foreverReport(t, dir, "scout_fallback")
+			said, checked := 0, false
+			for _, n := range rep.Notes {
+				if strings.Contains(n, tc.want) {
+					said++
+				}
+			}
+			if said != 1 {
+				t.Fatalf("%d note(s) say %q: %q", said, tc.want, rep.Notes)
+			}
+			for _, st := range rep.Steps {
+				for _, c := range st.Checks {
+					if c.Name != planscout.CheckLiveLOS {
+						continue
+					}
+					checked = true
+					if c.Data["server_answered"] != 0 || c.Data["answered"] == 0 {
+						t.Fatalf("check data %v, want the ray's answers alone", c.Data)
+					}
+				}
+			}
+			if !checked {
+				t.Fatal("the report has no live_los check")
+			}
+		})
 	}
 }

@@ -20,6 +20,10 @@ sources:
     resource: internal/forever/objects/mover.go
   - id: walk-check
     resource: cmd/forever-agent/forever_walk.go
+  - id: serve-los
+    resource: internal/forever/world/serve_los.go
+  - id: tb-los
+    resource: internal/forever/command/tbcmd/los.go
 ---
 
 # What this is
@@ -30,6 +34,9 @@ These methods walk the character or plan how to walk it. Two kinds exist:
 - **Navmesh movement**, which needs `--navmesh` on the daemon: `path_to` plans a route, `walk_path` plans and
   follows it, `walk_ray` answers whether a straight line stays on walkable ground, and `follow_start` keeps
   the character near another player.
+
+`los` answers the server's own line of sight between two things. It is the sight test the bots' attack gate uses,
+not the navmesh: it needs no `--navmesh` on the daemon, and the server alone decides.
 
 Teleports, area triggers, mounts and taxi flights ask the server to move the character instead of walking
 it: see [Teleports and travel](travel.md).
@@ -143,6 +150,45 @@ target off the mesh reads as blocked, and a ceiling or a bridge is not seen.
 | `hit` | Yards from `from` to where the line leaves the mesh (omitted when `in`). |
 | `source` | Always `navmesh_raycast`. |
 
+# los
+
+Asks the server whether ITS line of sight is clear between two things, and how far apart they are. This is the
+core check the bots' attack gate uses (`IsWithinLOSInMap`), so the core's height offsets apply; `walk_ray` is the
+client's own navmesh guess and needs `--navmesh`. Nothing moves and nothing is selected. The method needs the bot
+module on the server to answer the query; a build without it answers an error naming that.
+
+| Parameter | Type | Meaning |
+|---|---|---|
+| `a`, `b` | string | The two sides: a character or bot name, `target` (the character's own selection), a guid as the daemon prints it (`0x` and hex), or a ground spot `x,y,z`. |
+| `map` | number | The map id, needed when both sides are spots. |
+
+| Field | Meaning |
+|---|---|
+| `a`, `b` | The sides the server resolved, in its own words (a `target` side answers what the character had selected). |
+| `clear` | The server's line of sight between them. |
+| `dist_yd` | How far apart they are, in yards; absent when the refusal states no distance. |
+| `map` | The map the answer is about; absent on a refusal that hides it. |
+| `same_map` | Both sides are on one map AND one instance of it. Reads `false` on a refusal that hid it. |
+| `in_world` | Both sides are in the world. Reads `false` on a refusal that hid it. |
+| `reason` | A refusal code, absent on an answer: `bad-argument`, `unknown-unit` (a GameMaster or the console only), `not-in-world`, `different-maps`, `no-access` or `rate`. |
+| `retry_after_ms` | On `rate`: the wait the server's own answer carried, when it stated one. |
+
+A refusal is the call's answer with `reason` set, not an RPC error: a tool reads the code. `no-access` is the one
+answer a caller below GameMaster gets for another player's character and for a name that resolved to nothing alike,
+with only the words it typed and no `map`/`same_map`/`in_world`, so the method is no presence or map oracle. The
+query costs one of the server's five per second per caller; a refused query costs one too, so wait out a `rate`
+refusal instead of asking again at once. A server whose module build does not answer the query refuses the call
+with `-32003` and `los: not supported by this module build`; that is not a parse error and not a timeout.
+
+The plan scout's Forever live pass asks it from each pull row's stand to the units of its target pack and records
+the server's answer beside the navmesh ray (see [plan tools](../dungeons/plan-tools.md#plan-scout)).
+
+```bash
+forever-agent forever rpc ./slot los '{"a":"Mychar","b":"target"}'
+forever-agent forever rpc ./slot los '{"a":"Tanka","b":"-8860,-118,83.5"}'
+forever-agent forever rpc ./slot los '{"a":"1.0,2.0,3.0","b":"4.0,5.0,6.0","map":700}'
+```
+
 # face
 
 Turns the character toward a unit: `guid` or `name`. Refused while airborne. Answers `{}`.
@@ -232,6 +278,9 @@ forever-agent forever rpc --timeout 15s ./slot follow_stop
 
 # is the straight line to a point on walkable ground?
 forever-agent forever rpc ./slot walk_ray '{"x":-8860,"y":-118,"z":83}'
+
+# does the server see the selected unit from where the character stands?
+forever-agent forever rpc ./slot los '{"a":"Mychar","b":"target"}'
 ```
 
 # Common problems
@@ -243,6 +292,7 @@ forever-agent forever rpc ./slot walk_ray '{"x":-8860,"y":-118,"z":83}'
 | `walk_path: no full route to ...` | The route is not complete. Walk to a closer point with `path_to` first, or use `walk_to` for short straight hops. |
 | A walk returns an airborne/fall error | The character is still falling or was knocked into the air. Wait for `status.falling` to clear. |
 | `walk_ray` answers `known: false` | Either end is off the mesh, or the map's tiles are missing. |
+| `los` answers `-32003` `los: not supported by this module build` | The server's bot module does not answer the query: use `walk_ray`, or a module build that has it. |
 | `follow_start: no --navmesh: following walks on the navmesh, so the daemon must be started with one` | Same as above; follow cannot work without map data. |
 | `follow_start: ... is this character: a character cannot follow itself` | Use another character as `lead`. |
 | `follow_start: a follow is already running (follow_stop first)` | Stop the current loop first. |
