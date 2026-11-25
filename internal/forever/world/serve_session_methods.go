@@ -275,6 +275,9 @@ type ServeCast struct {
 // naming the server's reason.
 func (s *session) serveCast(ctx context.Context, p serveCastParams) (ServeCast, error) {
 	var outcome string
+	// The trade data names a stored spell only when an update for it came after this cast (tradeStoredSpell): one
+	// from the previous cast in the same window must not answer for this one.
+	mineUpdates := s.trade.mineUpdates
 	if p.TradeSlot != nil {
 		got, err := s.castTradeSlot(ctx, p.SpellID, *p.TradeSlot)
 		if err != nil {
@@ -299,7 +302,7 @@ func (s *session) serveCast(ctx context.Context, p serveCastParams) (ServeCast, 
 	case outcome == "success":
 		return ServeCast{}, nil
 	case combat.SilentSpellResult(outcome):
-		if p.TradeSlot != nil && s.tradeStoredSpell(ctx, p.SpellID) {
+		if p.TradeSlot != nil && s.tradeStoredSpell(ctx, p.SpellID, mineUpdates) {
 			return ServeCast{SpellID: p.SpellID, TradeSlot: p.TradeSlot, Silent: true, Completes: CastCompletesTradeAccept}, nil
 		}
 		why := "no spell-go came"

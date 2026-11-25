@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -110,9 +109,7 @@ func (s *session) serveMount(ctx context.Context, p serveMountParams) (ServeMoun
 	if err != nil {
 		return out, fmt.Errorf("mount: casting spell %d: %w", p.Spell, err)
 	}
-	// The core's "no message" result is an accepted cast (Spell.cpp:3826-3841 has the trade case): the mount display
-	// is then what decides, below.
-	if outcome != "success" && !combat.SilentSpellResult(outcome) {
+	if outcome != "success" {
 		return out, fmt.Errorf("mount: the server refused spell %d: %s", p.Spell, outcome)
 	}
 	display, refused, result, err := s.waitMounted(ctx, mountWait)

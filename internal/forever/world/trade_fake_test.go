@@ -1289,6 +1289,32 @@ func TestCastOnTradeSlotTakesTheStoredSpellAsSuccess(t *testing.T) {
 	}
 }
 
+// TestSecondCastOfAStoredTradeSpellNeedsItsOwnUpdate: within one window the previous cast's spell stays in the trade
+// data. A second cast of the same spell that only got the silent cooldown answer (:6090) did not store anything, so it
+// must fail like any other silent answer without the trade naming the spell — never report the earlier stored cast.
+func TestSecondCastOfAStoredTradeSpellNeedsItsOwnUpdate(t *testing.T) {
+	w := newTradeWorld(t)
+	w.s.mover = &objects.Mover{Sender: w, ClientTime: func(time.Time) uint32 { return 0 }, RunSpeed: 5.5}
+	w.castRefusal = &[2]int32{combat.SpellFailSilent, 0}
+	w.storesTradeSpell = true
+	ctx := context.Background()
+	if _, err := w.s.serveTradeOpen(ctx, serveTradeOpenParams{To: tradeBotName}); err != nil {
+		t.Fatal(err)
+	}
+	slot := uint8(trade.SlotNonTraded)
+	if _, err := w.s.serveCast(ctx, serveCastParams{SpellID: 1804, TradeSlot: &slot}); err != nil {
+		t.Fatalf("the stored first cast failed: %v", err)
+	}
+	w.storesTradeSpell = false
+	_, err := w.s.serveCast(ctx, serveCastParams{SpellID: 1804, TradeSlot: &slot})
+	if err == nil {
+		t.Fatal("a second cast answered success from the previous cast's stored spell")
+	}
+	if !strings.Contains(err.Error(), "the trade names no such spell") {
+		t.Fatalf("the error %q does not name the missing stored spell", err)
+	}
+}
+
 // TestCastPlainSuccessKeepsTheEmptyAnswer: a successful cast still answers the empty object every caller already gets
 // (the answer gains its fields only for the stored trade-slot spell).
 func TestCastPlainSuccessKeepsTheEmptyAnswer(t *testing.T) {

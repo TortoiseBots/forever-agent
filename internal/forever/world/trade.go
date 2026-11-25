@@ -85,8 +85,9 @@ type tradeWatch struct {
 	// theirs and updates: the other side's last view and how many views came.
 	theirs  *tradeView
 	updates uint64
-	// mine is our own side as the core showed it (it only does for an enchant).
-	mine *tradeView
+	// mine is our own side as the core showed it (it only does for an enchant), and mineUpdates counts its views.
+	mine        *tradeView
+	mineUpdates uint64
 	// sets are the items this character put in, by trade slot; myGold is the gold it put in.
 	sets   map[uint8]tradeSet
 	myGold uint64
@@ -189,6 +190,7 @@ func (s *session) onTradeUpdated(u trade.Updated) {
 		t.updates++
 	} else {
 		t.mine = v
+		t.mineUpdates++
 	}
 }
 

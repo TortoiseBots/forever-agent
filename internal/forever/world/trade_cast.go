@@ -82,13 +82,16 @@ const (
 	tradeStoredSpellPoll = 50 * time.Millisecond
 )
 
-// tradeStoredSpell reports whether the trade data names spellID as this side's exchange spell: the core stored the
-// trade-slot cast instead of casting it (Spell.cpp:3826-3841) and sent the update naming it (TradeData.cpp:84-101).
-// The silent result alone is not that proof: the core answers it for casts that never happened as well
-// (Spell.cpp:6090, a spell on its event cooldown). The wait is real time: it bounds a packet that may arrive late, not
-// the character's clock.
-func (s *session) tradeStoredSpell(ctx context.Context, spellID int32) bool {
-	stored := func() bool { return s.trade.mine != nil && s.trade.mine.spell == spellID }
+// tradeStoredSpell reports whether the trade data named spellID as this side's exchange spell after the cast that
+// started at sequence since: the core stored the trade-slot cast instead of casting it (Spell.cpp:3826-3841) and sent
+// the update naming it (TradeData.cpp:84-101). The sequence matters: within one window the previous cast's spell stays
+// in the trade data, so a later cast that only got the silent cooldown answer (:6090) would otherwise read as stored.
+// The silent result alone is not that proof: the core answers it for casts that never happened as well. The wait is
+// real time: it bounds a packet that may arrive late, not the character's clock.
+func (s *session) tradeStoredSpell(ctx context.Context, spellID int32, since uint64) bool {
+	stored := func() bool {
+		return s.trade.mineUpdates > since && s.trade.mine != nil && s.trade.mine.spell == spellID
+	}
 	if stored() {
 		return true
 	}

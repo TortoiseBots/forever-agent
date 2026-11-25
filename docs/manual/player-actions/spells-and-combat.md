@@ -115,7 +115,8 @@ Notes that matter in practice:
 
   The stored spell is the trade's own record of it: `trade_status` (and `trade`) names it as `my_spell`
   (`TradeData::SetSpell`, `TradeData.cpp:84-101`, sends that update at the moment the spell is stored), and the call
-  waits up to a second for it.
+  waits up to a second for it. The update must be newer than the cast: a spell the window still names from an earlier
+  cast does not answer for this one, so a second cast that got only the cooldown answer fails as below.
 - The same result with nothing stored is no cast at all: the core answers it for a spell on its event cooldown as
   well (`Spell.cpp:6090`). The call then fails with `cast: the server answered its no-message result for spell N and
   <why>: nothing was cast`, where `<why>` is `no spell-go came` for a plain cast and `the trade names no such spell`

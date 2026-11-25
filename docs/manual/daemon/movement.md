@@ -71,8 +71,8 @@ The only between-maps error is a walk the server leaves between maps until the c
 session's 60-second map-change limit): it ends with `objects: the character is between maps: the character is
 still between maps at the walk's deadline`. A walk started while a map change is already under way never moves
 and is refused with `objects: the character is between maps: the walk did not start`. A walk whose route crosses
-a trigger volume the plans name arms that volume for the walk's own duration and removes it when the walk ends
-([travel](travel.md#area_trigger_watch) says which volumes).
+an instance-portal volume the plans name arms that volume for the walk's own duration and removes it when the walk
+ends ([travel](travel.md#area_trigger_watch) says which volumes).
 
 Refusals: no mover (the character's create block never arrived), the character is airborne or falling, or a
 map change is in progress. No navmesh is needed.
@@ -119,8 +119,8 @@ walk_path: no full route to 12.3 45.6 7.8 (partial)
 | `x`, `y`, `z` | float | Destination. |
 
 Result: the same fields as `path_to`. Refusals also cover a missing mover and a link that dropped mid-walk. A
-map change ends the walk with `objects: the character is between maps` and no route; the trigger volumes the
-route crosses are armed for the walk like `walk_to`'s and removed when it ends.
+map change ends the walk with `objects: the character is between maps` and no route; the instance-portal volumes
+the route crosses are armed for the walk like `walk_to`'s and removed when it ends.
 
 # walk_ray
 

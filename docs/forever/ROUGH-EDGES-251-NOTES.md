@@ -37,15 +37,20 @@ cooldown), so the stored spell is the proof:
 * A silent result with nothing stored is no cast: the call fails with `cast: the server answered its no-message result
   for spell N and <why>: nothing was cast` (`no spell-go came`, or `the trade names no such spell`). It never says
   "refused": that wording stays for a real refusal.
+* The update must be newer than the cast: the trade data keeps naming the earlier cast's spell, so the check compares
+  the number of own-side trade updates from before the call (`trade.mineUpdates`). A second silent result with no new
+  update fails as above.
 * A plain success keeps the empty object every caller already gets.
-* `mount`'s cast check no longer reads the silent result as a refusal; the mount display decides, as before.
+* `mount`'s cast check stays as it is on main: its silent-result branch was out of this issue's scope, and
+  `waitMounted` already decides from the display.
 * The fight log's line for a silent result says `spell N answered the silent result (do not report)` instead of
   calling it a failure. The `spell_fail` row keeps the packet's own result name.
 
 **Tests.** `TestCastOnTradeSlotTakesTheStoredSpellAsSuccess` (the fake stores the spell and answers reason 32, as the
-core does), `TestCastTradeSlotSilentWithoutTheStoredSpellIsNoCast`, `TestCastNeverCallsTheSilentAnswerARefusal` and
-`TestCastPlainSuccessKeepsTheEmptyAnswer` (the plain success is still `{}` byte for byte). Reverting the stored-spell
-check, or reading every silent result as success, fails one of them.
+core does), `TestCastTradeSlotSilentWithoutTheStoredSpellIsNoCast`, `TestCastNeverCallsTheSilentAnswerARefusal`,
+`TestCastPlainSuccessKeepsTheEmptyAnswer` (the plain success is still `{}` byte for byte) and
+`TestSecondCastOfAStoredTradeSpellNeedsItsOwnUpdate`. Reverting the stored-spell check, dropping the update sequence, or
+reading every silent result as success fails one of them.
 
 **Review follow-up.** The first version of this fix took every silent result as success. The self-review showed the
 core's other `SPELL_FAILED_DONT_REPORT` sites are real refusals said silently (cooldown, CC, a tame that failed), so a
@@ -81,24 +86,32 @@ the first.
 sent `CMSG_AREA_TRIGGER` on a crossing, but nothing armed anything for a plain walk: the live row had to call the
 method first. The agent keeps no table of triggers, and the only trigger data the daemon has is its plan folder.
 
-**Fix.** The plan trigger volumes are indexed per map (`internal/forever/world/trigger_plan.go`), built once from
-`--plans-dir`:
+**Fix.** The instance-portal volumes are indexed per map (`internal/forever/world/trigger_plan.go`), built once
+from `--plans-dir`:
 
 | Volume | Where | Radius |
 |---|---|---|
 | A plan's `entrance_trigger` | the plan's `portal` point, on the portal's map | the default 4 yd |
-| A plan's `area_trigger` step | the step's `center`, on the plan's map | the step's `radius` |
 
-`armWalkTriggers` arms the volumes the walk's route crosses (the mover's position and then the destination for
+That is the only volume a walk arms: it is the one that changes the map. A plan's `area_trigger` step is the step's
+own to fire (the group driver's `doAreaTrigger`, the remote driver's `takeTrigger`), which walks to `stand` and sends
+once. Indexing the zone as well fired it on that walk in and again from the step, and in a remote run an agent walk
+across a `by: "bot"` or `by: "auto"` zone fired it outside the GM/invisible guard the step keeps.
+
+`armWalkTriggers` arms the portal volumes the walk's route crosses (the mover's position and then the destination for
 `walk_to`, the polyline for `walk_path` and every walking leg of `dungeon_run`) and returns the disarm that removes
-exactly what it added. An id the caller armed by hand keeps the caller's volume and stays armed — one state per id is
-what keeps the #241 re-arm idempotent. The 32-volume bound skips the rest with a log line rather than refusing the
-walk. `area_trigger_watch` stays for everything the plans do not name.
+exactly what it added. A walk that begins inside a volume arms it as entered and sends nothing for it: the state a
+previous walk leaves behind goes with its volume, so arming again at the portal is not a step in. An id the caller
+armed by hand keeps the caller's volume and stays armed — one state per id is what keeps the #241 re-arm idempotent.
+The 32-volume bound skips the rest with a log line rather than refusing the walk. `area_trigger_watch` stays for
+everything the plans do not name.
 
-**Tests.** `TestWalkArmsThePortalTriggerOfItsRoute`, `TestWalkLeavesAManualVolumeAlone`,
-`TestWalkToArmsThePortalTriggerAndSendsIt` and, over the fake daemon, `TestServeWalkToArmsThePlansPortalTrigger` (a
-plain `walk_to` over the plan's portal point sends one `CMSG_AREA_TRIGGER`). Disabling the automatic arm fails three
-of the four.
+**Tests.** `TestPlanIndexNamesOnlyTheInstancePortal`, `TestWalkArmsThePortalTriggerOfItsRoute`,
+`TestWalkLeavesAManualVolumeAlone`, `TestWalkToArmsThePortalTriggerAndSendsIt`, `TestServeWalkToArmsThePlansPortalTrigger`
+(a plain `walk_to` over the plan's portal point sends one `CMSG_AREA_TRIGGER`),
+`TestWalkDoesNotArmThePlansAreaTriggerStep` (the walk in sends nothing; the step's own send is the only one),
+`TestRemoteBossZoneIsNotFiredByAWalkCrossing`, `TestWalkStartingInsideDoesNotFireTheVolume` and
+`TestCancelledDungeonWalkDisarmsItsVolumes` (the watch is empty after a cancelled walk; removing the disarm fails it).
 
 ## Docs
 
