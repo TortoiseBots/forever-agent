@@ -509,6 +509,75 @@ func TestServeDungeonRunPreflightRefusesAConcurrentRunAtOnce(t *testing.T) {
 	f.wait(t)
 }
 
+// TestServeDungeonRunPreflightWaitsOutACommandInFlight: a command already on the channel (a `bot` call with its own
+// wait) may hold it longer than one preflight run's deadline. The preflight waits for the channel within its lock
+// bound, and the run's reply window starts only once the channel is its own, so the read is still sent and answered
+// instead of finding its deadline spent. Mutation: taking the run's deadline before the lock wait fails the check
+// (and the start) with a context deadline while the channel had become free in time.
+func TestServeDungeonRunPreflightWaitsOutACommandInFlight(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	started := &atomic.Int32{}
+	f.serveCommander = serveRunScenes(started)
+	botSent := make(chan struct{})
+	var once sync.Once
+	f.serveGMSay = func(said string) (string, bool) {
+		switch {
+		case strings.HasPrefix(said, serveBotPrefix+" "):
+			once.Do(func() { close(botSent) })
+			return "", false // no answer: the bot call runs to its own deadline (7.5 s)
+		case strings.HasPrefix(said, ".pinfo "):
+			name := strings.TrimSpace(strings.TrimPrefix(said, ".pinfo "))
+			return "Player " + name + " (GUID: 2)\n" +
+				"Account: testaccount (ID: 1), GM Level: 3\n" +
+				"* Level: 60\n" +
+				"* Race: Human, Class Warrior", true
+		}
+		return "", false
+	}
+	defer f.close()
+	scene := &servePreflightScene{probe: servePreflightProbe{pid: 42, alive: true, listening: true}}
+	dir := t.TempDir()
+	a, steps := newDungeonPreflightDaemon(t, f, scene, writePlans(t), dir)
+	writeServeSlot(t, dir, a.port(t), "forever", "")
+
+	type call struct {
+		rerr *rpcError
+		err  error
+	}
+	bot := make(chan call, 1)
+	go func() {
+		_, rerr, err := a.tryCall("bot", map[string]any{"line": ".bot state", "wait_ms": 7500})
+		bot <- call{rerr: rerr, err: err}
+	}()
+	select {
+	case <-botSent:
+	case <-time.After(20 * time.Second):
+		t.Fatalf("the bot call was never sent\n%s", steps.joined())
+	}
+
+	t0 := time.Now()
+	_, rerr, err := a.tryCall("dungeon_run", map[string]any{"plan": "ragefire_chasm", "lead_bot": "Tanka"})
+	elapsed := time.Since(t0)
+	if err != nil {
+		t.Fatalf("dungeon_run: %v", err)
+	}
+	if rerr != nil {
+		t.Fatalf("dungeon_run: %d %s\n%s", rerr.Code, rerr.Message, steps.joined())
+	}
+	if elapsed < 6*time.Second {
+		t.Fatalf("dungeon_run answered after %s, before the bot call's 7.5 s could be waited out", elapsed)
+	}
+	if started.Load() != 1 {
+		t.Fatalf("dungeon_run sent %d start(s), want 1\n%s", started.Load(), steps.joined())
+	}
+	if r := <-bot; r.err != nil {
+		t.Fatalf("bot: %v", r.err)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
 // TestServeDungeonRunPreflightRefusals: each failed check refuses the call and sends no start. One daemon serves every
 // case: the scene and the slot dir are changed between calls, exactly as a changed server or lease would be.
 func TestServeDungeonRunPreflightRefusals(t *testing.T) {

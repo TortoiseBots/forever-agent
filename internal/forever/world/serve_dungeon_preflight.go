@@ -100,7 +100,7 @@ func (c serveConsole) Run(ctx context.Context, line string) (string, error) {
 // session goroutine sees them while Pump hands them to the collector on its own goroutine. A tokenless reply ends
 // at its quiet window, so the tap is the only way to hear it without owning the queue.
 //
-// The run holds the command channel's one-run lock (command.Session.Exclusive), so no other command starts inside
+// The run holds the command channel's one-run lock (command.Session.ExclusiveRun), so no other command starts inside
 // its reply: the core's console answer carries no marker that would tell its lines from a dashboard `bot` call's or a
 // module probe's, and a stray "Player not found!" from another command would refuse the preflight (a "not found" is
 // the report's own "does not exist" row). The lock is the channel's serialisation, not the session queue: every
@@ -113,16 +113,22 @@ func (st *serveState) preflightCommand(ctx context.Context, line string, opts co
 	if opts.Deadline <= 0 {
 		opts.Deadline = command.DefaultDeadline
 	}
-	runCtx, cancelRun := context.WithTimeout(ctx, opts.Deadline+servePreflightSlop)
-	defer cancelRun()
-	lockCtx, cancelLock := context.WithTimeout(ctx, servePreflightLockWait)
+	// One budget for the command's whole path: the GM guard and the queued calls wait for the session goroutine, which
+	// may be busy with a run in flight for as long as the lock wait allows. The run's own deadline is taken when it
+	// starts (below), not here, so a long wait for the channel does not eat into the reply's window. The RPC's context
+	// has no deadline, so this budget is what ends a session that stops serving.
+	cmdCtx, cancelCmd := context.WithTimeout(ctx, servePreflightLockWait+opts.Deadline+servePreflightSlop)
+	defer cancelCmd()
+	lockCtx, cancelLock := context.WithTimeout(cmdCtx, servePreflightLockWait)
 	defer cancelLock()
 	c := &preflightCommand{st: st}
-	if err := c.prepare(runCtx, opts); err != nil {
+	if err := c.prepare(cmdCtx, opts); err != nil {
 		return nil, err
 	}
 	defer c.close()
 	return st.exclusiveCommand(lockCtx, c.opts, func() (*command.Reply, error) {
+		runCtx, cancelRun := context.WithTimeout(cmdCtx, opts.Deadline+servePreflightSlop)
+		defer cancelRun()
 		return command.Run(runCtx, c, line, c.opts)
 	})
 }

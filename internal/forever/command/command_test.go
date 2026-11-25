@@ -338,23 +338,27 @@ func (c *concurrentTransport) Pump(ctx context.Context, feed func(chat.Line), do
 	return nil
 }
 
-// TestSessionExclusiveHoldsTheChannel: no run starts while Exclusive's fn runs. That is what keeps another command's
-// reply out of a tokenless run's quiet window (the daemon's preflight read runs beside the queue and takes its lines
-// from a tap): the exclusion, not the time of the send, is the scope.
-func TestSessionExclusiveHoldsTheChannel(t *testing.T) {
-	tr := &enteredTransport{entered: make(chan struct{}, 1)}
+// TestSessionExclusiveRunHoldsTheChannel: no queued run starts while ExclusiveRun holds the channel — that is what
+// keeps another command's reply out of a tokenless run's quiet window (the daemon's preflight read runs beside the
+// queue and takes its lines from a tap) — while a caller on the goroutine the holder's queued calls need answers
+// ErrBusy at once instead of waiting. Mutation: a blocking take in TryRun makes the daemon deadlock this test
+// prevents (the preflight's next slice against the waiting method).
+func TestSessionExclusiveRunHoldsTheChannel(t *testing.T) {
+	tr := &enteredTransport{entered: make(chan struct{}, 2)}
 	q := NewSession(tr)
 	inside := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan error, 1)
 	go func() {
-		done <- q.Exclusive(context.Background(), func() error {
+		_, err := q.ExclusiveRun(context.Background(), Options{}, func() (*Reply, error) {
 			close(inside)
 			<-release
-			return nil
+			return &Reply{End: "quiet", Raw: []string{"held"}}, nil
 		})
+		done <- err
 	}()
 	<-inside
+	// An ordinary queued run waits its turn.
 	ran := make(chan struct{})
 	go func() {
 		_, _ = q.Run(context.Background(), ".server info", Options{Deadline: 100 * time.Millisecond, Quiet: 10 * time.Millisecond})
@@ -365,34 +369,7 @@ func TestSessionExclusiveHoldsTheChannel(t *testing.T) {
 		t.Fatal("a run started while the channel was exclusive")
 	case <-time.After(20 * time.Millisecond):
 	}
-	close(release)
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	<-ran
-	if len(tr.entered) != 1 {
-		t.Fatalf("the run did not start after the release")
-	}
-}
-
-// TestSessionTryRunRefusesWhileExclusive: a caller whose own goroutine an exclusive holder's queued calls need must
-// not wait for the channel. TryRun takes it only when free and answers ErrBusy at once otherwise, having sent
-// nothing; once the holder is done it runs normally. Mutation: a blocking take makes the call wait for the whole
-// exclusive window (the daemon deadlock this exists to prevent).
-func TestSessionTryRunRefusesWhileExclusive(t *testing.T) {
-	tr := &enteredTransport{entered: make(chan struct{}, 1)}
-	q := NewSession(tr)
-	inside := make(chan struct{})
-	release := make(chan struct{})
-	done := make(chan error, 1)
-	go func() {
-		done <- q.Exclusive(context.Background(), func() error {
-			close(inside)
-			<-release
-			return nil
-		})
-	}()
-	<-inside
+	// A run on the holder's own goroutine refuses at once.
 	opts := Options{Deadline: 100 * time.Millisecond, Quiet: 10 * time.Millisecond}
 	startedAt := time.Now()
 	if _, err := q.TryRun(context.Background(), ".server info", opts); !errors.Is(err, ErrBusy) {
@@ -408,13 +385,17 @@ func TestSessionTryRunRefusesWhileExclusive(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
+	<-ran
+	if len(tr.entered) != 1 {
+		t.Fatalf("the queued run did not start after the release")
+	}
 	if _, err := q.TryRun(context.Background(), ".server info", opts); errors.Is(err, ErrBusy) {
 		t.Fatalf("TryRun on a free channel: %v", err)
 	}
 	select {
 	case <-tr.entered:
 	default:
-		t.Fatal("the run did not start after the release")
+		t.Fatal("TryRun did not run after the release")
 	}
 }
 

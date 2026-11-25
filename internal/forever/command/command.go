@@ -239,7 +239,7 @@ func Run(ctx context.Context, conn Transport, line string, opts Options) (*Reply
 // last line of any earlier run that did not end with its own marker; only then is an untagged refusal in the new
 // run accepted as its own (Options.allowRefusal).
 type Session struct {
-	// hold is the channel's one-run token: Run, TryRun and Exclusive take it for as long as their lines may be on
+	// hold is the channel's one-run token: Run, TryRun and ExclusiveRun take it for as long as their lines may be on
 	// the wire. It is a channel, not a sync.Mutex, so every wait can end on its context (a queued run whose caller
 	// went away stops waiting) and TryRun can refuse instead of waiting at all.
 	hold      chan struct{}
@@ -272,22 +272,6 @@ func (s *Session) take(ctx context.Context) error {
 }
 
 func (s *Session) release() { <-s.hold }
-
-// Exclusive runs fn with the session's one-run lock held, so no Run begins while fn runs. It is for a caller with its
-// own transport that still has to own the channel for one reply: the daemon's preflight reads a tokenless console
-// command beside the queue, and a tokenless reply carries no marker to tell its lines from another command's (the
-// reason this Session runs one command at a time), so the exclusion is what keeps another command's answer out of
-// its quiet window. fn must not call Run: the lock is not reentrant. The wait for the lock ends with ctx, whose error
-// is returned when it expires first (fn did not run); a caller whose own code runs on a goroutine the holder's calls
-// need must use TryRun instead of waiting. A caller that owns the channel to run one command of its own should use
-// ExclusiveRun, which also keeps the tail rule that keeps the neighbouring runs' replies apart.
-func (s *Session) Exclusive(ctx context.Context, fn func() error) error {
-	if err := s.take(ctx); err != nil {
-		return err
-	}
-	defer s.release()
-	return fn()
-}
 
 // TryRun is Run for a caller that must not wait for the channel: it takes the channel only if it is free and answers
 // ErrBusy at once otherwise, having sent nothing. The daemon's own run methods use it: they execute on the session
@@ -383,9 +367,10 @@ func (s *Session) noteTail(rep *Reply, opts Options) {
 // ExclusiveRun runs fn as the channel's only run and keeps this Session's tail rule for it: an earlier run's open
 // quiet window is waited out before fn sends, and fn's reply opens the window a later run waits out. It is for a caller
 // that reads one reply off this channel with its own transport (the daemon's preflight, whose send and pump slices are
-// queued calls and whose reply arrives through a tap): Run's tail bookkeeping cannot be left to the caller, because
-// the reply it collects has no marker either, so an earlier run's late line would be read as its own and its own late
-// line as the next run's. fn must not call Run: the token is still not reentrant.
+// queued calls and whose reply arrives through a tap): a plain take would let an earlier run's late line be read as
+// fn's reply and fn's own late line as the next run's. fn must not call Run: the token is not reentrant. The wait for
+// the lock ends with ctx (fn did not run when it expires first); a caller whose own code runs on a goroutine the
+// holder's calls need must use TryRun instead of waiting.
 func (s *Session) ExclusiveRun(ctx context.Context, opts Options, fn func() (*Reply, error)) (*Reply, error) {
 	if err := opts.normalise(); err != nil {
 		return nil, err
