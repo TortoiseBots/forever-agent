@@ -68,6 +68,7 @@ a scripted (fake) world. The long development notes are under `docs/forever/`.
 | The dashboard's 3D view (stage 1: the walkable mesh with markers, live and replay) | built; exercised against a fake serve and a synthetic mesh |
 | Trials bench (`trials run` and its situations) | provisions live and drives the situations; see the testing section |
 | Navmesh planning (`path_to`, `walk_path`, `forever path-check`) | works offline on a Forever mmaps folder; needs a cgo build |
+| The bot module's own sight query (`los`, and the plan scout's server sight beside the navmesh ray) | built against the module's documented answer and exercised against a scripted module; no live run yet, because the server-side command is newer than the running builds |
 
 "Works against the scripted world" means the protocol handling, the state machine and the refusal paths are
 tested against a fake server; it does not mean the behaviour has been seen on a real ForeverCore world.
