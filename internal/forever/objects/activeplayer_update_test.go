@@ -170,7 +170,7 @@ func activePlayerMoneyBody(coinage uint64, bank *uint64, slots map[int]wire.GUID
 }
 
 // TestActivePlayerUpdateCoinageWithSlots proves a purchase's update, Coinage next to the slots, is decoded for both:
-// the money lands in the model and the slot deltas are the ones the packet named (Codex high, Claude 4).
+// the money lands in the model and the slot deltas are the ones the packet named (high, finding 4).
 func TestActivePlayerUpdateCoinageWithSlots(t *testing.T) {
 	bank := uint64(77)
 	for name, body := range map[string][]byte{

@@ -2781,7 +2781,7 @@ func TestPrepullAuraStartRefusesARunningRun(t *testing.T) {
 }
 
 // A refused `run status` proves nothing about the run, so the start fire fails closed: a batch sent while the raid
-// walks is the walk-101 hazard. r1 warned and fired anyway; this is codex r1's first HIGH.
+// walks is the walk-101 hazard. r1 warned and fired anyway; this is r1's first HIGH.
 func TestPrepullAuraStartRefusedStatusFailsClosed(t *testing.T) {
 	a := newPrepullAgent(t)
 	w := prepullStartWalk(t, a)
@@ -2810,7 +2810,7 @@ func TestPrepullAuraStartMissingStatusLineFailsClosed(t *testing.T) {
 }
 
 // A RUNNING run of another plan is still a run: bots may be moving in it, so the start fire fails closed. r1 fired
-// when the plan name differed; this is the same codex r1 HIGH.
+// when the plan name differed; this is the same r1 HIGH.
 func TestPrepullAuraStartRunningOtherPlanFailsClosed(t *testing.T) {
 	a := newPrepullAgent(t)
 	w := prepullStartWalk(t, a)
@@ -2841,7 +2841,7 @@ func TestPrepullAuraStartPausedRunFailsClosed(t *testing.T) {
 
 // The coverage read is taken at the pull, and only a SUCCESSFUL read marks the row done: a refused read at the pull
 // leaves the row unread, so the next qualifying status retries it instead of the evidence vanishing. r1 marked the row
-// done before the I/O, so this retry never happened (codex r1's second HIGH).
+// done before the I/O, so this retry never happened (r1's second HIGH).
 func TestPrepullAuraCoverageReadRetriesAfterAFailure(t *testing.T) {
 	a := newPrepullAgent(t)
 	w := prepullStartWalk(t, a)

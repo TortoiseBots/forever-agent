@@ -4,7 +4,7 @@ title: Teleports and travel
 description: Move the character with the GM teleport, area triggers, mounts and server-flown taxi flights, and check the map handling live.
 tags: [daemon, teleport, mount, taxi, area-trigger]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T04:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T04:40:00Z }
 sources:
   - id: serve-gm-gaps
     resource: internal/forever/world/serve_gm_gaps.go

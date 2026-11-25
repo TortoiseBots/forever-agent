@@ -4,7 +4,7 @@ title: Run the brain
 description: Start, watch and stop the combat brain over RPC, with a rotation and a role.
 tags: [turtle, combat, brain, rpc]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:40:00Z }
 sources:
   - id: brain-methods
     resource: cmd/forever-agent/brain_methods.go

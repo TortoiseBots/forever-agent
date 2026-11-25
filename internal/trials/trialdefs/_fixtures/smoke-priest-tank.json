@@ -79,7 +79,7 @@
     {
       "id": "SMOKE-PWS-PLAYER",
       "desc": "Power Word: Shield casts at the player (smoke: proves the pipeline, not a bug claim)",
-      "source": "briefs-omp/trials-1-runner.md (smoke fixture)",
+      "source": "trial notes: runner, round 1 (smoke fixture)",
       "expect_today": "?",
       "why_expect": "smoke only",
       "check": {

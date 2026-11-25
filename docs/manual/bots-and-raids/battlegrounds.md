@@ -4,7 +4,7 @@ title: Battlegrounds
 description: Queue a character for Warsong Gulch or Arathi Basin with the scripted act steps, or watch a whole match and read its report card.
 tags: [bots-and-raids, battleground, queue, report-card]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T23:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T23:40:00Z }
 sources:
   - id: bg-act
     resource: internal/forever/world/bg_act.go

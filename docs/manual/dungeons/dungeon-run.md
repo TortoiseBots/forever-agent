@@ -4,7 +4,7 @@ title: forever dungeon-run
 description: Run one dungeon plan with the agent as commander of five bots, and read the order list, trace and summary it leaves.
 tags: [dungeons, run, commander, command]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:05:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T21:05:00Z }
 sources:
   - id: dungeon-run
     resource: cmd/forever-agent/forever_dungeon.go

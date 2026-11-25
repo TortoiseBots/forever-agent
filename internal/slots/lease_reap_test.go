@@ -216,7 +216,7 @@ func TestReapDeadLeases(t *testing.T) {
 	}
 }
 
-// Codex HIGH: an unreadable /proc/<pid>/stat is NOT a dead holder. Under hidepid, or for another user's process,
+// An unreadable /proc/<pid>/stat is NOT a dead holder. Under hidepid, or for another user's process,
 // the read fails while the process runs; only ESRCH (kill 0) says the pid is gone.
 func TestUnreadableHolderStatIsAlive(t *testing.T) {
 	st := testStore(t, twoSlotCfg)
@@ -265,7 +265,7 @@ func TestUnreadableHolderStatWithESRCHIsDead(t *testing.T) {
 	}
 }
 
-// Opus hardening: every WSL distro reports the same hostname, so the pid namespace must match too. A lease from
+// Hardening: every WSL distro reports the same hostname, so the pid namespace must match too. A lease from
 // another namespace (or one written before the field existed) is never reaped by pid, only by its expiry.
 func TestLeaseNeedsTheSamePIDNamespaceToReap(t *testing.T) {
 	for _, tc := range []struct {

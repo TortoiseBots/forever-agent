@@ -15,7 +15,7 @@ import (
 
 // newLeaseID mints an unguessable 128-bit lease identity (32 hex chars).
 // Every acquisition gets one; release/renew/SetDir must present the exact
-// ID, so a holder string alone is never enough (Codex ABA).
+// ID, so a holder string alone is never enough (the ABA race).
 func newLeaseID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {

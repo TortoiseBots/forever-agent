@@ -4,7 +4,7 @@ title: walk-preflight reference
 description: "Check a walk directory before any raid-walk starts: binaries, slots, leases, instance caps, plans, server keys and rosters."
 tags: [turtle, raids, walk-preflight, reference]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-11T21:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-11T21:30:00Z }
 sources:
   - id: preflight-cmd
     resource: cmd/forever-agent/walk_preflight_cmd.go

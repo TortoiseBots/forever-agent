@@ -4,7 +4,7 @@ title: Loot and gossip
 description: Who loots what in each mode, and who talks to dungeon NPCs.
 tags: [turtle, dungeon, loot, gossip, concept]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:50:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:50:00Z }
 sources:
   - id: remote-objects
     resource: internal/dungeon/remote_objects.go

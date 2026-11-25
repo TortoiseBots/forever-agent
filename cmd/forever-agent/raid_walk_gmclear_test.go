@@ -1413,7 +1413,7 @@ func TestGMClearLandPollsTheLanding(t *testing.T) {
 			t.Fatalf("%d status reads, want %d", a.reads, want)
 		}
 	})
-	// Codex round 2 HIGH: `waited` counted only the sleeps, so each status RPC (up to 10 s) stretched the 3 s
+	// Round 2 (HIGH): `waited` counted only the sleeps, so each status RPC (up to 10 s) stretched the 3 s
 	// ceiling. The ceiling is a deadline: a 2 s status read still gives up at gmClearLandWait and falls back.
 	t.Run("a slow status cannot stretch the ceiling", func(t *testing.T) {
 		a := &gmLandAgent{clock: newFakeClock(), never: true, statusCost: 2 * time.Second}

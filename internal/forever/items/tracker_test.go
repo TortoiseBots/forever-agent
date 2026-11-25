@@ -109,7 +109,7 @@ func TestTrackerRefusalCancelsTheMove(t *testing.T) {
 	}
 }
 
-// TestTrackerFailuresAreCorrelatedToTheirRequest is the medium Codex finding: a refusal naming one request's items
+// TestTrackerFailuresAreCorrelatedToTheirRequest is the medium finding: a refusal naming one request's items
 // refuses only that request, an unrelated one refuses nothing, and a failure naming no item refuses the newest.
 func TestTrackerFailuresAreCorrelatedToTheirRequest(t *testing.T) {
 	w := trackerWorld(t)
@@ -139,7 +139,7 @@ func TestTrackerFailuresAreCorrelatedToTheirRequest(t *testing.T) {
 	}
 }
 
-// TestTrackerPartialSlotUpdateKeepsUnrelatedPlacements is the Codex high finding: a slot update names some slots, and
+// TestTrackerPartialSlotUpdateKeepsUnrelatedPlacements is the high finding: a slot update names some slots, and
 // a push placement for another slot survives it; one for a named slot gives way to the server's word.
 func TestTrackerPartialSlotUpdateKeepsUnrelatedPlacements(t *testing.T) {
 	w := trackerWorld(t)

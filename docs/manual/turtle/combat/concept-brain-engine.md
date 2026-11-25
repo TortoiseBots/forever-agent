@@ -4,7 +4,7 @@ title: The brain engine
 description: How the brain ticks, scores actions by band, and moves, melees and remembers.
 tags: [turtle, combat, brain, concept]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:50:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:50:00Z }
 sources:
   - id: brain-go
     resource: internal/brain/brain.go

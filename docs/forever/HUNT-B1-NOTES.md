@@ -95,7 +95,7 @@ frame after the first**. The watch would have written one frame per run. `Record
 
 ## Fix round (review findings)
 
-Codex's review of this round raised three findings. The second review (a second model) produced none. All three were
+The adversarial review of this round raised three findings. The second review (a second model) produced none. All three were
 real; each has a test that fails on the code before the fix.
 
 1. **Combat rows were skipped after a write failure** (`watch.go:413-419`, `record.go`): `Recorder.Combat` answered
@@ -120,7 +120,7 @@ real; each has a test that fails on the code before the fix.
 
 ## Second fix round (review finding)
 
-Codex's re-check of the fix round found one more finding: a later, smaller combat-log hole disappeared from the
+The re-check of the fix round found one more finding: a later, smaller combat-log hole disappeared from the
 diagnostics. `CombatRows` reports `dropped` against the current cursor, but `drainCombat` compared it with
 `combatLost`, which held the cumulative loss. After a first 100-row overflow, a later independent 50-row overflow
 returned 50, which was not greater than 100, so neither the log nor `combat_dropped` recorded the second loss — the

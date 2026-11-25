@@ -4,7 +4,7 @@ title: Replay a recording into a test daemon
 description: Drive the TortoiseBots observability dashboard from a replay file with no server running.
 tags: [turtle, dashreplay, dashboard]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:40:00Z }
 sources:
   - id: dashreplay-cmd
     resource: cmd/forever-agent/dashreplay_cmd.go

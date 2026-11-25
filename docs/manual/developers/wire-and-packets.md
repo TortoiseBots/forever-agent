@@ -4,7 +4,7 @@ title: Wire and packets
 description: How a byte on the world socket becomes a typed message in the agent, where a parser belongs, and the rules every parser follows.
 tags: [developers, packets, protocol, wire]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:38:33Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:38:33Z }
 sources:
   - id: buffer
     resource: internal/forever/wire/buffer.go

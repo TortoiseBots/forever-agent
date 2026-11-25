@@ -83,7 +83,7 @@ func TestCheckCommandTrace(t *testing.T) {
 	// The driver word carries 1-96 characters after driver= (the server stores the value, at most 96: dungeon.RunMeta.Check); a run id is
 	// the commander's own argument.
 	long := strings.Repeat("a", 96)
-	for _, ok := range []string{"trace start r-20261020T095109-ab12 driver=deepseek:v4.1-flash:wc-s2", "trace stop", "trace status", "TRACE Stop", "trace start r driver=" + long} {
+	for _, ok := range []string{"trace start r-20261020T095109-ab12 driver=walker:wc-s2", "trace stop", "trace status", "TRACE Stop", "trace start r driver=" + long} {
 		if err := CheckCommand(ok); err != nil {
 			t.Errorf("%q: %v", ok, err)
 		}

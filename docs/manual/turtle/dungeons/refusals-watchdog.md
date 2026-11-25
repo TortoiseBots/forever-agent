@@ -4,7 +4,7 @@ title: Refusals, the watchdog, and the entry ledger
 description: What a bot's "no" means, how the stall guard works, and why the 6th instance entry is refused.
 tags: [turtle, dungeon, refusals, watchdog, concept]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:50:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:50:00Z }
 sources:
   - id: refusals
     resource: internal/dungeon/refusals.go

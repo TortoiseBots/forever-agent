@@ -4,7 +4,7 @@ title: Groups, raids and guilds
 description: Invite and leave a group, read the party roster, lead a party (promote, loot method, marks, disband), convert it to a raid, handle guild invites, and check the group code live.
 tags: [player-actions, party, raid, guild, group-control]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
 sources:
   - id: serve-session
     resource: internal/forever/world/serve_session.go

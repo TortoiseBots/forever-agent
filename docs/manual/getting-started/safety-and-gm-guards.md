@@ -4,7 +4,7 @@ title: Safety and GM guards
 description: The rules for testing on a server, the game-master hands and the boundaries that keep them off other players, and the console and capture limits.
 tags: [getting-started, safety, gm, guards, testing]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:31:22Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:31:22Z }
 sources:
   - id: agents
     resource: AGENTS.md

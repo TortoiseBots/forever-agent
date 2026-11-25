@@ -90,15 +90,15 @@ func TestObserveFromLegWithoutAStartPointMovesNobody(t *testing.T) {
 	if g.indexOf("run start") >= 0 {
 		t.Fatalf("the run was started: %v", g.orders)
 	}
-	// Refused right after the probe: no prepare, bind or entry past `run list` (Codex adversarial review 2026-10-30).
+	// Refused right after the probe: no prepare, bind or entry past `run list` (2026-10-30).
 	if fmt.Sprint(g.orders) != "[run list]" {
 		t.Fatalf("sent past the probe: %v", g.orders)
 	}
 }
 
 // The unsafe-start gate of an observed from_leg start measures the run leader's start step, the point the party is moved to, not the
-// plan file's LegStart: a step 2 yd from a pack of a skipped leg in a fresh instance is refused before any GM move (Codex review
-// 2026-10-30), though the leg before's end (100 0 0) is 72 yd from that pack.
+// plan file's LegStart: a step 2 yd from a pack of a skipped leg in a fresh instance is refused before any GM move
+// (2026-10-30), though the leg before's end (100 0 0) is 72 yd from that pack.
 func TestObserveFromLegGatesTheStartStep(t *testing.T) {
 	p := remotePlan(
 		Leg{Name: "first", To: Point{100, 0, 0}, PullGroups: []PullGroup{{Entries: []uint32{1}, Positions: []Point{{172, 0, 0}}}}},
@@ -116,7 +116,7 @@ func TestObserveFromLegGatesTheStartStep(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "the run leader's start step 170 0 0 is 2 yd from pull group 1") {
 		t.Fatalf("%v", err)
 	}
-	// Nothing past the probe: no bind, no instance entry, no GM line, no move (Codex adversarial review 2026-10-30).
+	// Nothing past the probe: no bind, no instance entry, no GM line, no move (2026-10-30).
 	if len(g.gos) != 0 || len(g.appears) != 0 || fmt.Sprint(g.orders) != "[run list]" {
 		t.Fatalf("sent past the probe: gos %v appears %v orders %v", g.gos, g.appears, g.orders)
 	}

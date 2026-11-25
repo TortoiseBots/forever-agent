@@ -17,8 +17,7 @@ import (
 // real encounter units that fight far from the boss's plan position (Naxx Four Horsemen 16065/16062/16063;
 // Thaddius's Stalagg 15929 / Feugen 15930, summoned 69 yd off, boss_thaddius.cpp:125-129; AQ40 Yauj 15543 53 yd,
 // Vek'nilash 15275 > 60 yd; ZF Bly's crew 7605/7606/7608 63-72 yd; Nekrum 7796 ~56 yd; Anub'Rekhan's crypt guard
-// 16573 43 yd), and with a radius the walk would revive into a live encounter (Codex adversarial and the Opus cold
-// review of f311f7e).
+// 16573 43 yd), and with a radius the walk would revive into a live encounter (the reviews of f311f7e).
 //   - ZG walk 19 test2 s4: Zulian Tigers 11361 (Thekal's first adds, also ZG trash) fought as trash at step 89 on
 //     Venoxis's leg, ~330 yd from Thekal's position, latched the walk's boss gate and blocked a trash-wipe recovery.
 //   - Thekal phase 2: Thekal 14599 dies in phase 1 and comes back as 14509 with Zulian Guardians 15068 (plan

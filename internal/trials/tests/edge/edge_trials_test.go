@@ -894,7 +894,7 @@ func TestPotionCrossRepCooldownTest_NoPotionAtAllIsStillAMiss(t *testing.T) {
 }
 
 func TestPotionCrossRepCooldownTest_NoPotionInAFullyCoveredWindowIsNoChance(t *testing.T) {
-	// codex HIGH (round 1, tightened in round 3): rep 2 opens inside rep 1's 120 s item cooldown
+	// HIGH (round 1, tightened in round 3): rep 2 opens inside rep 1's 120 s item cooldown
 	// with NO potion cast. Only a cooldown that covers the WHOLE response window (here -2..30 on
 	// rep2's base) is no opportunity; 80 s spacing leaves the cooldown at -70..50.
 	got := etScoreCrossRep(t, []*float64{new(10.0), nil}, 80.0)

@@ -4,7 +4,7 @@ title: From plan to run leader rows
 description: What plan-export writes into the bot module's run leader tables, which plan fields the rows carry, and which they cannot.
 tags: [dungeons, plans, export, run-leader]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:46:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T21:46:00Z }
 sources:
   - id: planexport
     resource: internal/planexport/planexport.go

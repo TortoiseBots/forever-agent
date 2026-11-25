@@ -4,7 +4,7 @@ title: forever dungeon-watch
 description: Watch a dungeon run that a server module leads by itself, keep its safety budgets, rescue a wipe and record the run.
 tags: [dungeons, watch, module, command]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:10:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T21:10:00Z }
 sources:
   - id: watch-cmd
     resource: cmd/forever-agent/forever_watch.go

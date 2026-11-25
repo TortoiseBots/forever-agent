@@ -71,7 +71,7 @@
     {
       "id": "PRI-SHADOW-INFORM-HEAL",
       "desc": "A shadow priest with no other healer in the group casts Flash Heal or Greater Heal on the tank while the tank is under 50 percent (it leaves Shadowform to do it)",
-      "source": "briefs-omp/priest-shadowform-offheal-spec.md (Opus MEDIUM-2: the offheal gate must not stop the last healer); AFTER-PLAN.md run 2",
+      "source": "trial notes: shadowform offheal spec (MEDIUM-2: the offheal gate must not stop the last healer); AFTER-PLAN.md run 2",
       "expect_today": "PASS",
       "why_expect": "with no other healer the gate must let the shadow priest heal; zero heals is a FAIL even if Shadowform uptime improved",
       "check": {

@@ -531,7 +531,7 @@ func selfFlags(flags uint32) []byte {
 	return w.Bytes()
 }
 
-// Codex's case (#296 review): the lead X is confirmed, a select of G is pending, the agent is in combat and the core rewrites the target
+// The #296 case: the lead X is confirmed, a select of G is pending, the agent is in combat and the core rewrites the target
 // field to G (Unit::Attack). That must not confirm G: the selection the GM line acts on can still be X. Nothing is selected or sent until
 // combat ended (and SelectionCombatSettle passed); then G is selected again, through a neutral selection because its old send was fenced
 // off, and the line goes out after the echo of that new send.

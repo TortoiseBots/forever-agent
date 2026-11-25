@@ -4,7 +4,7 @@ title: Plan tools
 description: Check, lint, probe, stage, export, scout and compare a dungeon plan offline, before it costs a run.
 tags: [dungeons, tools, checks, export]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
 sources:
   - id: plan-check
     resource: cmd/forever-agent/plan_check_cmd.go

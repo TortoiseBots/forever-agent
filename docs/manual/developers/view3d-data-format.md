@@ -4,7 +4,7 @@ title: The 3D view data format
 description: The four dashboard routes that feed the 3D view, the scene and frame JSON they answer, the limits each route enforces, and how another dashboard embeds the viewer.
 tags: [developers, dashboard, 3d, format]
 status: draft
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T04:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T04:30:00Z }
 sources:
   - id: view3d-go
     resource: internal/dashboard/view3d.go

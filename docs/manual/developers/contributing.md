@@ -4,7 +4,7 @@ title: Contributing
 description: The rules and checks a change to forever-agent must pass before it is merged.
 tags: [developers, contributing, tests, ci]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:38:33Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:38:33Z }
 sources:
   - id: agents
     resource: AGENTS.md
@@ -77,8 +77,9 @@ your test lands in is automatic, by test name or by package. Do not maintain a l
 
 # Page frontmatter
 
-`generated.by` names the producer and version that last wrote the page, in `<producer>/<version>` form (a page touched by several lists the last one).
-`generated.at` is when; no page carries `verified` until a person has checked it against the code, and only that check may add it.
+`generated.by` is always `forever-agent docs`: the page belongs to the manual, so it names the project and never
+the tool, model or person that wrote it.
+`generated.at` is when the page was last written; no page carries `verified` until a person has checked it against the code, and only that check may add it.
 
 # Generated files
 
@@ -142,17 +143,17 @@ matching page under `docs/manual/` in the same PR; a new feature gets a page or 
 removed or limited feature loses every sentence that still promises it. `README.md` changes when
 the quick start, the feature list or the status changes. The code wins when the two disagree.
 
-- The page's frontmatter keeps `type`, `title` and `description`; `generated` says who wrote it and
-  when, `sources` lists the files the facts come from, and `verified` appears only after a person
-  checked the page against a live server.
+- The page's frontmatter keeps `type`, `title` and `description`; `generated.by` is always
+  `forever-agent docs` and `generated.at` is when the page was last written, `sources` lists the files
+  the facts come from, and `verified` appears only after a person checked the page against a live server.
 - Add one line to `docs/manual/log.md` under today's date.
 - Copy names, flags, defaults and error texts from the code you opened, and use placeholders only
   (no hosts, accounts, character names or private paths).
 
 `make docs-check` runs the manual's checker and its tests. Beyond the OKF rules it fails on a
-registered command that no page mentions, on a daemon method missing from
-[the method index](../daemon/method-index.md), and on a command or method the manual names that
-the code no longer registers. The CI job `docs-sync` fails a PR that changes
+`generated.by` other than `forever-agent docs`, on a registered command that no page mentions, on a
+daemon method missing from [the method index](../daemon/method-index.md), and on a command or method
+the manual names that the code no longer registers. The CI job `docs-sync` fails a PR that changes
 `cmd/forever-agent/`, a serve method file (`internal/forever/world/serve*_methods.go`) or adds a
 flag, and changes nothing under `docs/manual/` or `README.md`. A change with truly no
 user-visible effect says so in the PR body, on its own line: `Docs: not needed, because ...`.

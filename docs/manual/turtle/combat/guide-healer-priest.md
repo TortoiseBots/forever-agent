@@ -4,7 +4,7 @@ title: Heal and play a priest
 description: How the healer triages the party, picks heals and dispels, stands, and what the priest adds.
 tags: [turtle, combat, healer, priest]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:45:00Z }
 sources:
   - id: heal-go
     resource: internal/brain/heal.go

@@ -142,7 +142,7 @@ func TestFightRecordKillCountsAsBossKill(t *testing.T) {
 	}
 }
 
-// Codex HIGH: the watch loop must not trust the resume's ACK. The ACK only says the command arrived; the run can
+// The watch loop must not trust the resume's ACK. The ACK only says the command arrived; the run can
 // stay paused or pause again at once on the same pullback failure. Until a FRESH RunRunning status for the boss
 // row arrives, the incident still routes through handleBoss (no unmanaged fight), within pausedBossResumeWait.
 // A fresh RunRunning status inside the deadline hands the fight to the run leader (the existing handoff).
@@ -182,7 +182,7 @@ func pausedBossFixture(t *testing.T, answer func(f *fixture, boss, total int)) (
 	return f, boss, total
 }
 
-// TestPausedBossResumeAckWithoutRunningStillStopsTheRun is the Codex HIGH case: the resume is ACKed but the run
+// TestPausedBossResumeAckWithoutRunningStillStopsTheRun is the ACK-only case: the resume is ACKed but the run
 // never shows running again, so the walk must route the engaged boss through handleBoss (exit 19 with the boss
 // note) instead of handing an unmanaged fight to the run leader (exit 18 on the pause).
 func TestPausedBossResumeAckWithoutRunningStillStopsTheRun(t *testing.T) {
@@ -358,7 +358,7 @@ func TestPausedBossResumeWipeInsideWaitRunsWipeRecovery(t *testing.T) {
 	}
 }
 
-// TestPausedBossResumeWipeRecoveredInsideWaitKeepsWatching is round 3 (Codex HIGH): a wipe drained
+// TestPausedBossResumeWipeRecoveredInsideWaitKeepsWatching is round 3 (HIGH): a wipe drained
 // inside the resume wait that RECOVERS (--wipe-resume; the run regroups by itself) must send the walk
 // back to its watch loop. The pre-wipe boss-engaged incident is stale: handleBoss with it stops the
 // freshly resumed run and ends the walk on the wrong encounter. The walk must run to its until
@@ -431,7 +431,7 @@ func TestPausedBossResumeWipeRecoveredInsideWaitKeepsWatching(t *testing.T) {
 	}
 }
 
-// TestNearWipePauseOnBossRowSendsNoResume is round 4 item 1 (Opus HIGH): the paused-boss resume
+// TestNearWipePauseOnBossRowSendsNoResume is round 4 item 1 (HIGH): the paused-boss resume
 // exists for ONE pause, the run leader's pullback refused unreachable ("cmd pullback <guid> refused:
 // unreachable: ...", DungeonRunPolicy PullbackRefusedUnreachable's ApproachNoWay pause). A near-wipe
 // stop on the same boss row ("... near wipes ... the run stops here") with the boss engaged must NOT
@@ -466,7 +466,7 @@ func TestNearWipePauseOnBossRowSendsNoResume(t *testing.T) {
 	}
 }
 
-// TestPausedBossResumeUnderUntilNoneResumesTheRun is round 4 item 2 (Codex HIGH): --until none used
+// TestPausedBossResumeUnderUntilNoneResumesTheRun is round 4 item 2 (HIGH): --until none used
 // to bypass the paused-boss resume entirely, leaving the pullback-paused run standing in an active
 // boss fight until --paused-wait ended the walk. The same pullback-only resume applies there.
 func TestPausedBossResumeUnderUntilNoneResumesTheRun(t *testing.T) {
@@ -507,7 +507,7 @@ func TestPausedBossResumeUnderUntilNoneResumesTheRun(t *testing.T) {
 	}
 }
 
-// TestPausedBossResumeUnderUntilNoneFailedResumeIsNoHandoff is round 5 (Codex HIGH): under --until none a resume
+// TestPausedBossResumeUnderUntilNoneFailedResumeIsNoHandoff is round 5 (HIGH): under --until none a resume
 // whose wait ends without a fresh RunRunning (ACK only, the run stays paused) used to be reported as a successful
 // boss handoff. It is no handoff: neither handoff note fires, no run stop (--until none never stops the run on a
 // boss), and the old path owns the paused run: the watch loop's pause handling ends the walk on the pause.
@@ -555,7 +555,7 @@ func TestPausedBossResumeUnderUntilNoneRePausedIsNoHandoff(t *testing.T) {
 	}
 }
 
-// TestRunningBossHandoffHasNoResumeNote is round 4 item 3 (Opus MEDIUM): the watch loop used to note
+// TestRunningBossHandoffHasNoResumeNote is round 4 item 3 (MEDIUM): the watch loop used to note
 // "while the run is paused on its boss row: resumed the run" on every ok handoff, including a plain
 // running boss handoff where no resume went out. The note is gated on waitOut.running.
 func TestRunningBossHandoffHasNoResumeNote(t *testing.T) {
@@ -608,7 +608,7 @@ func TestRunningBossHandoffHasNoResumeNote(t *testing.T) {
 	}
 }
 
-// TestFightRecordKillAtWalkStartNeedsNoLiveSighting is round 4 item 4 (Opus MEDIUM): w.fights is the
+// TestFightRecordKillAtWalkStartNeedsNoLiveSighting is round 4 item 4 (MEDIUM): w.fights is the
 // commander's whole dashboard history, so a "kill" record already listed when the walk began may be
 // an earlier walk's or instance's. Such a record credits the goal only when this walk's frames never
 // showed the boss alive; a record that first appears during the walk credits freely.
@@ -748,7 +748,7 @@ func creditedBoss(t *testing.T, w *walk, goal int) *raidwalk.BossKillSummary {
 	return sum.BossKill
 }
 
-// TestFightRecordAtStartNeedsTheRunToReachTheBossRow is round 6 item 1 (Opus HIGH): a kill record listed when the walk
+// TestFightRecordAtStartNeedsTheRunToReachTheBossRow is round 6 item 1 (HIGH): a kill record listed when the walk
 // began credits the goal boss only when this run reached the goal row. A walk that ended on earlier trash (a stall, a
 // wipe, the time limit) never reached the boss, and the record (Jin'do 18-4 sits in later walks' lists) must neither
 // credit it nor create a boss track.
@@ -802,7 +802,7 @@ func jeklikKillRow(id string, live bool, start int64) walkFightRow {
 	return r
 }
 
-// TestSaveFightsFailedFirstReadThenKillIsCredited is round 6 item 2 (Codex HIGH): the first dashboard read failed, so
+// TestSaveFightsFailedFirstReadThenKillIsCredited is round 6 item 2 (HIGH): the first dashboard read failed, so
 // the first successful read came after the walk's own fight had been filed, and that read must not file this walk's
 // kill as history. With no read before placement the set comes from the record's start time against the walk's start.
 func TestSaveFightsFailedFirstReadThenKillIsCredited(t *testing.T) {
@@ -861,7 +861,7 @@ func TestSaveFightsLiveAtStartRecordStaysAtStart(t *testing.T) {
 	}
 }
 
-// TestPhaseStartPreplacementFightReadHasItsOwnShortDeadline is the last Codex MEDIUM: the optional dashboard read
+// TestPhaseStartPreplacementFightReadHasItsOwnShortDeadline is the last MEDIUM: the optional dashboard read
 // before the walk's placement used to share saveFights' 20 s limit, so a slow or unreachable dashboard could hold the
 // run start for 20 s. It has its own short deadline now (injected here), and on a timeout the at-start set falls back
 // to the records' start times on the first later successful read, with one note that the read timed out.

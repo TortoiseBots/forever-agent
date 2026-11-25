@@ -4,7 +4,7 @@ title: forever preflight
 description: Check the serve slot, lease, plan, export, module, SOAP console and bots before a Forever dungeon run starts.
 tags: [dungeons, preflight, command, checks]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:20:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T21:20:00Z }
 sources:
   - id: preflight-cmd
     resource: cmd/forever-agent/forever_preflight.go

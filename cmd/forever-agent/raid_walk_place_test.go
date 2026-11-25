@@ -3979,7 +3979,7 @@ func TestPlaceDeadPartyFailsFast(t *testing.T) {
 	}
 }
 
-// Codex HIGH on the r1 revive: every bot_view fails from the first `.revive` line. The hires' only observations then
+// The r1 revive's failure: every bot_view fails from the first `.revive` line. The hires' only observations then
 // age out inside the 10 s verification, and r1's dead-only count fell to zero and reported success: the placement
 // moved a party the walk could not see and then burned its tries on it (here it would place once and fail with "not
 // at the start"). A hire no frame read after the revive shows alive is unknown, not revived, so the party's
@@ -4020,7 +4020,7 @@ func TestPlaceReviveFailsClosedWhenPostReviveFramesFail(t *testing.T) {
 	}
 }
 
-// Codex HIGH on r2: a fresh frame with ONE living party row was accepted as proof that the other 19 hires needed no
+// The r2 failure: a fresh frame with ONE living party row was accepted as proof that the other 19 hires needed no
 // revive. Their cached rows were stale, dead == 0, and r2 returned success without a positive observation of any other
 // hire, so the placement moved a party it could not see. Every hire must be classified from a fresh frame: the hires a
 // partial read omits are unknown, which is not alive, so they are revived too and then have to pass the all-alive
@@ -4031,7 +4031,7 @@ func TestPlaceReviveVerifiesEveryHireAfterAPartialFrame(t *testing.T) {
 	f.agent.onGM = func(line string) {
 		if line == ".gm on" {
 			// The hires' last full-frame rows age out before the place's revive check: the partial frames from here on
-			// show one hire, and the other 19 have no fresh row (the Codex r2 picture).
+			// show one hire, and the other 19 have no fresh row (the r2 picture).
 			f.clock.advance(30 * time.Second)
 		}
 	}

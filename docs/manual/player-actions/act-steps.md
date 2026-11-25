@@ -4,7 +4,7 @@ title: Scripted actions with act
 description: Drive the character through a list of scripted steps - talk, buy, quest, loot, train, fly, mail and the rest - with forever act or the act method.
 tags: [player-actions, act, scripting, steps]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T02:05:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T02:05:00Z }
 sources:
   - id: act
     resource: internal/forever/world/act.go

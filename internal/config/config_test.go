@@ -40,14 +40,14 @@ func TestLoadDefaultsAndLookup(t *testing.T) {
 }
 
 func TestLoadsRunMetaDefault(t *testing.T) {
-	s, err := Load(writeSettings(t, 0o600, `{"realmd":"h:1","accounts":{"a":"b"},"run_meta":{"model":"haiku","effort":"max","run":"zf-ab-2-s5"}}`))
+	s, err := Load(writeSettings(t, 0o600, `{"realmd":"h:1","accounts":{"a":"b"},"run_meta":{"model":"worker","effort":"max","run":"zf-ab-2-s5"}}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.RunMeta != (RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5"}) {
+	if s.RunMeta != (RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5"}) {
 		t.Fatalf("run_meta %+v", s.RunMeta)
 	}
-	s, err = Load(writeSettings(t, 0o600, `{"realmd":"h:1","accounts":{"a":"b"},"run_meta":{"model":"haiku","server_trace":true}}`))
+	s, err = Load(writeSettings(t, 0o600, `{"realmd":"h:1","accounts":{"a":"b"},"run_meta":{"model":"worker","server_trace":true}}`))
 	if err != nil || !s.RunMeta.ServerTrace {
 		t.Fatalf("server_trace %+v %v", s.RunMeta, err)
 	}

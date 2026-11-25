@@ -4,7 +4,7 @@ title: Quests and loot
 description: Take, hand in and abandon quests, read the quest log, loot corpses, chests and game objects including group rolls, and run the loot and object checks live.
 tags: [player-actions, quests, loot, gameobjects, rolls]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
 sources:
   - id: quest-methods
     resource: internal/forever/world/serve_quest_methods.go

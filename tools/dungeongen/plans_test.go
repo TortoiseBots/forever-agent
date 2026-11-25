@@ -335,7 +335,7 @@ const marliPatrolReachYd = 26.5
 // the stands must be out of both packs' aggro: every creature of pack 0 (group_leader 49202) and pack 1
 // (group_leader 49201 plus the loose Venombrood 49246) stays at least marliStandYd away; the leg 2 packs' members
 // are the only ones listed, and a pack is aggro-together (creature_groups flags 14). Walk 25's other half
-// (SPEC-1-AMEND, Codex's HIGH): pack 0's row must NOT be a stand pull. Its leader 49202 walks a 13-point loop that
+// (SPEC-1-AMEND, the review's HIGH): pack 0's row must NOT be a stand pull. Its leader 49202 walks a 13-point loop that
 // never comes within 43.8 yd of S0, so the gate would wait 600 s for it and pause the run; the plain pull instead
 // walks the gathered party to a firing stand in the pack's own shot. Pack 1's row stays a stand pull (it is for the
 // patrol clearance; its 12 units are all static and take the plain pull's firing-stand walk either way), so every
@@ -761,7 +761,7 @@ type arlokkRoutes struct {
 // plan's group order 11, 12, 13, ... and the move from group 11's approach to group 12's crossed the spawn ring of group 15's
 // four Shadow Hunters 11339 at z 71.4 (13.3 yd from 51354), which woke groups 12, 14, 15 and 16 at once: 3 of 4 attempts
 // wiped, the MT idle under 11 elites (the walk-25 Arlokk autofix summary). Review round 1
-// (Opus HIGH) then found the upper-level-first order still crossed the lower pack's ring on the navmesh: the route from
+// (HIGH) then found the upper-level-first order still crossed the lower pack's ring on the navmesh: the route from
 // 13's stand to 16's stand ran the bridge at y -1639 z 57.7-60.4, 8.5 yd from 51383 while the lower pack was still alive
 // (the straight segments are blind to the bridge the mesh takes).
 // Walk 28 (2026-11-02) then showed the seven groups are one 11-20 yd cluster (11.0 yd 13/15, 16.8 12/13, 19.5 12/15) and

@@ -1321,7 +1321,7 @@ func TestGMInstanceDataFiresOnlyAtAnOutOfCombatRest(t *testing.T) {
 	}
 }
 
-// Codex's bypass: `q inst` answers 0 on the first reads, so nothing could fire
+// The bypass: `q inst` answers 0 on the first reads, so nothing could fire
 // (and nothing was held); when the id arrives at a plain walking status the send
 // must still wait for a rest.
 func TestGMInstanceDataZeroInstThenWalkingWaitsForARest(t *testing.T) {

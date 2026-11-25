@@ -4,7 +4,7 @@ title: Watch a run leader
 description: Run in observe mode, where a TortoiseBots run leader on the server clears the dungeon.
 tags: [turtle, dungeon, observe, guide]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:40:00Z }
 sources:
   - id: observe
     resource: internal/dungeon/observe.go

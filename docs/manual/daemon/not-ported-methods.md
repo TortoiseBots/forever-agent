@@ -4,7 +4,7 @@ title: Methods the daemon refuses
 description: The old daemon's method names a forever serve session refuses, the reason each gives, and the method or command to use instead.
 tags: [daemon, methods, migration]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T23:15:27Z }
+generated: { by: forever-agent docs, at: 2026-11-24T23:15:27Z }
 sources:
   - id: refusals
     resource: internal/forever/world/serve_rpc_methods.go

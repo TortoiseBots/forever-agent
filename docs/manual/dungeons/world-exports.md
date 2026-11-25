@@ -4,7 +4,7 @@ title: World exports and spawns
 description: The files that describe a map's spawns, packs, patrols, game objects and entrances, and how the checks read them.
 tags: [dungeons, spawns, export, patrols]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:44:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T21:44:00Z }
 sources:
   - id: exporter
     resource: tools/dungeongen/export.sh

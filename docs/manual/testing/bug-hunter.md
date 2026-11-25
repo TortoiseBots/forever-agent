@@ -4,7 +4,7 @@ title: Bug hunter
 description: Find bot misbehaviour in recorded runs and write the ticket board, with stable ticket ids and a baseline's new/known/gone life.
 tags: [testing, bughunt, tickets, watch]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:15Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:15Z }
 sources:
   - id: bughunt-cmd
     resource: cmd/forever-agent/bughunt_cmd.go

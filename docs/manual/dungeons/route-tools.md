@@ -4,7 +4,7 @@ title: Route tools
 description: Score a plan's route against the navmesh, walk it on a live server, edit and promote routes, rebuild a leg's waypoints, record patrol loops and record a GM's walk as world data.
 tags: [dungeons, routes, navmesh, tools]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
 sources:
   - id: route-oracle-cmd
     resource: cmd/forever-agent/route_oracle_cmd.go

@@ -97,22 +97,22 @@ Commits: L2 `68068ac8`, L5 `717347d2`, cleanup `a0147d71`, file-server fallback 
 
 ## Fix round (FIX-REST-L2-L5, 2026-11-21)
 
-Reviews: `claude-rest-l2-l5.md` (12 findings) and `codex-rest-l2-l5.txt`
+Reviews: the cold review (12 findings) and the adversarial review
 (3 findings). All fixed in one round; each fix has a test that would fail on
 the old code.
 
 | # | Finding | Fix | Test |
 | --- | --- | --- | --- |
 | 1 | Stall = total elapsed time (HIGH) | The poller tracks the run's progress key (step, leg, kind, phase, note, deaths/wipes, self position) per agent; the card's stall is the time since that key last changed. No progress known yet = no stall. | `TestForeverStallIsTimeSinceProgress` (healthy 10-minute run none, stuck 6 minutes red, unknown none), `TestForeverProgressMarkTracksChanges` |
-| codex | Event log fetched and discarded | The tail (since the last seq shown, limit 100) fills `Card.Events`; deduplicated by seq and bounded to 100 rows. | `TestForeverEventTailOnCard` (shown once, repeated tail not doubled, 150 rows capped to 51..150) |
-| codex | Rejected controls returned as `status:"ok"` | A JSON-RPC error is 502 `status:"error"` with code and scrubbed message; a decoded reply with `ok:false` is 200 `status:"error"`, `executed:false`, the module's words. | `TestForeverControlRunActiveShownAsReply`, `TestForeverControlNotPortedIsError` |
+| adversarial review | Event log fetched and discarded | The tail (since the last seq shown, limit 100) fills `Card.Events`; deduplicated by seq and bounded to 100 rows. | `TestForeverEventTailOnCard` (shown once, repeated tail not doubled, 150 rows capped to 51..150) |
+| adversarial review | Rejected controls returned as `status:"ok"` | A JSON-RPC error is 502 `status:"error"` with code and scrubbed message; a decoded reply with `ok:false` is 200 `status:"error"`, `executed:false`, the module's words. | `TestForeverControlRunActiveShownAsReply`, `TestForeverControlNotPortedIsError` |
 | 2 | Start probe ERRORed on `connecting`/`reconnecting` | Waits up to 60 s (never past `max_minutes`), polling status every 1 s; bounded timeout ERRORs naming the last state. | `TestForeverStartWaitsForOnline`, `TestForeverStartWaitIsBounded` |
 | 3 | `-32005`/`-32002` flattened or swallowed | `callForever` retries `-32005` every 2 s for up to 60 s; `-32002` always ERRORs. `ignore_error` covers only `-32003` (not a not-ported method) and `-32006`; `-32601`/not-ported always ERROR. | `TestForeverReconnectingIsRetried`, `TestForeverDisconnectedNeverIgnored`, `TestForeverGameRefusalMayBeIgnored`, `TestForeverNotPortedNotIgnored` |
 | 4 | `more:true` with a stuck cursor looped | `sessState.advanceForever` returns a typed `*foreverCursorError` when `more` and the cursor did not advance. | `TestForeverMoreWithoutAdvanceIsError` (one page, then the error) |
 | 5 | Cursor reset on `next:0` replayed old events | The cursor only moves forward; a `next` below the cursor (including 0) is a typed reset error, never a reset. | `TestForeverCursorResetIsError` (`since 5, next 0`) |
 | 6 | `characters.` hardcoded | `db.schema` (default `characters`) names the schema; it is validated as an identifier, used in both SELECT forms, and the allowlist is built per query. A file with `"schema":"mychars"` reads `mychars.*` and refuses `characters.*`. | `TestForeverSchemaFromFile` |
 | 7 | No order buttons on the page | `controls.js` renders `orderButtons` (stay, follow, come, attack, pull, release) on a Forever card and posts to `/order` through the same token/nonce gate; Forever run buttons are pause/resume/stop. | `controls_check.js` (verbs, actions, labels, turtle card empty) |
-| 8 | `event_log` tail discarded | see the codex row above. | `TestForeverEventTailOnCard` |
+| 8 | `event_log` tail discarded | see the adversarial row above. | `TestForeverEventTailOnCard` |
 | 9 | Target match compared GUID text | Bots and mobs match their target unit by `keyOf` (the serve key), never the text. | `TestForeverTargetsMatchByKey` (other case/width still matches) |
 | 10 | Dashboard had its own serve client | `forever_poll.go` and `forever_control.go` use `internal/forever/serveclient` (`New`, typed calls, `-32005` retry, typed errors, `Token`); an unreadable token file is an offline card / 502, never an unauthenticated call. | `TestForeverPollStatusDownIsOffline`, the control tests, and `serveclient`'s own suite |
 | 11 | Do-step tests mirrored the code's method choice; duplicate branches | `gm` and `addon_send` have one call path for both slots; a new test drives the real step code against a real JSON-RPC fake daemon over HTTP (`HTTPCaller`), so a wrong method or param shape fails. | `TestForeverDoStepsAgainstFakeDaemon` |

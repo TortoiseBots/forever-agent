@@ -4,7 +4,7 @@ title: Navmesh and maps
 description: The mmap files every check and walk plans on, how the two generations differ, and the commands that draw maps, extract minimaps and read client data.
 tags: [dungeons, navmesh, maps, minimaps]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:00:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T21:00:00Z }
 sources:
   - id: planner
     resource: internal/navmesh/planner.go

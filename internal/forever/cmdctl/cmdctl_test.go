@@ -1887,7 +1887,7 @@ func TestBindAllowsALeadBoundToSelf(t *testing.T) {
 	}
 }
 
-// Codex (Bind): the requested members are checked like the lead, before any line.
+// Bind: the requested members are checked like the lead, before any line.
 func TestBindRefusesForeignMembers(t *testing.T) {
 	otherCard := foreign(cardsFor("Rogua", "", "Rogua", "Healera"))
 	playerCard := foreign(cardsFor("Playa", "", "Playa", "Playb"))
@@ -1925,7 +1925,7 @@ func TestBindRefusesForeignMembers(t *testing.T) {
 	}
 }
 
-// Codex (Bind): a member taken by another commander between the first read and the party line is refused before
+// Bind: a member taken by another commander between the first read and the party line is refused before
 // the party line goes out.
 func TestBindMemberTakenBeforeFormPartyIsRefused(t *testing.T) {
 	taken := foreign(cardsFor("Rogua", "", "Rogua", "Healera"))
@@ -1951,7 +1951,7 @@ func TestBindMemberTakenBeforeFormPartyIsRefused(t *testing.T) {
 	}
 }
 
-// Codex (Bind): a member taken by another commander between the party line and the master line is reported after
+// Bind: a member taken by another commander between the party line and the master line is reported after
 // the party line, and the master line is not sent.
 func TestBindMemberTakenBetweenPartyAndMasterIsReported(t *testing.T) {
 	taken := foreign(cardsFor("Rogua", "", "Rogua", "Healera"))

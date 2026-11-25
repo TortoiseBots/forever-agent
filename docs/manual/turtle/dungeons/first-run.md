@@ -4,7 +4,7 @@ title: Your first dungeon run
 description: Hire a bot party and run a dungeon to the end, start to finish, with real commands.
 tags: [turtle, dungeon, commander, tutorial, hire]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:30:00Z }
 sources:
   - id: dungeon-methods
     resource: cmd/forever-agent/dungeon_methods.go

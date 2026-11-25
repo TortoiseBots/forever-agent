@@ -2033,7 +2033,7 @@ func (p *playRun) rest(ctx context.Context) string {
 // is ordered to rest again and given a second window of the same length. After the windows the boss is pulled only when
 // the gate holds: the configured tank and healer are both in fresh party state, alive, and show bars at or above the
 // gate's floors (the healer at BossHealMana of its mana and the tank at BossTankHP of its health). Anything else is a
-// NAMED deficiency and the run stops `boss-not-ready` (the Codex review of 2026-11-24: the gate failed open when a row
+// NAMED deficiency and the run stops `boss-not-ready` (2026-11-24: the gate failed open when a row
 // was missing, the member was dead or a ghost, a bar had no maximum, or the healer's power was not mana). A downed role
 // is no short bar: it goes to the recovery a death before a pull gets (gateRecover), and the gate runs again. A row the
 // roster cannot read YET (missing, offline, a bar with no maximum) is no stop either: it keeps the window polling to its
@@ -2311,7 +2311,7 @@ func (p *playRun) shortBars() []map[string]any {
 }
 
 // bossGateShort names every gate deficiency: a role the roster lacks, one that is offline, dead or a ghost, a bar it
-// cannot read (no maximum) and a bar under its floor. The gate fails CLOSED (the Codex review of 2026-11-24): a
+// cannot read (no maximum) and a bar under its floor. The gate fails CLOSED (2026-11-24): a
 // missing, dead or unknown tank or healer is a deficiency, never a row to skip.
 func (p *playRun) bossGateShort() []map[string]any {
 	var out []map[string]any

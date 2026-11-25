@@ -387,7 +387,7 @@ func TestParseAutoTargetsLenientClaimsDecideTheSlot(t *testing.T) {
 	}
 }
 
-// Codex round 1: a rejected id released nothing, so the slots it had claimed on its other lines invalidated later ids.
+// Round 1: a rejected id released nothing, so the slots it had claimed on its other lines invalidated later ids.
 // x claims slot 2 on its first line and is rejected on its second (slot 1 belongs to the active a): z may take slot 2.
 func TestParseAutoTargetsLenientRejectedIDReleasesItsClaims(t *testing.T) {
 	text := "x test2 2 h full -- zg --sql /zg.sql\n" +
@@ -466,7 +466,7 @@ func TestParseAutoTargetsLenientSkipsOnlyTheBadLine(t *testing.T) {
 	}
 }
 
-// Opus round 2 (LOW-1): an id is claimed as a unit. P (active) holds srv/2; O (new) names srv/1 and srv/2; X (new)
+// Round 2 (LOW-1): an id is claimed as a unit. P (active) holds srv/2; O (new) names srv/1 and srv/2; X (new)
 // names srv/1. O cannot have srv/2, so it is rejected whole and X gets srv/1: a rejected id never takes a valid one
 // down with it. The issue names the owner that holds the slot (P), not an id that was dropped later.
 func TestParseAutoTargetsLenientClaimsPerIDAsAUnit(t *testing.T) {
@@ -496,7 +496,7 @@ func TestParseAutoTargetsLenientClaimsPerIDAsAUnit(t *testing.T) {
 	}
 }
 
-// Codex round 2 (HIGH): a slot the caller's live state holds is that id's before any line is read, even when the
+// Round 2 (HIGH): a slot the caller's live state holds is that id's before any line is read, even when the
 // holder's own lines are skipped as malformed: a new id on it is rejected.
 func TestParseAutoTargetsHeldSlotStaysWithABadLinesID(t *testing.T) {
 	text := "a test2 1 h full -- zg --sql /zg.sql\n" +
@@ -785,7 +785,7 @@ func TestPracticeRelaunchBudget(t *testing.T) {
 }
 
 // A practice walk that keeps freezing without ever exiting is torn down and relaunched like any stall; without a bound
-// that repeats forever (Codex HIGH, round 1). A stall counts against the same persisted relaunch budget as an exit
+// that repeats forever (round 1). A stall counts against the same persisted relaunch budget as an exit
 // relaunch: the count comes back with the restarted supervisor's state, so two stalls relaunch and the third stops the
 // id for a person, exactly as the exit path does. A non-practice stall is unchanged.
 func TestPracticeStallCountsAgainstRelaunchBudget(t *testing.T) {

@@ -4,7 +4,7 @@ title: Architecture
 description: The layers forever-agent is built from, from a command line down to the world socket, and which package holds each layer.
 tags: [developers, architecture, internals, overview]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:38:33Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:38:33Z }
 sources:
   - id: main
     resource: cmd/forever-agent/main.go

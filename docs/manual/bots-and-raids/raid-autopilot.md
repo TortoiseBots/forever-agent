@@ -4,7 +4,7 @@ title: forever raid-autopilot
 description: Keep the Forever raids of a walk folder running and restarting without a person watching each one.
 tags: [bots-and-raids, raid, autopilot, slots]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T23:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T23:40:00Z }
 sources:
   - id: autopilot-cmd
     resource: cmd/forever-agent/raid_autopilot_cmd.go

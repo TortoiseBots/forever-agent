@@ -1,7 +1,7 @@
 package live
 
 // a4_review_test.go: one test per finding of the A4 review round (the cold
-// review and the Codex adversarial review). Each was written before its fix
+// review and the adversarial review). Each was written before its fix
 // and failed on the pre-fix tree.
 
 import (

@@ -4,7 +4,7 @@ title: forever dungeon-play
 description: Play one dungeon plan as a real character leading four bots, and read the run's record and its pass or fail verdict.
 tags: [dungeons, play, player, command]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T10:00:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T10:00:00Z }
 sources:
   - id: play-cmd
     resource: cmd/forever-agent/forever_play.go

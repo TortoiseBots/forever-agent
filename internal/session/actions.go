@@ -724,7 +724,7 @@ func (s *Session) onTransferPending(body []byte) error {
 // with them.
 //
 // Nothing is published before MSG_MOVE_WORLDPORT_ACK has gone out: the new map, the position and
-// the TeleportSeq bump land in one locked update after that write succeeds (Codex HIGH). The ack
+// the TeleportSeq bump land in one locked update after that write succeeds. The ack
 // goes out before any later chat line, and the core places the player when it reads it
 // (MovementHandler.cpp:43-49), so raid-walk's reviveLanded (cmd/forever-agent) takes that worldport
 // seq as the far landing and never the map change alone. An ack write error publishes nothing:

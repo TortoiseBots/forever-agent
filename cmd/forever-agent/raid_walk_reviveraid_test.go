@@ -175,7 +175,7 @@ func TestRaidWalkReviveAtRaidFlag(t *testing.T) {
 	}
 }
 
-// Codex HIGH on 43d1496: a living lead on another map is not "where the raid is". It is brought back like any hire
+// The 43d1496 finding: a living lead on another map is not "where the raid is". It is brought back like any hire
 // and, when that fails, named after the gather timeout instead of dropping off the straggler list.
 func TestRaidWalkReviveAtRaidLeadOnAnotherMapStaysAStraggler(t *testing.T) {
 	f, party := selfRegroupWipeWith(t, nil, func(f *fixture) { // every hire still down at the revive: the revive is the thing under test
@@ -360,7 +360,7 @@ func nearWipeRevive(t *testing.T, setup func(f *fixture)) (*fixture, []string) {
 	return f, party
 }
 
-// Codex HIGH on e625950: a revived hire whose alive frame comes 8 s after its revive (until then the view leaves it out,
+// The e625950 finding: a revived hire whose alive frame comes 8 s after its revive (until then the view leaves it out,
 // so only its dead frame from before stands) is still brought back. The revive's frames are polled, not read once.
 func TestRaidWalkReviveAtRaidNearWipeWaitsForALateAliveFrame(t *testing.T) {
 	// The victim is the last hire revived, so its alive frame comes 8 s after the revive loop ends: the wait starts there,
@@ -412,7 +412,7 @@ func TestRaidWalkReviveAtRaidNearWipeWaitsForALateAliveFrame(t *testing.T) {
 	}
 }
 
-// Codex HIGH on e625950: a view that fails through the revive's wait leaves every revived hire's state unknown. None is
+// The e625950 finding: a view that fails through the revive's wait leaves every revived hire's state unknown. None is
 // dropped: each is summoned to the point anyway, and the note names them `state unknown`.
 func TestRaidWalkReviveAtRaidNearWipeSummonsAHireWithUnknownState(t *testing.T) {
 	var victim string

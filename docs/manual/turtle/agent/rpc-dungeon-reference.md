@@ -4,7 +4,7 @@ title: Dungeon and party RPC
 description: commander, dungeon_run, dungeon_stage, teardown, and bot_view params and results.
 tags: [turtle, agent, rpc, reference, dungeon, commander, teardown]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T21:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T21:45:00Z }
 sources:
   - id: dungeon-methods-go
     resource: cmd/forever-agent/dungeon_methods.go

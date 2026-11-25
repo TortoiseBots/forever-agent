@@ -49,9 +49,9 @@ const (
 	// its `.go xyz`, up to this ceiling. Walk 74 paid a fixed 2 s at each of its 53 stops (~106 s of the 157 s clear).
 	// The landing needs a teleport the session has ACKED (TeleportSeq past the read before the go, reviveLanded's
 	// signal): the status reports the go's destination at once and a stop the commander already stands on is within
-	// the slack before any teleport lands, so the position alone would pass on the previous stop's status (Codex
-	// HIGH). A stop the status never settles within this ceiling falls back to the old fixed gmClearFallbackWait, so
-	// the units read after it is never earlier than before.
+	// the slack before any teleport lands, so the position alone would pass on the previous stop's status. A stop the
+	// status never settles within this ceiling falls back to the old fixed gmClearFallbackWait, so the units read
+	// after it is never earlier than before.
 	gmClearLandPoll     = 250 * time.Millisecond
 	gmClearLandWait     = 3 * time.Second
 	gmClearFallbackWait = 2 * time.Second
@@ -252,11 +252,11 @@ func gmClearAllSettled(members map[uint64]*gmClearMember, guids []uint64) bool {
 // z gets reviveLandingZYd of room), and a teleport the session counted since the read before the go (gmClearLanded).
 // A position match alone is no landing: the status reports the go's destination at once, and the previous stop's
 // status can already be within the slack, so the first read would carry on while the server is still processing the
-// teleport (Codex HIGH). A landed stop settles gmClearSettle before its units are read (gmClearStopUnits after the
+// teleport. A landed stop settles gmClearSettle before its units are read (gmClearStopUnits after the
 // instance check): the landing arrives before the client's object store holds the pack. The wait is an absolute
 // deadline (gmClearLandWait from here, on the walk's clock), not a sum of sleeps: each status RPC gets a context
-// capped at the time left and the deadline is checked after every read, so a slow RPC cannot stretch the ceiling
-// (Codex round 2). A landing the status never shows by the deadline falls back to the old fixed gmClearFallbackWait:
+// capped at the time left and the deadline is checked after every read, so a slow RPC cannot stretch the ceiling.
+// A landing the status never shows by the deadline falls back to the old fixed gmClearFallbackWait:
 // the units read after it is then exactly as late as before.
 func (w *walk) gmClearLand(ctx context.Context, x, y, z float32) error {
 	beforeSeq, haveSeq, err := w.gmClearSeq(ctx)
@@ -326,8 +326,8 @@ func gmClearLanded(st world.StatusInfo, mapID uint32, x, y, z float32, beforeSeq
 // gmClearUnitWait, and returns the last read: the landing arrives before the client's object store holds the pack, so
 // the read right after it can still be empty and the members would be recorded not seen. The caller has re-read its
 // instance first, so this poll never runs on a stop that landed in another copy. The ceiling is an absolute deadline
-// on the walk's clock, and each units RPC gets a context capped at the time left (Codex round 2): a read that the cap
-// cuts ends the poll with the last units instead of stretching it, while a read that fails on its own still stops the
+// on the walk's clock, and each units RPC gets a context capped at the time left: a read that the
+// cap cuts ends the poll with the last units instead of stretching it, while a read that fails on its own still stops the
 // walk.
 func (w *walk) gmClearStopUnits(ctx context.Context, label string, guids []uint64) ([]world.Unit, error) {
 	due := w.env.now().Add(gmClearUnitWait)

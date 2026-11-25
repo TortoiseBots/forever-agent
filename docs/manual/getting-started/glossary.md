@@ -4,7 +4,7 @@ title: Glossary
 description: The words this manual and the agent's output use, in plain terms.
 tags: [getting-started, glossary, terms]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:31:22Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:31:22Z }
 sources:
   - id: glossary
     resource: GLOSSARY.md

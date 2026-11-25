@@ -4,7 +4,7 @@ title: Pets
 description: "Read the character's pet and the state of its control bar, and give it orders: attack, follow, stay, react mode, cast and autocast."
 tags: [player-actions, pet, hunter, warlock]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:00Z }
 sources:
   - id: pet-methods
     resource: internal/forever/world/serve_pet_methods.go

@@ -4,7 +4,7 @@ title: Dungeon troubleshooting
 description: Real dungeon error messages, what they mean, and the fix.
 tags: [turtle, dungeon, troubleshooting]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T21:05:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T21:05:00Z }
 sources:
   - id: dungeon-methods
     resource: cmd/forever-agent/dungeon_methods.go

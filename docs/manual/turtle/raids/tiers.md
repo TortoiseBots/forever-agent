@@ -4,7 +4,7 @@ title: Hire gear tiers
 description: Why the hire tier matters, where each raid's minimum comes from, and what comparison runs are.
 tags: [turtle, raids, tier, hires]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:45:00Z }
 sources:
   - id: tiers
     resource: internal/raidwalk/tiers.go

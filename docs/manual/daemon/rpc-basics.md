@@ -4,7 +4,7 @@ title: RPC basics
 description: Call a forever serve daemon's methods with the rpc command or any HTTP client, and understand the request envelope, errors and timeouts.
 tags: [daemon, rpc, jsonrpc, client]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:07Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:07Z }
 sources:
   - id: rpc-cmd
     resource: cmd/forever-agent/forever_rpc.go

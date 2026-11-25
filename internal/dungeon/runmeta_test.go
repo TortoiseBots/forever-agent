@@ -15,8 +15,8 @@ import (
 // RunMeta (runmeta.go): the driver value joins model, effort and run with colons, and Check refuses what the server's
 // driver= field cannot carry.
 func TestRunMetaDriverAndCheck(t *testing.T) {
-	m := RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5"}
-	if m.Driver() != "haiku:max:zf-ab-2-s5" {
+	m := RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5"}
+	if m.Driver() != "worker:max:zf-ab-2-s5" {
 		t.Fatalf("driver %q", m.Driver())
 	}
 	if (RunMeta{}).Set() || !(RunMeta{Run: "x"}).Set() {
@@ -50,7 +50,7 @@ func TestRunMetaDriverAndCheck(t *testing.T) {
 // A trace_meta key the caller set keeps its value when run_meta is merged into the trace header: the driver's keys never
 // overwrite it.
 func TestRunMetaHeaderKeepsCallerKeys(t *testing.T) {
-	got := runMetaHeader(map[string]string{"run_model": "caller-model", "tb_sha": "abc"}, RunMeta{Model: "haiku", Effort: "max", Run: "zf-1"})
+	got := runMetaHeader(map[string]string{"run_model": "caller-model", "tb_sha": "abc"}, RunMeta{Model: "worker", Effort: "max", Run: "zf-1"})
 	if got["run_model"] != "caller-model" || got["run_effort"] != "max" || got["run_label"] != "zf-1" || got["tb_sha"] != "abc" {
 		t.Fatalf("header %v", got)
 	}
@@ -67,13 +67,13 @@ func TestRemoteRunMetaSendsTraceStart(t *testing.T) {
 	plan := remotePlan(Leg{Name: "first", To: Point{100, 0, 0}, PullGroups: []PullGroup{{Entries: []uint32{299}, Positions: []Point{{150, 5, 0}}}}},
 		Leg{Name: "second", To: Point{200, 0, 0}})
 	o := opts()
-	meta := RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
+	meta := RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
 	o.RunMeta = meta
 	rep, err := runRemote(t, g, plan, o, nil)
 	if err != nil {
 		t.Fatalf("%v %+v", err, rep)
 	}
-	want := "trace start " + rep.RunID + " driver=haiku:max:zf-ab-2-s5"
+	want := "trace start " + rep.RunID + " driver=worker:max:zf-ab-2-s5"
 	found := false
 	for _, cmd := range g.orders {
 		if cmd == want {
@@ -124,14 +124,14 @@ func TestRemoteRunMetaStopsTraceAtEnd(t *testing.T) {
 	g := newFakeRemote(t)
 	g.addMob(299, Point{150, 5, 0})
 	o := opts()
-	o.RunMeta = RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
+	o.RunMeta = RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
 	rep, err := runRemote(t, g, planOf(), o, nil)
 	if err != nil {
 		t.Fatalf("%v %+v", err, rep)
 	}
 	start, stop := -1, -1
 	for i, cmd := range g.orders {
-		if cmd == "trace start "+rep.RunID+" driver=haiku:max:zf-ab-2-s5" {
+		if cmd == "trace start "+rep.RunID+" driver=worker:max:zf-ab-2-s5" {
 			start = i
 		}
 		if cmd == "trace stop "+rep.RunID {
@@ -161,12 +161,12 @@ func TestRemoteRunMetaStopsTraceAtEnd(t *testing.T) {
 func TestObserveRunMetaSendsTraceStart(t *testing.T) {
 	g := newFakeLeader(t, happyScript()...)
 	o := observeOpts(ObserveSpec{})
-	o.RunMeta = RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
+	o.RunMeta = RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
 	rep, err := runRemote(t, g, observePlan(), o, nil)
 	if err != nil || rep.State != "done" {
 		t.Fatalf("%v %s %s", err, rep.State, rep.Error)
 	}
-	want := "trace start " + rep.RunID + " driver=haiku:max:zf-ab-2-s5"
+	want := "trace start " + rep.RunID + " driver=worker:max:zf-ab-2-s5"
 	found, runStarts := false, 0
 	for _, cmd := range g.orders {
 		if cmd == want {
@@ -210,7 +210,7 @@ func TestObserveRunMetaSendsTraceStart(t *testing.T) {
 // the report notes that the server trace was not sent.
 func TestGroupRunMetaSendsNoServerTrace(t *testing.T) {
 	g, p := runFixture(t)
-	meta := RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
+	meta := RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
 	cfg := Config{Trace: tracerun.Config{On: true, Dir: t.TempDir(), RunID: "r-group-meta"}, RunMeta: meta}
 	d := NewDriver(p, g, cfg, g.clock())
 	if err := d.Run(context.Background(), 0); err != nil {
@@ -232,14 +232,14 @@ func TestGroupRunMetaSendsNoServerTrace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.Header.Meta["run_model"] != "haiku" || f.Header.Meta["run_effort"] != "max" || f.Header.Meta["run_label"] != "zf-ab-2-s5" {
+	if f.Header.Meta["run_model"] != "worker" || f.Header.Meta["run_effort"] != "max" || f.Header.Meta["run_label"] != "zf-ab-2-s5" {
 		t.Fatalf("header meta %v", f.Header.Meta)
 	}
 
 	// Without server_trace (the default) the meta goes into the report and the header, nothing goes to the server, and
 	// there is nothing to note.
 	g3, p3 := runFixture(t)
-	plain := RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5"}
+	plain := RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5"}
 	d3 := NewDriver(p3, g3, Config{Trace: tracerun.Config{On: true, Dir: t.TempDir(), RunID: "r-group-default"}, RunMeta: plain}, g3.clock())
 	if err := d3.Run(context.Background(), 0); err != nil {
 		t.Fatalf("%v\n%+v", err, d3.Report())
@@ -312,7 +312,7 @@ func TestRemoteRunMetaStopsTraceOnPanic(t *testing.T) {
 			Leg{Name: "second", To: Point{200, 0, 0}})
 	}
 	o := opts()
-	o.RunMeta = RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
+	o.RunMeta = RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
 	g := newFakeRemote(t)
 	g.addMob(299, Point{150, 5, 0})
 	g.panicOn = "cmd move" // the first walk order after the acknowledged trace start
@@ -357,7 +357,7 @@ func TestObserveRunMetaStopsTraceOnPanic(t *testing.T) {
 	g := newFakeLeader(t, happyScript()...)
 	g.panicOn = "run start" // the first order an observed run sends after the acknowledged trace start
 	o := observeOpts(ObserveSpec{})
-	o.RunMeta = RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
+	o.RunMeta = RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
 	d := NewRemoteDriver(observePlan(), g, DefaultConfig(), o, g.clock())
 	err, panicked := runPanicking(t, d)
 	if !panicked && (err == nil || !strings.Contains(err.Error(), "internal error: boom")) {
@@ -391,7 +391,7 @@ func metaRun(t *testing.T, ans map[string][]string, panicOn string) (*fakeRemote
 	plan := remotePlan(Leg{Name: "first", To: Point{100, 0, 0}, PullGroups: []PullGroup{{Entries: []uint32{299}, Positions: []Point{{150, 5, 0}}}}},
 		Leg{Name: "second", To: Point{200, 0, 0}})
 	o := opts()
-	o.RunMeta = RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
+	o.RunMeta = RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true}
 	g := newFakeRemote(t)
 	g.addMob(299, Point{150, 5, 0})
 	g.traceAns = ans
@@ -456,7 +456,7 @@ func TestRemoteRunMetaRetriesFailedTraceStop(t *testing.T) {
 				t.Fatalf("%d stops, %d status (want %d, %d): %v", stops, status, tc.stops, tc.status, g.orders)
 			}
 			if tc.panicOn != "" {
-				_, last, _ := traceStartStop(g.orders, rep.RunID, RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true})
+				_, last, _ := traceStartStop(g.orders, rep.RunID, RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5", ServerTrace: true})
 				if !stopBeforeUnbind(g.orders, last) {
 					t.Fatalf("the acked stop did not go out of the deferred cleanup: %v", g.orders)
 				}
@@ -565,7 +565,7 @@ func TestRemoteRunMetaNonTerminalStopErrorKeepsOwnership(t *testing.T) {
 // By default (no server_trace) a remote run, driven or observed, sends no trace command at all, whatever the run_meta:
 // the meta still goes into the report.
 func TestRunMetaWithoutServerTraceSendsNothing(t *testing.T) {
-	meta := RunMeta{Model: "haiku", Effort: "max", Run: "zf-ab-2-s5"}
+	meta := RunMeta{Model: "worker", Effort: "max", Run: "zf-ab-2-s5"}
 	g := newFakeRemote(t)
 	g.addMob(299, Point{150, 5, 0})
 	o := opts()

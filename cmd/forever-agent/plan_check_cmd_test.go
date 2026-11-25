@@ -405,17 +405,17 @@ func TestDungeonRunRefusesForceStartOutsideCommanderMode(t *testing.T) {
 // run_meta (with server_trace) and force_start validated together: run_meta goes with every mode, force_start with
 // commander mode only, and each refusal names its own option.
 func TestDungeonRunRunMetaAndForceStartTogether(t *testing.T) {
-	const meta = `"run_meta":{"model":"opus","effort":"high","run":"t193","server_trace":true}`
+	const meta = `"run_meta":{"model":"worker","effort":"high","run":"t193","server_trace":true}`
 	for _, c := range []struct {
 		p      dungeonRunParams
 		remote bool
 		bad    string // "" accepted
 	}{
-		{dungeonRunParams{Mode: "commander", LeadBot: "Tanky", ForceStart: true, RunMeta: &dungeon.RunMeta{Model: "opus", ServerTrace: true}}, true, ""},
-		{dungeonRunParams{Mode: "leader", RunMeta: &dungeon.RunMeta{Model: "opus", ServerTrace: true}}, false, ""},
-		{dungeonRunParams{Mode: "observe", LeadBot: "Tanky", RunMeta: &dungeon.RunMeta{Model: "opus", ServerTrace: true}}, true, ""},
-		{dungeonRunParams{Mode: "leader", ForceStart: true, RunMeta: &dungeon.RunMeta{Model: "opus", ServerTrace: true}}, false, "force_start"},
-		{dungeonRunParams{Mode: "observe", LeadBot: "Tanky", ForceStart: true, RunMeta: &dungeon.RunMeta{Model: "opus", ServerTrace: true}}, true, "force_start"},
+		{dungeonRunParams{Mode: "commander", LeadBot: "Tanky", ForceStart: true, RunMeta: &dungeon.RunMeta{Model: "worker", ServerTrace: true}}, true, ""},
+		{dungeonRunParams{Mode: "leader", RunMeta: &dungeon.RunMeta{Model: "worker", ServerTrace: true}}, false, ""},
+		{dungeonRunParams{Mode: "observe", LeadBot: "Tanky", RunMeta: &dungeon.RunMeta{Model: "worker", ServerTrace: true}}, true, ""},
+		{dungeonRunParams{Mode: "leader", ForceStart: true, RunMeta: &dungeon.RunMeta{Model: "worker", ServerTrace: true}}, false, "force_start"},
+		{dungeonRunParams{Mode: "observe", LeadBot: "Tanky", ForceStart: true, RunMeta: &dungeon.RunMeta{Model: "worker", ServerTrace: true}}, true, "force_start"},
 	} {
 		remote, err := checkMode(c.p)
 		if c.bad == "" && (err != nil || remote != c.remote) || c.bad != "" && (err == nil || !strings.Contains(err.Error(), c.bad) || strings.Contains(err.Error(), "run_meta")) {

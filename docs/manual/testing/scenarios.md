@@ -4,7 +4,7 @@ title: Scenarios
 description: "Write, check and run scenario files: scripted live tests that drive one or more agent sessions and check what came back."
 tags: [testing, scenarios, live, checks]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:15Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:15Z }
 sources:
   - id: scenario-cmd
     resource: cmd/forever-agent/scenario_cmd.go

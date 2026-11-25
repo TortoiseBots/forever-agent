@@ -4,7 +4,7 @@ title: Write the settings file
 description: Create the JSON settings file with the server address, accounts, folders and RPC token.
 tags: [turtle, getting-started, settings, config, rpc-auth]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:25:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:25:00Z }
 sources:
   - id: config
     resource: internal/config/config.go

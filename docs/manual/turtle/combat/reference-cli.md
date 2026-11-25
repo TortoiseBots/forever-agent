@@ -4,7 +4,7 @@ title: Combat CLI
 description: rotation, pulltest and fight-score with every flag, default and exit code.
 tags: [turtle, combat, cli, reference]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:55:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:55:00Z }
 sources:
   - id: rotation-cmd
     resource: cmd/forever-agent/rotation_cmd.go

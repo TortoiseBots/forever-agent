@@ -4,7 +4,7 @@ title: Troubleshooting
 description: The errors the agent prints most often, what causes them, and the fix.
 tags: [getting-started, troubleshooting, errors, exit-codes]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:31:22Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:31:22Z }
 sources:
   - id: main
     resource: cmd/forever-agent/main.go

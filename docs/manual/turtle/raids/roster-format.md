@@ -4,7 +4,7 @@ title: Roster file format
 description: The tb-raid-roster v1 and v2 batch format, specs and the faction check.
 tags: [turtle, raids, roster, reference]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:55:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:55:00Z }
 sources:
   - id: roster
     resource: internal/raidwalk/roster.go

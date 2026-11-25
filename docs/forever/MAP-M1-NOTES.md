@@ -24,4 +24,4 @@ overlay and notes about what the record did not carry. `LoadRun` is the same wit
 | Pull events without a step were lost | `loose_pulls` in the summary, drawn as pull markers |
 | Wipe threshold shrank to the members seen in frames | It is the party size the party records name (5 when none) |
 | Damage-dealer slots followed first appearance in frames | They follow the party records' order |
-| One recorded wipe disabled inferring every later wipe (Codex) | Inference is per burst (distinct members within 15 s); a burst is skipped only when a recorded wipe lies within 5 s of it |
+| One recorded wipe disabled inferring every later wipe (the review) | Inference is per burst (distinct members within 15 s); a burst is skipped only when a recorded wipe lies within 5 s of it |

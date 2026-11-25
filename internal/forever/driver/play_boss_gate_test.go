@@ -12,7 +12,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/trace"
 )
 
-// The boss-path cases of the Codex review of 2026-11-24 (part of #88): a unit missing from a snapshot is not a dead
+// The boss-path cases of 2026-11-24 (part of #88): a unit missing from a snapshot is not a dead
 // one, and the pre-boss rest gate does not open on a timeout. The plans are hand-made as the fight cases' are.
 
 // playTraceEvents reads a finished run's trace and returns its events of one kind.
@@ -373,7 +373,7 @@ func playGateRow(t *testing.T, ev trace.Event, who, bar string) map[string]any {
 }
 
 // TestPlayBossGateMissingRolesStop: a tank or healer the party roster lacks is a named gate deficiency, never a row
-// that ready() skips: no attack order goes out and the run stops boss-not-ready (the Codex review's fail-open finding).
+// that ready() skips: no attack order goes out and the run stops boss-not-ready (the fail-open finding).
 func TestPlayBossGateMissingRolesStop(t *testing.T) {
 	cases := []struct {
 		name string

@@ -4,7 +4,7 @@ title: Dungeon notes
 description: What the five oldest hand-written plans contain, how far each has been checked, and the facts a first run should know.
 tags: [dungeons, plans, notes]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:50:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T21:50:00Z }
 sources:
   - id: plans-md
     resource: docs/PLANS.md

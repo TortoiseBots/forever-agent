@@ -4,7 +4,7 @@ title: Until clauses and autopilot goals
 description: What boss, boss-done, none, step and leg mean, and how the autopilot maps goals onto them.
 tags: [turtle, raids, until, autopilot]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-05T20:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-05T20:45:00Z }
 sources:
   - id: until
     resource: internal/raidwalk/until.go

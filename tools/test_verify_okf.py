@@ -99,14 +99,14 @@ def page(title="A page", description="What the page lets the reader do.", body="
         "description: %s\n"
         "tags: [test, page]\n"
         "status: stable\n"
-        "generated: { by: omp/deepseek-v4.1-flash, at: %s }\n"
+        "generated: { by: %s, at: %s }\n"
         "sources:\n"
         "  - id: sample\n"
         "    resource: cmd/forever-agent/main.go\n"
         "  - id: other\n"
         "    resource: internal/forever/world/serve_methods.go\n"
         "---\n"
-        "\n%s" % (title, description, GOOD_AT, body)
+        "\n%s" % (title, description, verify_okf.GENERATED_BY, GOOD_AT, body)
     )
 
 
@@ -257,9 +257,18 @@ class BundleTest(unittest.TestCase):
         write(
             self.root,
             "docs/manual/getting-started/page.md",
-            page().replace("generated: { by: omp/deepseek-v4.1-flash, at: %s }\n" % GOOD_AT, ""),
+            page().replace("generated: { by: %s, at: %s }\n" % (verify_okf.GENERATED_BY, GOOD_AT), ""),
         )
         self.assertProblem("no generated")
+
+    # The failing case the rule pins: a page that names its writer instead of the project.
+    def test_generated_by_must_name_the_project(self):
+        write(
+            self.root,
+            "docs/manual/getting-started/page.md",
+            page().replace(verify_okf.GENERATED_BY, "maintainer/1.0"),
+        )
+        self.assertProblem("must be 'forever-agent docs'")
 
     def test_unknown_status(self):
         write(self.root, "docs/manual/getting-started/page.md", page().replace("status: stable", "status: final"))

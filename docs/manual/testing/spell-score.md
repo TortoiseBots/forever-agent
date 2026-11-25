@@ -4,7 +4,7 @@ title: forever spell-score
 description: "Judge a Forever class fight from its watch combat log: each party member's casts against the oracle of its class, failing only wrong-class abilities."
 tags: [testing, spell-score, spells, oracle, forever]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:15Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:15Z }
 sources:
   - id: spellscore-cmd
     resource: cmd/forever-agent/forever_spellscore.go

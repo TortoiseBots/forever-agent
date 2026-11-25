@@ -266,8 +266,8 @@ func dead(p tbm.PartyRec, at Point) tbm.PartyRec {
 	return p
 }
 
-// A low-health death, an in-combat death and one lone full-health death out of a box mark nothing: one such death is no evidence (Codex
-// review of #211). A second full-health death out of combat within 6 yd makes the spot deadly for summons; it is forgotten after 5 min.
+// A low-health death, an in-combat death and one lone full-health death out of a box mark nothing: one such death is no evidence
+// (#211). A second full-health death out of combat within 6 yd makes the spot deadly for summons; it is forgotten after 5 min.
 func TestSilentDeathNeedsStrongEvidence(t *testing.T) {
 	r := newSilentRig(t)
 	lava := Point{-204.6, -25.2, -64.9}
@@ -445,7 +445,7 @@ func TestFallbackStandRouteAvoidsDeadlySpots(t *testing.T) {
 }
 
 // The history is progress-aware: a place the lead bot stood on further on in the plan is never a fallback once the run was put back behind
-// it, and a wipe drops the places of the step it ended (Codex review of #211, round 3).
+// it, and a wipe drops the places of the step it ended (#211, round 3).
 func TestFallbackHistoryFollowsTheRunsProgress(t *testing.T) {
 	g := &stuckGame{nearGame: newNearGame(t, 3)}
 	d := NewRemoteDriver(remotePlan(Leg{Name: "a", To: Point{60, 0, 0}}, Leg{Name: "b", To: Point{90, 0, 0}}), g, DefaultConfig(), objOpts(), g.clock())

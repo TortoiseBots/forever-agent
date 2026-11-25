@@ -25,8 +25,9 @@ Concept pages (every .md file except index.md and log.md):
   * "type" is one of the types the manual uses;
   * "title" is present and not empty;
   * "description" is present, not empty and fits on one line;
-  * "generated.by" is present and "generated.at" is an ISO 8601 UTC timestamp
-    (YYYY-MM-DDTHH:MM:SSZ);
+  * "generated.by" is present, is exactly "forever-agent docs" (the project;
+    never a tool, model or person name) and "generated.at" is an ISO 8601 UTC
+    timestamp (YYYY-MM-DDTHH:MM:SSZ);
   * "status" is one of draft, stable or deprecated.
 
 index.md (every directory):
@@ -143,6 +144,10 @@ DATE_HEADING = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})\s*$")
 HEADING = re.compile(r"^##\s")
 
 GENERATED_AT = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+# generated.by always names the project: the page belongs to the manual, not to
+# whatever tool, model or person last wrote it.
+GENERATED_BY = "forever-agent docs"
 
 IPV4 = re.compile(r"(?<![\w.])((?:\d{1,3}\.){3}\d{1,3})(?!\w|\.\d)")
 HOME_PATH = re.compile(r"/home/")
@@ -472,6 +477,13 @@ def _check_concept(rel, data, root, report):
     else:
         if not _nonempty(generated.get("by")):
             report(rel, 0, "generated block has no by")
+        elif generated.get("by") != GENERATED_BY:
+            report(
+                rel,
+                0,
+                "generated.by %r must be %r (the project, never a tool, model or person name); "
+                "write 'generated: { by: %s, at: <timestamp> }'" % (generated.get("by"), GENERATED_BY, GENERATED_BY),
+            )
         at = generated.get("at")
         if not _nonempty(at):
             report(rel, 0, "generated block has no at")

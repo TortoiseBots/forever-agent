@@ -4,7 +4,7 @@ title: The add-on protocol
 description: How the agent exchanges add-on messages with a server's bot module and how to check that exchange.
 tags: [bots-and-raids, addon, protocol, bot-module]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T23:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T23:40:00Z }
 sources:
   - id: addonmsg
     resource: internal/forever/addonmsg/addonmsg.go

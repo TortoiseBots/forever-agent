@@ -12,7 +12,7 @@ once to check the layouts; the capture checks print counts only, and no capture 
 the repository. Fixtures are hand-made from the core's writers.
 
 Status: both rounds are implemented, tested against the fake world, and committed (`6db81e49` R3, `be9b52ed` R5,
-`149c6d30` the last two unused declarations removed), then changed by one fix round for the cold and Codex reviews
+`149c6d30` the last two unused declarations removed), then changed by one fix round for the two reviews
 (see "The fix round" below). **No live run yet**: the live checks for the lead's queue are at the end, and the notes
 quote the RESULT line of the VM suite.
 
@@ -229,7 +229,7 @@ own rows read between the stages.
 
 ## The fix round
 
-One round for all findings of the Claude cold review and the Codex adversarial review of R3 and R5. Each fix has a
+One round for all findings of the cold review and the adversarial review of R3 and R5. Each fix has a
 test that fails on the code before it.
 
 | Finding | Fix |
@@ -247,7 +247,7 @@ test that fails on the code before it.
 | `buy` default quantity | the quantity is an item count and defaults to 1; the comment now says so |
 | sell-junk quiet window | 2 s (`items.ConfirmWindow`), because each sold item and the coinage are separate updates in the next flush and 300 ms read the count before they arrived; a sweep that changed nothing says "nothing seen", never "no poor-quality item carried" |
 | 32-bit vendor list panic | the row count goes through `int32` and a negative count is refused |
-| Codex: a purchase answered but the item never arrives | the step fails as unconfirmed; the success answer must name this vendor and row |
+| The review: a purchase answered but the item never arrives | the step fails as unconfirmed; the success answer must name this vendor and row |
 | notes | the capture set name is removed (no capture names in this public repo) and a buyback refusal is `SMSG_BUY_FAILED` |
 
 Known limits kept: the sweep cannot name the items it should take (no item quality in the client); the quest guard

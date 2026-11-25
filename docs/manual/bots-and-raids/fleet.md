@@ -4,7 +4,7 @@ title: fleet
 description: Keep several Forever daemons online at once, one per account, from a single supervisor.
 tags: [bots-and-raids, fleet, daemon, slots]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T23:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T23:40:00Z }
 sources:
   - id: fleet
     resource: cmd/forever-agent/fleet.go

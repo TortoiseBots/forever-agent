@@ -4,7 +4,7 @@ title: Editing a route on the dashboard
 description: Turn on the dashboard's route editor, save a navmesh-checked version of a plan's route, and move that version into the repository.
 tags: [bots-and-raids, dashboard, route-editor, plans]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T21:52:00Z }
+generated: { by: forever-agent docs, at: 2026-11-24T21:52:00Z }
 sources:
   - id: dashboard-cmd
     resource: cmd/forever-agent/dashboard_cmd.go

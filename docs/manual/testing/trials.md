@@ -4,7 +4,7 @@ title: Trials
 description: "Run the behaviour test bench: hire a bot into a scripted fight, score each specified behaviour, and read the card."
 tags: [testing, trials, behaviour, verdicts]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:15Z }
+generated: { by: forever-agent docs, at: 2026-11-24T20:35:15Z }
 sources:
   - id: trials-cmd
     resource: cmd/forever-agent/trials_cmd.go

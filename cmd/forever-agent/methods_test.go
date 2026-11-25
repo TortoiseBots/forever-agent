@@ -687,7 +687,7 @@ func TestEquipmentMethod(t *testing.T) {
 }
 
 // gm_set_hp carries the guid only: the session restores the unit to its own MaxHealth, and an explicit hp is refused
-// before anything is selected or sent (Codex HIGH: no caller can lower a unit's max health).
+// before anything is selected or sent: no caller can lower a unit's max health.
 func TestGMSetHPRPCRefusesHPArgument(t *testing.T) {
 	r := newRig(t)
 	guid := world.GUID(uint64(packet.HighUnit)<<48 | 14834<<24 | 0x77)
