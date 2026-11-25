@@ -222,6 +222,24 @@ func TestLiveLOSCheckServerBesideTheRay(t *testing.T) {
 		t.Fatalf("server out of sight: %+v", c)
 	}
 
+	// A partial answer that saw nothing proves nothing about the unit it never named: the ray decides, and the
+	// reason says how far the server got. (A partial answer that DID see a unit still settles the check.)
+	partial := LiveData{
+		LOS:       map[LOSKey]bool{{Step: 1, Guid: 100}: false, {Step: 1, Guid: 101}: true},
+		ServerLOS: map[LOSKey]bool{{Step: 1, Guid: 100}: false},
+	}
+	if c := liveLOSCheck(st, targets, partial); c.Verdict != VerdictOK || !strings.Contains(c.Reason, "the server answered 1 of 2") {
+		t.Fatalf("partial server answer: %+v", c)
+	}
+	partial.LOS = map[LOSKey]bool{{Step: 1, Guid: 100}: false, {Step: 1, Guid: 101}: false}
+	if c := liveLOSCheck(st, targets, partial); c.Verdict != VerdictWarn || !strings.Contains(c.Reason, "the server answered 1 of 2") {
+		t.Fatalf("partial server answer over a blind ray: %+v", c)
+	}
+	partial.LOS = nil
+	if c := liveLOSCheck(st, targets, partial); c.Verdict != VerdictSkip || !strings.Contains(c.Reason, "the server answered 1 of 2") {
+		t.Fatalf("partial server answer with no ray: %+v", c)
+	}
+
 	// The ray alone keeps its own wording: no server answer, no server sentence.
 	rayOnly := liveLOSCheck(st, targets, LiveData{LOS: live.LOS})
 	if !strings.Contains(rayOnly.Reason, "the pull shot waits for sight") || strings.Contains(rayOnly.Reason, "server") {
