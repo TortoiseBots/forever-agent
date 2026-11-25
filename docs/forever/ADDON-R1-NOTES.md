@@ -244,3 +244,127 @@ ended with the instance socket closing before `SMSG_LOGOUT_RESPONSE`
 already arrived; the other five whisper runs logged out cleanly. The
 add-on exchange itself was complete in every run. This is the session's existing logout wait treating any socket
 close before the response as fatal; it is not specific to add-on messages and was not changed in this round.
+
+## The add-on host (T9)
+
+`internal/forever/addonhost` runs a real add-on headless, and the serving daemon exposes it as
+`addon_start`/`addon_state`/`addon_tick`/`addon_stop`. `addon_send` stays what it was: the one-shot send.
+
+**The sidecar.** The add-on's own `.toc` and Lua files run in a `lua5.1` child process on a small client mock
+(`internal/forever/addonhost/lua/mock.lua`): frames and scripts, the event registry and dispatch, the chat frame,
+`SendAddonMessage`/`RegisterAddonMessagePrefix`, `SendChatMessage`, `TargetUnit`/`TargetByName`, and the unit
+functions over a world the daemon pushes (player, target, party1..4, raid1..40). The folder is read by the daemon,
+not the child: the `.toc` and every source it names are resolved and must stay beneath the folder's own resolved
+path (a symlinked `.toc` or Lua file pointing outside is refused, and so is an absolute or `..` line), then their
+text goes to the child in the `load` request. The child therefore never opens a file of the add-on's own: each path is `stat`ed first (regular files only, so a
+FIFO cannot block the start), and one file is bounded at 2 MiB inside the folder's 8 MiB, with the read itself
+limited, and the read re-opens without following a final symlink and requires the opened file to be what the path
+resolves to now beneath the folder, so a symlink swapped in after the containment check is refused. The sources travel as JSON text, so each must be UTF-8: one that is not is refused by its name instead of
+being run with replacement characters. A source is loaded from text only: one whose first byte is ESC is
+precompiled Lua bytecode (5.1 bytecode can break out to native code) and one holding a NUL byte is refused too,
+both by the daemon before the child sees them and again in the child's own load. Each of its files gets its own
+environment: only the mocked API and the safe half of the Lua library reach it, so `io`, `os`, `loadfile`,
+`loadstring`, `require`, `package` and `debug` stay in the host, and the add-on has no way to a file, the protocol
+or the network beyond the mock. The environment's globals are an explicit allow-list (a test compares every one
+with the list in the test), its `string`/`table`/`math` are copies, and `getmetatable("")` answers nil: the add-on
+cannot write through the string metatable into the host's framing, the shared `string.dump` is removed before it
+runs (so `("").dump` is nil too), and the host captured every function it frames with in locals first. Requests and
+replies are JSON lines on stdin and file descriptor 3; nothing the add-on prints can pass for a frame.
+
+**Resource bounds.** The sidecar is another process, and the daemon treats it as untrusted: it is started under a
+kernel address-space limit (`RLIMIT_AS`, 256 MiB, set by `prlimit(1)` or `sh`'s `ulimit -v` before `exec`; a host
+with neither is refused rather than run unbounded), so an add-on that allocates without end gets Lua's
+"not enough memory" and cannot take the machine's memory. A call that does not answer within `CallTimeout` (3 s)
+kills the child, and that call's error says so. A handler that raises is recorded in the host's error list and the
+dispatch goes on. Its sends are budgeted too: 20 per call, 10 per wall-clock second and 100 queued, enforced in the
+mock before an `Out` is written (and capped again in the daemon's reader). Over the budget the client refuses the
+send (the add-on sees a Lua error), the call answers an error, and the add-on is marked `throttled` in
+`addon_state`; the host stays up. Three calls in a row over the send budget, or over the slow-call limit (half of
+`CallTimeout`, so a handler that burns 2.9 s of every tick is caught), stop the sidecar and the host is reported
+ended.
+
+**One goroutine, one job.** The sidecar's calls run on the host's own goroutine, not the session loop: each turn the
+loop prepares at most one job (the world pushes, the events to fire, the tick) and hands it over without waiting;
+the job's answer is applied on the loop, where the `Out`s are performed on the session. A looping `OnUpdate` or
+event handler therefore holds the add-on, never the session: packets keep being collected and RPCs keep answering
+while it runs, and when the budget kills the sidecar only the add-on host ends (`addon_state` reports it, and the
+daemon stays online). `addon_start`, `addon_tick` and `addon_stop` follow the same rule: their sidecar waits run
+on their own RPC goroutine, with one overall bound per method (10 s), and only their short session reads and writes
+are queued on the loop, so a stuck load or tick leaves `status` answering. `addon_tick` waits for its own job's
+answer off the queue, because a manual clock answers from that tick.
+
+**Registration.** The prefixes the add-on registers with `RegisterAddonMessagePrefix` (plus any `prefixes` argument
+of `addon_start`) are added to the list the session already holds and sent through `addonmsg`'s unregister-all +
+registration pair, so the bot module's `PBC` prefix stays registered. The prefixes the session held before the
+start are reserved, and so are the daemon's own `TBM` and `PBC` prefix whether or not the session had registered
+them: the add-on cannot register or send under them (the client answers `false` and raises on the send, which the
+sink refuses again), and it is fed only the frames of the prefixes it registered itself. `addon_stop` removes only
+the add-on's prefixes and leaves the rest, reserved ones included. A re-entry's fresh session has an empty list, so
+the host's next feed registers again.
+
+**The field limits and the protocol cap.** The client itself refuses a field the server would refuse: a prefix over
+16 bytes, an add-on text over 255, a chat line over 511, a target over 64, or the prefix that would take the
+session's whole registration list past 64. The refusal is an over-limit send (the add-on sees a Lua error and the
+call answers `throttled`), so an oversized field never becomes a protocol line, and the daemon keeps no row with
+that text. As a backstop the daemon kills a sidecar that writes a protocol line over 64 KiB, and keeps at most 50
+sent rows of at most 512 bytes of text each under a total cap, so `addon_state` cannot be made to hold or
+re-encode hundreds of megabytes. The replies are bounded in encoded size too (chat 12 KiB, errors 8 KiB, at most
+64 file names inside 8 KiB and then `...`), so a legal folder with hundreds of long file names cannot push a load
+or state reply over the cap either.
+
+**The CPU budget.** The run time of the add-on's calls is summed over a rolling window (3 s in any 10 s of wall
+clock); over it the sidecar is stopped and the add-on marked failed. A per-call limit alone let a handler that spun
+just under it, or alternated slow and fast calls (each fast one reset the strike count), hold a core forever.
+
+**Frames in.** The host is driven from the session's own event log, in order: a delivered add-on message is
+`CHAT_MSG_ADDON` with the client's four arguments (prefix, text, the channel word — `PARTY`, `RAID`,
+`INSTANCE_CHAT`, `GUILD`, `OFFICER`, `WHISPER` — and the sender), a system notice is `CHAT_MSG_SYSTEM`, a whisper
+to the character is `CHAT_MSG_WHISPER`, and an entry into the world (login, re-entry, teleport) is
+`PLAYER_ENTERING_WORLD`. Only a frame under a prefix the add-on registered itself is fed to it: the session's own
+traffic (the bot module's protocol, for one) is not the loaded add-on's to read. Where the party or raid changed
+(`roster`, `destroyed`, `leader`, `kicked`) the daemon pushes the world first, so
+`PARTY_MEMBERS_CHANGED`/`RAID_ROSTER_UPDATE` arrive at their place in the stream. The
+loop reads the log and translates its rows (so the received rows and the cursor are the loop's), and the resulting
+calls are what the host's goroutine runs. A real clock ticks `OnUpdate` every 100 ms the same way;
+`clock: "manual"` leaves the clock to `addon_tick`, for a test or a caller that wants a fixed sequence.
+
+**Frames out.** `SendAddonMessage` comes back as an `Out` the daemon performs with `session.SendAddon`, so a frame
+leaves through the same `addonmsg` layout and limits as `addon_send`, on `PARTY`, `RAID`, `INSTANCE_CHAT`, `GUILD`,
+`OFFICER` or `WHISPER` (the target is the client's fourth argument). A `CHANNEL` message is refused: the core looks
+a channel up by the GUID in the packet, which this client never has (see "Channel sending"). `SendChatMessage` and
+`TargetUnit`/`TargetByName` are performed through the same session paths as `chat` and `target`.
+
+**The 255-byte limit.** `addonmsg.Build` refuses a text over the server's 255 bytes and the refusal is kept on that
+sent row's `error` (the real client has no chunking of its own; a protocol that needs long bodies chunks them
+itself, as the bot module's TBM protocol does with its 200-byte parts). A frame is never truncated: nothing half a
+message reaches the server.
+
+**What the daemon answers.** `addon_start {dir, clock?, prefixes?}` loads the add-on and returns its name, `.toc`
+version and files, its prefixes, and everything it sent while loading. `addon_state` queues what arrived and returns
+the same plus the sent rows (with their errors), the received frames (prefix, channel, text, sender, seq), the
+add-on's contained errors and chat lines as its last state read saw them (a call's answer lands a turn later, never
+by holding the session), the session's registered list, and the session's own receive counters (delivered, filtered
+for an unregistered prefix, refused as malformed, still queued), so a frame the add-on never saw is visible as
+filtered or bad rather than silently missing. `addon_tick {ms}` advances a manual clock and returns the clock and
+what the tick sent. `addon_stop` ends the child and unregisters the add-on's prefixes. `addon_click` and the TBM
+button methods remain refused: they need the TortoiseBotsManager button table, which is the add-on's own UI, not a
+client feature.
+
+**Tests.** `internal/forever/addonhost/host_test.go` runs a synthetic add-on on the real interpreter: the `.toc` and
+a registered prefix, the login frame, `CHAT_MSG_ADDON` arguments, a raising handler followed by a delivered frame,
+a slash command's send, the clock and the visible-frame rule for `OnUpdate`, the sandbox, a stuck add-on killed by
+the call timeout, an allocation bomb stopped by the sidecar's address-space limit (read back from the kernel),
+`Start`'s one-`.toc` rule, a symlinked `.toc`, a symlinked Lua file, an absolute line and a `..` line all refused
+as outside the folder, a source's bytes kept exact (multi-byte text included; a non-UTF-8 source refused), bytecode
+and NUL sources refused from a file and from the sidecar's own load, the exact global allow-list, string.dump
+unreachable by every route with the host's frames intact after a forged `string.format`, the per-call send cap and
+the three-strike stop, a slow handler stopped after three calls, and a FIFO or oversize file refused by `stat`
+before the read.
+`internal/forever/world/serve_addon_host_test.go` runs the same kind of add-on against the fake world server: the
+registration packets the fake parses, the party frame it receives, a delivered
+guild frame reaching `CHAT_MSG_ADDON` with the add-on's guild echo going back out, a 300-byte frame refused with the
+255-byte error and no packet on the wire, a handler error that leaves the daemon online and serving, a looping
+handler that leaves `status` answering and `units` served while it spins (the call is killed and only the add-on
+host ends), a stuck load and a stuck tick that leave `status` answering within 2 s, a million-send flood capped at
+20 with the host still running and marked throttled, the start/stop refusals, a manual clock, and an `--addon off`
+session that cannot start a host.

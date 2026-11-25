@@ -30,7 +30,7 @@ own registration, so it cannot go stale. The implemented methods are in the [met
 
 | Methods | Area | Why it is refused | What to use instead |
 |---|---|---|---|
-| `addon_click`, `addon_start`, `addon_state`, `addon_stop`, `addon_tick` | The add-on host | Running a real add-on headless is a later ticket, so there is nothing to start, tick, click or read | `addon_send` is the ported half, the add-on message layer ([add-on protocol](../bots-and-raids/addon-protocol.md)) |
+| `addon_click` | The add-on's own panel | The button table is the TortoiseBotsManager add-on's own UI; `addon_start` runs that add-on's events and slash commands, not its buttons | [Run an add-on headless](../bots-and-raids/addon-host.md) |
 | `brain_start`, `brain_status`, `brain_stop` | The client brain | The module's bots fight on the server, so a client brain has nothing to drive | The module's own brain (`commander`, `bot`); a player character in `forever dungeon-play` is driven by the module ([bot control](../bots-and-raids/bot-control.md)) |
 | `tune_list`, `tune_set` | Brain tuning | The client brain is retired on Forever, so there is nothing to tune | Nothing: read the module's state with `commander status` or `run status` |
 | `dungeon_skip`, `dungeon_stage` | The older dungeon driver's step control | A module-led run has no client-side step control: the module owns its run | `dungeon_pause`, `dungeon_resume` and `dungeon_stop` are its verbs; an agent-led run's start step is `forever dungeon-run --from-leg/--legs` ([dungeon-run](../dungeons/dungeon-run.md)) |
@@ -38,9 +38,10 @@ own registration, so it cannot go stale. The implemented methods are in the [met
 | `tbm_buttons`, `tbm_click` | The TBM buttons | The buttons are the add-on's own UI table, so they need the add-on host | `tbm_handshake` and `tbm_send` speak the protocol without one ([add-on protocol](../bots-and-raids/addon-protocol.md)) |
 | `tt` | The Turtle test toolkit | It drives 1.12 test servers | `forever soap` on a Forever server ([safety and GM guards](../getting-started/safety-and-gm-guards.md)) |
 
-The old names that used to be refused and are now implemented — `dungeon_run`, `dungeon_status`, `dungeon_stop`,
-`dungeon_pause`, `dungeon_resume`, `plan_check`, `bot_view`, `tbm_handshake`, `tbm_send` and `tbm` — are rows in the
-[method index](method-index.md), with their parameters.
+The old names that used to be refused and are now implemented — `addon_start`, `addon_state`, `addon_tick`,
+`addon_stop`, `dungeon_run`, `dungeon_status`, `dungeon_stop`, `dungeon_pause`, `dungeon_resume`, `plan_check`,
+`bot_view`, `tbm_handshake`, `tbm_send` and `tbm` — are rows in the [method index](method-index.md), with their
+parameters.
 
 # Why it works this way
 

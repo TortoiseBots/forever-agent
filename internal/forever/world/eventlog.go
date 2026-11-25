@@ -173,6 +173,13 @@ func (l *EventLog) sinceLocked(seq uint64, limit int) (rows []Event, next uint64
 	return rows, start + uint64(count) - 1, dropped, more, reset
 }
 
+// Seq is the ring's last seq: the cursor a reader starts at to see only what happens next.
+func (l *EventLog) Seq() uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.seq
+}
+
 // Len is how many events the ring holds.
 func (l *EventLog) Len() int {
 	l.mu.Lock()

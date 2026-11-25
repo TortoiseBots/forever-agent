@@ -217,6 +217,9 @@ type serveState struct {
 	// tbmGate serialises TBM exchanges: the module speaks one TBM client at a time. It is not the session queue, so
 	// a waiting exchange holds no other method behind it.
 	tbmGate chan struct{}
+	// addonGate serialises the add-on host's lifecycle and tick methods: their sidecar calls wait on their RPC
+	// goroutine, and one host mutation at a time keeps their short session sections in order.
+	addonGate chan struct{}
 	// cmdr is the commander method's controller, built for the first session and reset by every install (a
 	// re-entry drops what the old session knew about the module's packages). It belongs to the loop goroutine.
 	cmdr *commanderCtl
@@ -238,6 +241,10 @@ type serveState struct {
 	followCtx    context.Context
 	followCancel context.CancelFunc
 	mapEpochBase uint64
+	// addon is the daemon's one add-on host (serve_addon_host.go), nil before addon_start and after addon_stop. It
+	// outlives a session like the RPC listener: a re-entry re-registers its prefixes on the new session. The loop
+	// goroutine owns it.
+	addon *serveAddonHost
 }
 
 type serveCall struct {
@@ -301,6 +308,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 		dir:          cfg.Dir,
 		preflight:    cfg.preflight,
 		tbmGate:      make(chan struct{}, 1),
+		addonGate:    make(chan struct{}, 1),
 	}
 	if st.plansDir == "" {
 		st.plansDir = "dungeons"
@@ -323,6 +331,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 	st.install(s, 1)
 	st.setState(serveOnline, "")
 	defer func() {
+		st.addonHostClose()
 		if cur := st.session.Load(); cur != nil {
 			cur.teardown()
 		}
@@ -373,6 +382,7 @@ func (s *session) serve(ctx context.Context, cfg *ServeConfig) error {
 			return cur.serveLogout(st)
 		}
 		cur.serveIdleTick()
+		st.addonHostStep(cur)
 		if err := cur.collect(ctx, 50*time.Millisecond); err != nil {
 			if isServeLinkLost(err) {
 				continue // the top of the loop sees the dead link and reconnects

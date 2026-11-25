@@ -28,8 +28,8 @@ const (
 	reasonBrainRetired = "the client brain is retired on Forever: the module's bots fight on the server, so a client brain has nothing to drive"
 	reasonBrainTuning  = "brain tuning: the client brain is retired on Forever (the module's bots fight on the server), so there is nothing to tune"
 	reasonLFG          = "the client dungeon finder is not built on Forever: the module's own finder fills the party and queues (forever fb-dungeon)"
-	reasonAddonHost    = "no add-on host on this server: running a real add-on headless is a later ticket, so there is nothing to start, tick, click or read (addon_send is the ported half, the add-on message layer)"
-	reasonAddonButtons = "the TBM buttons are the add-on's own UI table, so they need the add-on host (a later ticket); tbm_handshake and tbm_send speak the protocol without one"
+	reasonAddonClick   = "addon_click drives a button of the TortoiseBotsManager panel: the button table is that add-on's own UI, so addon_start runs the add-on's own events and slash commands instead"
+	reasonAddonButtons = "the TBM buttons are the add-on's own UI table, so they need that add-on's panel; tbm_handshake and tbm_send speak the protocol without one"
 	reasonDungeonStep  = "a module-led run has no client-side step control: the module owns its run (dungeon_pause, dungeon_resume and dungeon_stop are its verbs), and an agent-led run's start step is forever dungeon-run --from-leg/--legs"
 	reasonTurtleTT     = "the Turtle test toolkit drives 1.12 test servers; a Forever test setup uses SOAP (forever soap)"
 )
@@ -62,12 +62,8 @@ var refusedMethods = []serveRefusal{
 	{name: "lfg_role_check_answer", why: reasonLFG},
 	{name: "lfg_status", why: reasonLFG},
 
-	// The add-on host and the add-on's own buttons: a later ticket.
-	{name: "addon_click", why: reasonAddonHost},
-	{name: "addon_start", why: reasonAddonHost},
-	{name: "addon_state", why: reasonAddonHost},
-	{name: "addon_stop", why: reasonAddonHost},
-	{name: "addon_tick", why: reasonAddonHost},
+	// The add-on's own buttons: the host runs the add-on's events and slash commands, not its panel.
+	{name: "addon_click", why: reasonAddonClick},
 	{name: "tbm_buttons", why: reasonAddonButtons},
 	{name: "tbm_click", why: reasonAddonButtons},
 
