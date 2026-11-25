@@ -5,9 +5,9 @@
 --
 -- stdin: {"id":n,"op":"...",...}. File descriptor 3 (never stdout, so nothing the add-on or Lua prints can pass
 -- for a frame): one JSON line per reply, {"id":n,"result":...} or {"id":n,"error":"..."}, and before it, while
--- the request runs, one {"out":"addon"|"chat"|"target",...} line per thing the add-on asked the client to do
--- (SendAddonMessage, SendChatMessage, TargetUnit, TargetByName). The daemon performs those on its session. The
--- host exits at the end of stdin.
+-- the request runs, one {"out":"addon"|"chat"|"target"|"register",...} line per thing the add-on asked the
+-- client to do (SendAddonMessage, SendChatMessage, TargetUnit, TargetByName, and a RegisterAddonMessagePrefix
+-- after the load). The daemon performs those on its session. The host exits at the end of stdin.
 --
 -- The add-on's files come in the load request as text: the daemon reads the .toc and its sources, checks that
 -- every one stays inside the add-on's folder, and this host never opens a file of the add-on's own. Each file
@@ -19,9 +19,11 @@
 -- own copies of the string functions and no route to the shared string table), text-only chunks (bytecode starts
 -- with ESC and is refused before loadstring, and so is a NUL byte), a send budget enforced in mock.lua (20
 -- sends per call, 10 per second, 100 queued), the server's own field limits on every send (a prefix of 1..16
--- bytes, an add-on text of 255, a chat line of 511, a target of 64, at most 64 prefixes), the pattern caps below,
--- and the reserved prefixes the session holds. Over the budget or a field limit the op answers an error and is
--- marked throttled; the daemon stops a sidecar that writes a protocol line over its own cap.
+-- bytes of printable ASCII with no space at either end, an add-on text of 255, a chat line of 511, a target of
+-- 64, and an add-on's prefix share: the smaller of 32 and what the session's reserved prefixes leave of the 64),
+-- the pattern caps below, and the reserved prefixes the session holds. Over the budget or a field limit the op
+-- answers an error and is marked throttled; the daemon stops a sidecar that writes a protocol line over its own
+-- cap.
 --
 -- Ops:
 --   hello   {}                        the host has read its scripts and is ready
@@ -312,6 +314,7 @@ function ops.hello() return {} end
 
 function ops.load(p)
     if loaded then error("the add-on is already loaded", 0) end
+    addonhost_set_loading(true)
     local addon = p.addon or {}
     addonName = boundedText(addon.name or "Addon", MAX_IDENTITY)
     if addon.title ~= nil then title = boundedText(addon.title, MAX_IDENTITY) end
@@ -334,6 +337,9 @@ function ops.load(p)
         fireEvent("PLAYER_LOGIN", {})
         fireEvent("PLAYER_ENTERING_WORLD", {})
     end
+    -- Every registration the load made (its files, ADDON_LOADED, PLAYER_LOGIN) is in the answer; from here one is
+    -- a request of its own.
+    addonhost_set_loading(false)
     return { name = addonName, title = title or addonName, version = version, files = boundedFiles(),
         prefixes = jsonArray(addonhost_prefixes()) }
 end
@@ -382,7 +388,7 @@ end
 -- ── main loop ───────────────────────────────────────────────────────────────
 -- Every field the daemon may perform is a string, and the object kind is one this client does: an entry that fails
 -- that (a table in a field, or a kind nobody asked for) is dropped instead of being encoded.
-local OUT_KINDS = { addon = true, chat = true, target = true }
+local OUT_KINDS = { addon = true, chat = true, target = true, register = true }
 local function outField(v)
     if v == nil then return nil end
     if type_(v) == "string" then return v end

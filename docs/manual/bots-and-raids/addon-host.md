@@ -49,11 +49,21 @@ code the daemon wrote. These are the rules it runs under:
   `addon_state` marks the add-on `throttled`; the host stays up.
 - Every field of a send is checked against the server's own limits before it leaves the sidecar: a
   prefix is 1..16 bytes, an add-on text 255 bytes, a chat line 511 and a whisper target 64
-  characters, and at most 64 prefixes register. An oversized field is refused like an over-budget
-  send (the add-on sees a Lua error, the call answers `throttled`); the daemon keeps no row with
-  that text. A sidecar that writes a protocol line over 64 KiB anyway is killed and the add-on is
-  marked failed, and each kept `sent` row holds at most 512 bytes of text, cut with a `...`
-  marker, under a total cap.
+  characters. An oversized field is refused like an over-budget send (the add-on sees a Lua error,
+  the call answers `throttled`); the daemon keeps no row with that text. A sidecar that writes a
+  protocol line over 64 KiB anyway is killed and the add-on is marked failed, and each kept `sent`
+  row holds at most 512 bytes of text, cut with a `...` marker, under a total cap.
+- A prefix is also checked for what it is: printable ASCII only, with no space at either end, so
+  `ABC 1` is a prefix and ` ABC`, `ABC `, `A<tab>B` or a control byte in one is not. A tab would
+  let a consumer that splits `prefix<TAB>text` (the vanilla convention) read one prefix as
+  another. A refused prefix raises a Lua error on `SendAddonMessage`, answers `false` on
+  `RegisterAddonMessagePrefix`, and never reaches the session.
+- The add-on's own prefix list has a share of the server's 64: the smaller of 32 and what the
+  session's reserved prefixes leave. `addon_start` takes no more, a prefix registered or sent
+  under past the share is refused, and three such refusals mark the add-on `throttled`. The list
+  grows only once the session took the registration, so a failed one leaves no entry. A prefix the
+  add-on registers after the load is sent to the session as a request of its own as soon as the
+  call answers, so it is fed the frames that arrive under it from then on.
 - Its sidecar is a separate process under a 256 MiB address-space limit. A call that does not
   answer within 3 s is killed, and three calls in a row over the send budget or over half of that
   3 s stop the sidecar. The time its calls take is also bounded over a rolling window: 3 s of
@@ -88,7 +98,7 @@ answering `status`.
 |---|---|
 | `dir` | The add-on's folder. Its one `.toc` is found in it (a folder with no `.toc`, or with more than one, is refused by name). |
 | `clock` | `real` (default) ticks `OnUpdate` every 100 ms from the daemon's own loop; `manual` moves only when you call `addon_tick`. Any other value is refused with `addon_start: clock "<value>": use real or manual`. |
-| `prefixes` | Extra prefixes the add-on uses, registered up front beside the ones it registers itself while loading. They count as the add-on's own (it may send under them and receives their frames); the session's own prefixes are reserved, not extra. |
+| `prefixes` | Extra prefixes the add-on uses, registered up front beside the ones it registers itself while loading. Each must be 1..16 bytes of printable ASCII with no space at either end, and the list holds at most the add-on's share of the server's 64 (the smaller of 32 and what the session's reserved prefixes leave); an invalid prefix or a list over the share is refused before the sidecar starts, by name. They count as the add-on's own (it may send under them and receives their frames); the session's own prefixes are reserved, not extra, and one named here is refused rather than dropped. |
 
 The answer is the host state described under `addon_state`, including everything the add-on sent
 while loading. The add-on's prefixes (the `prefixes` above and the ones it registers) are added to
@@ -96,7 +106,12 @@ the list the session already holds; the prefixes the session held before the sta
 and stay the session's (see “An add-on is untrusted”). Starting twice is refused (`addon_start:
 the add-on host is already running (addon_stop first)`), and so is starting one on a session begun
 with `--addon off` (`addon_start: this session was started with the add-on off (--addon off), so
-it cannot register a prefix`).
+it cannot register a prefix`). A session whose registered prefix list is unknown — a registration
+packet failed after the unregister-all, so the server may hold the old list, the new one or none —
+is refused too (`addon_start: this session's registered prefix list is unknown ...`): the host
+cannot tell the session's prefixes from the add-on's, and reserving only `TBM` and `PBC` would
+leave the rest open to the add-on. Send once (`addon_send`) so the session registers again, then
+retry.
 
 `lua5.1` must be on `PATH` (the error says `lua5.1 not found (apt install lua5.1)`), and on Linux
 the sidecar must be startable under an address-space limit with `prlimit(1)` or `sh(1)`; a host
@@ -114,7 +129,7 @@ Queues what arrived for the add-on since the last feed and answers the host's la
 |---|---|
 | `running`, `dir`, `name`, `version`, `files`, `clock` | The host and the add-on's `.toc` identity; `files` lists at most 64 names inside 8 KiB, then a `...` marker |
 | `prefixes` | The prefixes the add-on asked for (its own, never the session's reserved ones), and `registered` the list the session holds now |
-| `sent` | One row per thing the add-on asked the client to do, with the transport's refusal on that row's `error` (a field over the server's limit is refused, never truncated). At most 50 rows stay, each holding at most 512 bytes of text (cut with a `...` marker) under a total cap |
+| `sent` | One row per thing the add-on asked the client to do (`addon`, `chat` and `target`, or `register` for a prefix registered after the load), with the transport's refusal on that row's `error` (a field over the server's limit is refused, never truncated). At most 50 rows stay, each holding at most 512 bytes of text (cut with a `...` marker) under a total cap |
 | `received` | The add-on frames delivered to the prefixes the add-on registered: prefix, channel, text, sender and the event log's sequence |
 | `errors`, `chat` | The add-on's contained handler errors and what it printed to the chat frame, each line capped at 2 KiB and the lists by their encoded size (8 KiB and 12 KiB) |
 | `throttled` | Present once the add-on has hit a send, field or CPU budget |
@@ -156,10 +171,10 @@ Stopping when nothing runs is refused with `addon_stop: the add-on host is not r
 
 | Client function | What the daemon does |
 |---|---|
-| `SendAddonMessage(prefix, text, channel, target)` | `addon_send` on `PARTY`, `RAID`, `INSTANCE_CHAT`, `GUILD`, `OFFICER` or `WHISPER`; a `CHANNEL` message is refused (this client never has the channel's GUID). The prefix must be 1..16 bytes, the text at most 255 and the target at most 64 characters, and a reserved prefix is refused with a Lua error |
+| `SendAddonMessage(prefix, text, channel, target)` | `addon_send` on `PARTY`, `RAID`, `INSTANCE_CHAT`, `GUILD`, `OFFICER` or `WHISPER`; a `CHANNEL` message is refused (this client never has the channel's GUID). The prefix must be 1..16 bytes of printable ASCII with no space at either end and is registered the first time it is sent under (within the add-on's share; over it the send is refused), the text is at most 255 and the target at most 64 characters, and a reserved or invalid prefix is refused with a Lua error |
 | `SendChatMessage(text, type, language, target)` | The same path as `chat`; the text is at most 511 bytes and the target at most 64 characters |
 | `TargetUnit(unit)` / `TargetByName(name)` | The same path as `target`; the unit or name is at most 64 characters |
-| `RegisterAddonMessagePrefix(prefix)` | The prefix is registered with the session (1..16 bytes, at most 64 in all; over either, or a reserved prefix, the function answers `false`) |
+| `RegisterAddonMessagePrefix(prefix)` | The prefix is registered with the session (1..16 bytes of printable ASCII, no space at either end, at most the add-on's share of the server's 64; over either, or a reserved prefix, the function answers `false`). A registration made while the add-on loads is part of the load's answer; one made after it is a request the daemon performs as soon as the call answers, and `addon_state` keeps it as a `register` row |
 | `CreateFrame`, `SetScript`, `RegisterEvent`, `HookScript`, `Show`, `Hide`, `SetText` and the rest of the widget surface | The mock's frame model; `OnUpdate` and event handlers run in creation order for visible frames |
 | `GetTime`, `UnitName`, `UnitLevel`, `UnitClass`, `GetNumPartyMembers`, `GetNumRaidMembers` and the other unit reads | The world the daemon pushed: player, target, party1..4 and raid1..40 |
 

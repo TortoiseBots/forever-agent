@@ -19,7 +19,10 @@ package world
 // Prefixes the session held before the add-on started (the bot module's protocol prefixes, for one) are reserved:
 // the add-on cannot register them, cannot send under them, and is not fed the frames delivered under them. It is
 // fed only the frames of the prefixes it registered itself, and addon_stop takes off only those, leaving the
-// session's list as it was.
+// session's list as it was. Every prefix it does register or send under is checked first (1..16 bytes of printable
+// ASCII, no space at either end) and its own list is capped at the smaller of 32 and what the server's 64 leaves
+// after the reserved ones: past that, a prefix is refused and repeated attempts mark it throttled. The session's
+// list is merged through a set and re-sent only when it changed, so the harvest's every turn stays cheap.
 //
 // The sidecar is another process and a call can take CallTimeout to answer (a looping handler is killed only when
 // the budget runs out), so the sidecar calls run on the host's own goroutine: the loop prepares one job (the world
@@ -66,6 +69,14 @@ const (
 	// within addonhost.CallTimeout (3 s), and a tick may first wait for a running job, so the method's bound is
 	// two calls plus slack. It is the caller's wait, never the session loop's.
 	addonHostMethodBound = 10 * time.Second
+	// addonHostPrefixShare is the most prefixes the add-on may hold of its own. The server's registration packet
+	// carries at most addonmsg.MaxPrefixes for the session's whole list, so the add-on gets what is left after the
+	// session's reserved prefixes, and never more than this share: the host's list stays small however long the
+	// add-on sends under new prefixes (the harvest runs ensureRegistered on the session loop every turn), and the
+	// session keeps most of its 64 for itself. An over-cap prefix is refused, and addonHostPrefixStrikes refusals
+	// mark the add-on throttled (the same flag a budget overrun sets).
+	addonHostPrefixShare   = 32
+	addonHostPrefixStrikes = 3
 )
 
 // serveAddonStartParams is addon_start's: the add-on's folder (its .toc is found in it), the clock and the
@@ -84,7 +95,7 @@ type serveAddonTickParams struct {
 
 // serveAddonSent is one thing the add-on asked the client to do, and what came of it.
 type serveAddonSent struct {
-	Kind    string `json:"kind"` // addon, chat or target
+	Kind    string `json:"kind"` // addon, chat, target or register
 	Prefix  string `json:"prefix,omitempty"`
 	Channel string `json:"channel,omitempty"` // addon: PARTY, ...; chat: SAY, ...
 	Text    string `json:"text,omitempty"`
@@ -191,24 +202,33 @@ type serveAddonHost struct {
 	files      []string
 	registered []string // the add-on's own prefixes (the ones it asked for and the ones it sent under)
 	reserved   []string // prefixes the session held at addon_start: the add-on may not register, send under or receive them
-	manual     bool
-	lastTick   time.Time
-	cursor     uint64
-	world      string // the last world pushed, JSON
-	sent       []serveAddonSent
-	received   []serveAddonReceived
-	dropped    int
-	throttled  bool                // the add-on hit a per-call limit at least once
-	lastErr    string              // the last contained error (a registration or a feed failure)
-	err        error               // why the host ended
-	state      *addonhost.State    // what the last state read answered, nil before the first
-	jobs       chan *addonJob      // at most one queued: submit refuses while a job is out
-	results    chan addonJobResult // the worker's answers, drained on the loop
-	idle       chan struct{}       // a job finished; the loop signals it for a waiting addon_tick
-	quit       chan struct{}
-	quitOnce   sync.Once
-	workerDone chan struct{}
-	busy       bool // a job is with the worker
+	// regSession, regList and regWanted are the last registration the host checked: regList is the list the session
+	// held then and regWanted the add-on's own list it was merged from. While both are unchanged there is nothing
+	// to register, so the harvest's every turn costs two compares and no packet.
+	regSession *session
+	regList    []string
+	regWanted  []string
+	// prefixRefusals counts prefixes refused over the add-on's share; addonHostPrefixStrikes of them mark the
+	// add-on throttled.
+	prefixRefusals int
+	manual         bool
+	lastTick       time.Time
+	cursor         uint64
+	world          string // the last world pushed, JSON
+	sent           []serveAddonSent
+	received       []serveAddonReceived
+	dropped        int
+	throttled      bool                // the add-on hit a per-call limit at least once
+	lastErr        string              // the last contained error (a registration or a feed failure)
+	err            error               // why the host ended
+	state          *addonhost.State    // what the last state read answered, nil before the first
+	jobs           chan *addonJob      // at most one queued: submit refuses while a job is out
+	results        chan addonJobResult // the worker's answers, drained on the loop
+	idle           chan struct{}       // a job finished; the loop signals it for a waiting addon_tick
+	quit           chan struct{}
+	quitOnce       sync.Once
+	workerDone     chan struct{}
+	busy           bool // a job is with the worker
 }
 
 func registerAddonHostMethods(srv *rpc.Server, st *serveState) {
@@ -284,7 +304,7 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 		cursor uint64
 		// held is the prefix list the session held before the add-on started: those prefixes are the session's
 		// (the bot module's protocol prefixes, for one), so the add-on may not register, send under or receive
-		// them.
+		// them. A list that is unknown is refused: only TBM and PBC could be reserved then.
 		held []string
 	}
 	v, err := st.call(ctx, func(s *session) (any, error) {
@@ -299,19 +319,19 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 			// off before registering its own.
 			_ = st.addon.unregister(s)
 		}
+		held, err := addonSessionPrefixes(s)
+		if err != nil {
+			return nil, err
+		}
 		// The cursor goes in before anything the add-on does while loading: a frame the server delivers during
 		// the load (or a plugin's own startup) is still fed, never skipped as already seen.
-		return addonPrep{world: addonWorldOf(s), cursor: s.EventLog().Seq(), held: s.addonRegisteredPrefixes()}, nil
+		return addonPrep{world: addonWorldOf(s), cursor: s.EventLog().Seq(), held: held}, nil
 	})
 	if err != nil {
 		return serveAddonHostState{}, err
 	}
 	prep := v.(addonPrep)
 
-	h, err := addonhost.Start(p.Dir)
-	if err != nil {
-		return serveAddonHostState{}, err
-	}
 	// The reserved set is complete before the add-on's code runs: the prefixes the session held plus the daemon's
 	// own protocol prefixes, whether or not this session happened to register them.
 	reserved := append([]string(nil), prep.held...)
@@ -319,6 +339,25 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 		if !slices.Contains(reserved, prefix) {
 			reserved = append(reserved, prefix)
 		}
+	}
+	// The add-on's own prefixes are checked before the sidecar starts: a bad one is the caller's error, not an
+	// add-on's, and it must not cost a process.
+	limit := addonHostPrefixLimit(len(reserved))
+	if len(p.Prefixes) > limit {
+		return serveAddonHostState{}, fmt.Errorf("addon_start: %d prefixes, over the add-on's share of %d (the server holds %d in all and this session holds %d of them)",
+			len(p.Prefixes), limit, addonmsg.MaxPrefixes, len(reserved))
+	}
+	for _, prefix := range p.Prefixes {
+		if err := validateAddonPrefix(prefix); err != nil {
+			return serveAddonHostState{}, fmt.Errorf("addon_start: prefix %q: %v", prefix, err)
+		}
+		if slices.Contains(reserved, prefix) {
+			return serveAddonHostState{}, fmt.Errorf("addon_start: prefix %q is a prefix this session holds; the add-on cannot register or send under it", prefix)
+		}
+	}
+	h, err := addonhost.Start(p.Dir)
+	if err != nil {
+		return serveAddonHostState{}, err
 	}
 	res, outs, err := h.Load(prep.world, true, reserved)
 	if err != nil {
@@ -330,7 +369,7 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 		jobs:     make(chan *addonJob, 1), results: make(chan addonJobResult, 1), idle: make(chan struct{}, 1),
 		quit: make(chan struct{}), workerDone: make(chan struct{})}
 	for _, prefix := range p.Prefixes {
-		if !slices.Contains(a.reserved, prefix) && !slices.Contains(a.registered, prefix) {
+		if !slices.Contains(a.registered, prefix) {
 			a.registered = append(a.registered, prefix)
 		}
 	}
@@ -343,9 +382,20 @@ func (st *serveState) addonStart(ctx context.Context, p serveAddonStartParams) (
 		// host already installed so their prefixes register through it.
 		st.performAddonOuts(a, outs)
 		a.name, a.version, a.files = res.Name, res.Version, res.Files
+		// The sidecar checks these before it answers a load (lua/mock.lua); a sidecar that broke the contract is
+		// refused here, and none of them enters the list.
 		for _, prefix := range res.Prefixes {
+			if err := validateAddonPrefix(prefix); err != nil {
+				st.addon = nil
+				return nil, fmt.Errorf("addon_start: the add-on registered prefix %q: %v", prefix, err)
+			}
 			if slices.Contains(a.reserved, prefix) || slices.Contains(a.registered, prefix) {
 				continue
+			}
+			if len(a.registered) >= limit {
+				st.addon = nil
+				return nil, fmt.Errorf("addon_start: the add-on registered %d prefixes, over its share of %d (the server holds %d in all and this session holds %d of them)",
+					len(res.Prefixes), limit, addonmsg.MaxPrefixes, len(reserved))
 			}
 			a.registered = append(a.registered, prefix)
 		}
@@ -792,6 +842,10 @@ func (a *serveAddonHost) sink(st *serveState) func(addonhost.Out) error {
 				return err
 			}
 			return s.SendAddon(ch, target, o.Prefix, o.Text, false)
+		case "register":
+			// The add-on called RegisterAddonMessagePrefix after the load: the real client sends a registration
+			// packet then, and the mock records the call as this entry. The same validation and share apply.
+			return a.ensurePrefix(s, o.Prefix)
 		case "chat":
 			return s.serveChat(context.Background(), strings.ToLower(strings.TrimSpace(o.Type)), o.Text, o.To)
 		case "target":
@@ -838,49 +892,129 @@ func addonTypeWord(channel string) string {
 	return strings.ToUpper(channel)
 }
 
-// ensurePrefix makes sure the session holds one prefix the add-on sends under. A prefix the session held before
-// the add-on started is the session's (the bot module's protocol prefixes, for one), and so is one the session
-// registered after the start that the add-on never asked for: sending under either would forge another client's
-// protocol as this character, so both are refused with an error on the row.
-func (a *serveAddonHost) ensurePrefix(s *session, prefix string) error {
-	if slices.Contains(a.reserved, prefix) {
-		return fmt.Errorf("add-on message: %q is a prefix this session holds; the add-on cannot send under it", prefix)
+// addonHostPrefixLimit is how many prefixes the add-on may hold of its own: the server's per-session limit minus
+// the ones the session holds for itself, and never more than addonHostPrefixShare. A session holding the whole
+// server limit leaves the add-on none.
+func addonHostPrefixLimit(reserved int) int {
+	limit := addonmsg.MaxPrefixes - reserved
+	if limit > addonHostPrefixShare {
+		limit = addonHostPrefixShare
 	}
-	if held := s.addonRegisteredPrefixes(); slices.Contains(held, prefix) && !slices.Contains(a.registered, prefix) {
-		return fmt.Errorf("add-on message: %q is a prefix this session holds; the add-on cannot send under it", prefix)
+	if limit < 0 {
+		return 0
 	}
-	if !slices.Contains(a.registered, prefix) {
-		a.registered = append(a.registered, prefix)
-	}
-	return a.ensureRegistered(s)
+	return limit
 }
 
-// ensureRegistered registers the add-on's prefixes together with the ones the session already holds: the prefix
-// list is per session and RegisterAddonPrefixes replaces it, so the bot module's prefix (or anything else bound
-// to this session) stays. A re-entry's fresh session has an empty list, so the next feed registers again.
-func (a *serveAddonHost) ensureRegistered(s *session) error {
-	have := s.addonRegisteredPrefixes()
-	want := append([]string(nil), have...)
-	missing := false
-	for _, prefix := range a.registered {
-		if !slices.Contains(want, prefix) {
-			want = append(want, prefix)
-			missing = true
+// validateAddonPrefix checks a prefix the add-on registers or sends under. The server needs 1..16 bytes; on top of
+// that this host takes printable ASCII only, with no space at either end. A tab or a control byte would let a
+// consumer that joins "prefix\ttext" (the vanilla convention) read one prefix as another, and a prefix with a space
+// at either end is one nothing matches byte for byte. The refusal names the length, never the bytes.
+func validateAddonPrefix(prefix string) error {
+	if prefix == "" {
+		return errors.New("the prefix is empty")
+	}
+	if len(prefix) > addonmsg.MaxPrefix {
+		return fmt.Errorf("the prefix is %d bytes, over the server's %d-byte limit", len(prefix), addonmsg.MaxPrefix)
+	}
+	for i := range len(prefix) {
+		if c := prefix[i]; c < 0x20 || c > 0x7e {
+			return fmt.Errorf("the prefix holds byte 0x%02x, not printable ASCII", c)
 		}
 	}
-	if !missing {
+	if prefix[0] == ' ' || prefix[len(prefix)-1] == ' ' {
+		return errors.New("the prefix has a space at one end")
+	}
+	return nil
+}
+
+// ensurePrefix makes sure the session holds one prefix the add-on sends under or registers. A prefix the session
+// held before the add-on started is the session's (the bot module's protocol prefixes, for one), and so is one the
+// session registered after the start that the add-on never asked for: sending under either would forge another
+// client's protocol as this character, so both are refused with an error on the row. The list grows only once the
+// session took the registration, so a refused or failed registration leaves no entry behind.
+func (a *serveAddonHost) ensurePrefix(s *session, prefix string) error {
+	if err := validateAddonPrefix(prefix); err != nil {
+		return fmt.Errorf("add-on message: %v", err)
+	}
+	if slices.Contains(a.reserved, prefix) {
+		return fmt.Errorf("add-on message: %q is a prefix this session holds; the add-on cannot send under or register it", prefix)
+	}
+	own := slices.Contains(a.registered, prefix)
+	if held := s.addonRegisteredPrefixes(); slices.Contains(held, prefix) && !own {
+		return fmt.Errorf("add-on message: %q is a prefix this session holds; the add-on cannot send under or register it", prefix)
+	}
+	if own {
+		return a.ensureRegistered(s)
+	}
+	if limit := addonHostPrefixLimit(len(a.reserved)); len(a.registered) >= limit {
+		a.refusePrefix()
+		return fmt.Errorf("add-on message: the add-on may hold %d prefixes of its own (the server's %d, minus the %d this session holds); %q is over that",
+			limit, addonmsg.MaxPrefixes, len(a.reserved), prefix)
+	}
+	wanted := append(slices.Clone(a.registered), prefix)
+	if err := a.registerAddonPrefixes(s, wanted); err != nil {
+		return err
+	}
+	a.registered = wanted
+	return nil
+}
+
+// refusePrefix counts one prefix refused over the add-on's share; repeated attempts mark the add-on throttled, so
+// addon_state shows one that keeps trying to take more of the session's prefix list.
+func (a *serveAddonHost) refusePrefix() {
+	a.prefixRefusals++
+	if a.prefixRefusals >= addonHostPrefixStrikes {
+		a.throttled = true
+	}
+}
+
+// ensureRegistered makes the session's list the add-on's prefixes together with the ones the session holds.
+func (a *serveAddonHost) ensureRegistered(s *session) error {
+	return a.registerAddonPrefixes(s, a.registered)
+}
+
+// registerAddonPrefixes puts wanted on the session's prefix list together with the ones the session already holds:
+// the prefix list is per session and RegisterAddonPrefixes replaces it, so the bot module's prefix (or anything
+// else bound to this session) stays. The list is merged through a set, so the cost is O(n+m) and not O(n·m), and
+// the harvest runs it on the session loop every turn: while the session's list and the add-on's are the ones this
+// host checked last, it sends nothing. A re-entry's fresh session has an empty list, so the next feed registers
+// again.
+func (a *serveAddonHost) registerAddonPrefixes(s *session, wanted []string) error {
+	have := s.addonRegisteredPrefixes()
+	if a.regSession == s && slices.Equal(have, a.regList) && slices.Equal(wanted, a.regWanted) {
 		return nil
 	}
-	if err := s.RegisterAddonPrefixes(want...); err != nil {
+	set := make(map[string]struct{}, len(have)+len(wanted))
+	next := append([]string(nil), have...)
+	for _, prefix := range have {
+		set[prefix] = struct{}{}
+	}
+	for _, prefix := range wanted {
+		if _, ok := set[prefix]; ok {
+			continue
+		}
+		set[prefix] = struct{}{}
+		next = append(next, prefix)
+	}
+	if len(next) == len(have) {
+		a.regSession, a.regList, a.regWanted = s, next, slices.Clone(wanted)
+		a.lastErr = ""
+		return nil
+	}
+	if err := s.RegisterAddonPrefixes(next...); err != nil {
 		a.lastErr = err.Error()
+		a.regSession, a.regList, a.regWanted = nil, nil, nil
 		return err
 	}
 	a.lastErr = ""
+	a.regSession, a.regList, a.regWanted = s, next, slices.Clone(wanted)
 	return nil
 }
 
 // unregister takes the add-on's prefixes off the session's list, leaving the rest.
 func (a *serveAddonHost) unregister(s *session) error {
+	a.regSession, a.regList, a.regWanted = nil, nil, nil
 	have := s.addonRegisteredPrefixes()
 	var keep []string
 	for _, prefix := range have {
@@ -1069,4 +1203,18 @@ func (s *session) addonRegisteredPrefixes() []string {
 		return nil
 	}
 	return s.addon.Registered()
+}
+
+// addonSessionPrefixes is the list the session holds, which the add-on host reserves before the add-on's code runs.
+// A list that is unknown — a registration packet failed after the unregister-all, so the server may hold the old
+// list, the new one or none — cannot be reserved: the host refuses to start instead of reserving only TBM and PBC
+// and leaving every other prefix the session might hold open to the add-on.
+func addonSessionPrefixes(s *session) ([]string, error) {
+	if s.addonState == addonRegistrationUnknown {
+		return nil, errors.New("addon_start: this session's registered prefix list is unknown (a registration packet failed earlier), so the add-on's prefixes cannot be told from the session's; send once (addon_send) to register again, then retry")
+	}
+	if s.addon == nil {
+		return nil, nil
+	}
+	return s.addon.Registered(), nil
 }

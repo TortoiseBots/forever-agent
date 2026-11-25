@@ -13,17 +13,20 @@ local named = {}       -- frames created with a name, visible to the add-on as g
 local outbox = {}      -- what the add-on asked the client to do, drained by host.lua
 local prefixes = {}    -- the add-on's registered prefixes, in registration order
 local reserved = {}    -- prefixes the session holds: the add-on may neither register nor send under them
+local loading = true   -- the load op is running: registrations are part of its answer, not a request of their own
 local gsub = string.gsub
+local find = string.find
 
 -- ── the field limits ────────────────────────────────────────────────────────
 -- The server's own limits, checked here so an oversized field never becomes a protocol line (and never a kept
 -- row in the daemon): a prefix is 1..16 bytes and an add-on text at most 255 (the core's
 -- HandleChatAddonMessage), a chat line at most 511 (HandleMessage), a whisper target at most 64 characters, and
--- one client may hold at most 64 registered prefixes. Chat text kept for addon_state is bounded per line and in
--- its encoded size (a control byte JSON-escapes to six), so a state reply stays under the daemon's protocol cap
--- whatever the add-on printed.
+-- one client may hold at most 64 registered prefixes. Of those 64 the add-on gets what the session's reserved
+-- prefixes leave, and never more than ADDON_PREFIX_SHARE: the daemon keeps its own list small the same way.
+-- Chat text kept for addon_state is bounded per line and in its encoded size (a control byte JSON-escapes to
+-- six), so a state reply stays under the daemon's protocol cap whatever the add-on printed.
 local MAX_PREFIX, MAX_ADDON_TEXT, MAX_CHAT_TEXT, MAX_TARGET = 16, 255, 511, 64
-local MAX_PREFIXES = 64
+local MAX_PREFIXES, ADDON_PREFIX_SHARE = 64, 32
 local MAX_CHAT_LINE, MAX_CHAT_TOTAL, MAX_CHAT_ROWS = 2048, 12288, 40
 
 -- jsonLen is the conservative encoded size of s (each escaped byte counts six, the short escapes are two).
@@ -52,6 +55,37 @@ function addonhost_set_reserved(list)
             reservedCount = reservedCount + 1
         end
     end
+end
+
+-- addonhost_set_loading says whether the load op is running. During the load the add-on's registrations are part
+-- of the load's own answer (the daemon registers them with the session as it installs the host); one after the
+-- load is a request of its own, an "register" out the daemon performs as soon as the call answers.
+function addonhost_set_loading(on) loading = on and true or false end
+
+-- validPrefix is the client's check on a prefix the add-on registers or sends under: 1..16 bytes of printable
+-- ASCII with no space at either end. A tab or a control byte is refused: a consumer that joins "prefix\ttext" (the
+-- vanilla convention) would read one prefix as another, and nothing matches a space at either end byte for byte.
+local function validPrefix(prefix)
+    if prefix == "" or #prefix > MAX_PREFIX then return false end
+    if find(prefix, "[^ -~]") then return false end
+    if find(prefix, "^ ") or find(prefix, " $") then return false end
+    return true
+end
+
+-- prefixCap is how many prefixes the add-on may hold of its own: the server's 64 minus the session's reserved
+-- ones, and never more than ADDON_PREFIX_SHARE.
+local function prefixCap()
+    local cap = MAX_PREFIXES - reservedCount
+    if cap > ADDON_PREFIX_SHARE then cap = ADDON_PREFIX_SHARE end
+    if cap < 0 then return 0 end
+    return cap
+end
+
+-- badPrefix refuses a prefix the client would not take, as an over-limit send: the add-on sees a Lua error, the
+-- call answers throttled, and the prefix never reaches the protocol. The message names the length, never the bytes.
+local function badPrefix(prefix)
+    throttled = true
+    error("the client refused the add-on message prefix (" .. #prefix .. " bytes): 1..16 bytes of printable ASCII, no space at either end", 3)
 end
 
 -- oversize refuses one field the server would refuse, as an over-limit send: the add-on sees a Lua error, the
@@ -186,7 +220,7 @@ function SendAddonMessage(prefix, text, channel, target)
     if reserved[prefix] then
         error("the client refused the send: the prefix \"" .. prefix .. "\" belongs to the session, not to the add-on", 2)
     end
-    if #prefix > MAX_PREFIX then oversize("add-on message prefix", MAX_PREFIX) end
+    if not validPrefix(prefix) then badPrefix(prefix) end
     if #text > MAX_ADDON_TEXT then oversize("add-on message text", MAX_ADDON_TEXT) end
     if #channel > 32 then oversize("add-on message channel", 32) end
     local to = nil
@@ -197,16 +231,19 @@ function SendAddonMessage(prefix, text, channel, target)
     pushOut({ out = "addon", prefix = prefix, text = text, channel = channel, to = to })
 end
 
--- RegisterAddonMessagePrefix returns false for a prefix the client cannot register (empty, over the server's
--- 16-byte cap, a prefix this session holds, or one that would take the session's whole list past the server's 64),
--- true otherwise; a prefix already in the list answers true whatever the count. The host registers the list with
--- the session before the add-on sends.
+-- RegisterAddonMessagePrefix returns false for a prefix the client cannot register (empty, not printable ASCII,
+-- over the server's 16-byte cap, a space at either end, a prefix this session holds, or one that would take the
+-- add-on past its share of the server's 64), true otherwise; a prefix already in the list answers true whatever
+-- the count. During the load the registration is part of the load's answer, which the daemon registers; after it
+-- (the real client sends a registration packet then) the call leaves a request the daemon performs as soon as
+-- the call answers, under the same cap.
 function RegisterAddonMessagePrefix(prefix)
     prefix = tostring(prefix or "")
-    if prefix == "" or #prefix > MAX_PREFIX or reserved[prefix] then return false end
+    if not validPrefix(prefix) or reserved[prefix] then return false end
     for _, p in ipairs(prefixes) do if p == prefix then return true end end
-    if #prefixes + reservedCount >= MAX_PREFIXES then return false end
+    if #prefixes >= prefixCap() then return false end
     prefixes[#prefixes + 1] = prefix
+    if not loading then pushOut({ out = "register", prefix = prefix }) end
     return true
 end
 

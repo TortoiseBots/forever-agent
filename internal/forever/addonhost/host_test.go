@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -968,19 +969,19 @@ end
 	}
 }
 
-// The server's 64-prefix cap covers the session's whole registration list, not just the add-on's part: two
-// reserved prefixes leave 62 for the add-on, a prefix already registered still answers true at the cap, and the
-// next new one and a reserved one answer false.
+// The add-on's own prefix list is capped at its share of the server's 64: with two reserved prefixes that is 32
+// (the share is never more than 32), a prefix already registered still answers true at the cap, and the next new
+// one and a reserved one answer false.
 //
-// Mutations these tests catch: a per-add-on-only cap (the 63rd registration answers true and the session's list
-// later overflows), and a capacity check that runs before the duplicate check (re-registering answers false).
+// Mutations these tests catch: a cap of the whole server limit (the session's prefixes and the add-on's together
+// would take the 64), and a capacity check that runs before the duplicate check (re-registering answers false).
 func TestHostCapsRegisteredPrefixes(t *testing.T) {
 	src := `
 local n = 0
-for i = 1, 62 do if RegisterAddonMessagePrefix(string.format("P%02d", i)) then n = n + 1 end end
+for i = 1, 40 do if RegisterAddonMessagePrefix(string.format("P%02d", i)) then n = n + 1 end end
 print("registered " .. n)
 print("again " .. tostring(RegisterAddonMessagePrefix("P01")))
-print("over " .. tostring(RegisterAddonMessagePrefix("P63")))
+print("over " .. tostring(RegisterAddonMessagePrefix("P33")))
 print("reserved " .. tostring(RegisterAddonMessagePrefix("PBC")))
 `
 	h := startAddon(t, "Prefixes", src)
@@ -995,7 +996,7 @@ print("reserved " .. tostring(RegisterAddonMessagePrefix("PBC")))
 	for _, c := range st.Chat {
 		lines = append(lines, c.Text)
 	}
-	for _, want := range []string{"registered 62", "again true", "over false", "reserved false"} {
+	for _, want := range []string{"registered 32", "again true", "over false", "reserved false"} {
 		found := false
 		for _, line := range lines {
 			if line == want {
@@ -1006,8 +1007,63 @@ print("reserved " .. tostring(RegisterAddonMessagePrefix("PBC")))
 			t.Fatalf("chat %q does not hold %q", lines, want)
 		}
 	}
-	if len(st.Prefixes) != 62 {
-		t.Fatalf("the add-on reports %d prefixes, want 62", len(st.Prefixes))
+	if len(st.Prefixes) != 32 {
+		t.Fatalf("the add-on reports %d prefixes, want 32", len(st.Prefixes))
+	}
+}
+
+// The mock checks a prefix at the call: an empty one, a tab or a control byte, a non-ASCII byte, a space at either
+// end and one over 16 bytes are refused. RegisterAddonMessagePrefix answers false; SendAddonMessage raises (an
+// over-limit send), so the prefix never becomes an Out. An inner space is part of a prefix and is taken.
+//
+// Mutations these tests catch: the old check (length only) that let "A\tB" through to the daemon, and a refusal
+// that still reaches the outbox.
+func TestHostRefusesBadPrefixes(t *testing.T) {
+	src := `
+SLASH_PROBE1 = "/probe"
+SlashCmdList["PROBE"] = function()
+    for _, p in ipairs({"", "A\tB", "A\1B", "ABC ", " ABC", string.rep("x", 17), "PÉ"}) do
+        print("register " .. tostring(RegisterAddonMessagePrefix(p)))
+        local ok, err = pcall(SendAddonMessage, p, "x", "PARTY")
+        print("send " .. tostring(ok) .. " " .. tostring(err))
+    end
+    print("ok " .. tostring(RegisterAddonMessagePrefix("GOOD 1")))
+end
+`
+	h := startAddon(t, "BadPrefix", src)
+	if _, _, err := h.Load(World{}, true, nil); err != nil {
+		t.Fatal(err)
+	}
+	// The call ended over its field limit (a refused send marks it), so it answers ErrThrottled; the prints are
+	// still in the chat log and the host keeps answering.
+	if _, err := h.Command("/probe"); !errors.Is(err, ErrThrottled) {
+		t.Fatalf("the probe answered %v, want the over-limit error", err)
+	}
+	st, _, err := h.State()
+	if err != nil {
+		t.Fatalf("the host did not survive the refusals: %v", err)
+	}
+	var lines []string
+	for _, c := range st.Chat {
+		lines = append(lines, c.Text)
+	}
+	refusedReg, refusedSend := 0, 0
+	for _, line := range lines {
+		switch {
+		case line == "register false":
+			refusedReg++
+		case strings.HasPrefix(line, "send false"):
+			refusedSend++
+		}
+	}
+	if refusedReg != 7 || refusedSend != 7 {
+		t.Fatalf("refused %d registrations and %d sends, want 7 and 7: %q", refusedReg, refusedSend, lines)
+	}
+	if !slices.Contains(lines, "ok true") {
+		t.Fatalf("a printable prefix was refused: %q", lines)
+	}
+	if len(st.Prefixes) != 1 || st.Prefixes[0] != "GOOD 1" {
+		t.Fatalf("the add-on's prefixes %v, want [GOOD 1]", st.Prefixes)
 	}
 }
 

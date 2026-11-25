@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +29,8 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/addonhost"
 	"github.com/pjerra/forever-agent/internal/forever/addonmsg"
 	"github.com/pjerra/forever-agent/internal/forever/chat"
+	"github.com/pjerra/forever-agent/internal/forever/pbc"
+	"github.com/pjerra/forever-agent/internal/forever/tbmproto"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
@@ -828,10 +831,229 @@ fr:SetScript("OnEvent", function() print("got " .. tostring(arg1) .. "|" .. tost
 	f.wait(t)
 }
 
-// The review's five 15 MiB sends: the client's own 255-byte limit refuses each one, so the daemon keeps no sent row
-// for them and addon_state stays small. Without it, five rows of 15 MiB sat in the daemon and every state reply
-// re-encoded them.
+// A prefix the add-on registers or sends under is checked before anything else: 1..16 bytes of printable ASCII,
+// no space at either end. A tab, a control byte, a non-ASCII byte, an empty prefix and a space at either end are
+// refused with an error naming the reason (never echoing the bytes), and no refused prefix enters the list.
 //
+// Mutations these tests catch: the old check (UTF-8 and 16 bytes only) that let "A\tB" through, an empty prefix
+// that breaks ensureRegistered for good, and a refusal that still appends to the add-on's list.
+func TestServeAddonHostRefusesBadPrefixes(t *testing.T) {
+	s, _ := addonTestSession()
+	a := &serveAddonHost{reserved: []string{pbc.Prefix, tbmproto.Prefix}}
+	for _, bad := range []string{"", "A\tB", "A\nB", "A\x01B", "ABC ", " ABC", "ABCDEFGHIJKLMNOPQ", "PÉ", "PBC", "TBM"} {
+		if err := a.ensurePrefix(s, bad); err == nil {
+			t.Fatalf("prefix %q was accepted", bad)
+		}
+	}
+	if len(a.registered) != 0 {
+		t.Fatalf("a refused prefix entered the list: %v", a.registered)
+	}
+	if held := s.addonRegisteredPrefixes(); len(held) != 0 {
+		t.Fatalf("a refused prefix reached the session: %v", held)
+	}
+	// Interior spaces are part of a prefix (the client matches bytes), so one is taken as it is.
+	if err := a.ensurePrefix(s, "ABC 1"); err != nil {
+		t.Fatalf("a printable prefix with an inner space: %v", err)
+	}
+	if len(a.registered) != 1 || a.registered[0] != "ABC 1" {
+		t.Fatalf("registered %v, want [ABC 1]", a.registered)
+	}
+}
+
+// A prefix the add-on registers after the load reaches the session: the mock records the call as a request, the
+// daemon performs it in the same turn, and a frame the fake delivers under it is fed to the add-on. (Before, a
+// late registration lived only in the sidecar and its frames were never delivered.)
+func TestServeAddonHostRegistersLatePrefix(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	hook := &addonHostWire{t: t}
+	a := startAddonHostServe(t, f, hook)
+	dir := addonFileDir(t, "LateAddon", `
+local fr = CreateFrame("Frame", "LateFrame")
+fr:RegisterEvent("CHAT_MSG_SYSTEM")
+fr:RegisterEvent("CHAT_MSG_ADDON")
+fr:SetScript("OnEvent", function()
+    if event == "CHAT_MSG_SYSTEM" and arg1 == "late" then
+        print("register " .. tostring(RegisterAddonMessagePrefix("LATE")))
+    elseif event == "CHAT_MSG_ADDON" then
+        print("got " .. tostring(arg1) .. "|" .. tostring(arg2))
+    end
+end)
+`)
+	json.Unmarshal(a.mustCall(t, "addon_start", map[string]any{"dir": dir, "clock": "manual"}), &serveAddonHostState{})
+	hook.connection(t).writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "late"))
+	waitAddonState(t, a, hook, func(s serveAddonHostState) bool {
+		return strings.Contains(joinedChat(s), "register true")
+	})
+	waitRegistered(t, hook, "LATE", true)
+	f.deliverAddon(hook.connection(t), chat.TypeParty, addonmsg.LanguageAddon, "LATE", "", "late traffic")
+	st := waitAddonState(t, a, hook, func(s serveAddonHostState) bool {
+		return strings.Contains(joinedChat(s), "got LATE|late traffic")
+	})
+	if !containsString(st.Prefixes, "LATE") {
+		t.Fatalf("the add-on's prefixes %v do not carry LATE", st.Prefixes)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// The add-on's own prefix list is capped: five hundred sends under distinct prefixes leave at most
+// min(32, 64-reserved) registered, the session's list is bounded the same way, repeated refusals mark the add-on
+// throttled, and a list that did not change is not re-registered (the harvest runs this every turn). A failed
+// registration leaves no entry.
+//
+// Mutations these tests catch: ensurePrefix appending before registering (an unbounded list that ensureRegistered
+// then walks on every harvest), a cap equal to the server's 64 (the session's own prefixes share it), and an
+// ensureRegistered that re-sends or rescans its whole list per prefix.
+func TestServeAddonHostBoundsAddonPrefixes(t *testing.T) {
+	s, tr := addonTestSession()
+	a := &serveAddonHost{reserved: []string{pbc.Prefix, tbmproto.Prefix}}
+	limit := addonHostPrefixLimit(len(a.reserved))
+	if limit != addonHostPrefixShare {
+		t.Fatalf("the add-on's share is %d with %d reserved, want %d", limit, len(a.reserved), addonHostPrefixShare)
+	}
+	accepted := 0
+	for i := range 500 {
+		prefix := fmt.Sprintf("PF%04d", i)
+		err := a.ensurePrefix(s, prefix)
+		if i < limit && err != nil {
+			t.Fatalf("prefix %d of the share: %v", i, err)
+		}
+		if i < limit {
+			accepted++
+			continue
+		}
+		if err == nil {
+			t.Fatalf("prefix %d past the share of %d was accepted", i, limit)
+		}
+	}
+	if accepted != limit || len(a.registered) != limit {
+		t.Fatalf("registered %d prefixes (%d accepted), want %d", len(a.registered), accepted, limit)
+	}
+	if held := s.addonRegisteredPrefixes(); len(held) != limit {
+		t.Fatalf("the session holds %d prefixes, want %d", len(held), limit)
+	}
+	if !a.throttled {
+		t.Fatal("the add-on kept asking past its share and is not marked throttled")
+	}
+	// The harvest's call: with nothing changed it must neither re-register nor take quadratic time.
+	before := tr.count(wire.CMSGChatRegisterAddonPrefixes)
+	began := time.Now()
+	for range 1000 {
+		if err := a.ensureRegistered(s); err != nil {
+			t.Fatalf("ensureRegistered with an unchanged list: %v", err)
+		}
+	}
+	if d := time.Since(began); d > time.Second {
+		t.Fatalf("1000 ensureRegistered calls took %s", d)
+	}
+	if got := tr.count(wire.CMSGChatRegisterAddonPrefixes) - before; got != 0 {
+		t.Fatalf("an unchanged list was registered %d more times", got)
+	}
+	// A failed registration leaves no entry: the second packet (the registration itself) is refused.
+	s2, tr2 := addonTestSession()
+	tr2.fail = map[int]error{1: errAddonSend}
+	a2 := &serveAddonHost{reserved: []string{pbc.Prefix, tbmproto.Prefix}}
+	if err := a2.ensurePrefix(s2, "FAIL"); err == nil {
+		t.Fatal("a failed registration was reported as a success")
+	}
+	if len(a2.registered) != 0 {
+		t.Fatalf("a failed registration left %v in the add-on's list", a2.registered)
+	}
+}
+
+// A refusal over the add-on's share is counted, and three of them mark the add-on throttled; the same list, once
+// registered, is not sent again. (The counter is what addon_state's `throttled` shows for an add-on that keeps
+// asking for more of the session's prefix list.)
+func TestServeAddonHostPrefixRefusalsMarkThrottled(t *testing.T) {
+	s, _ := addonTestSession()
+	a := &serveAddonHost{reserved: []string{pbc.Prefix, tbmproto.Prefix}}
+	a.registered = make([]string, addonHostPrefixShare)
+	for i := range a.registered {
+		a.registered[i] = fmt.Sprintf("FULL%02d", i)
+	}
+	for i := range addonHostPrefixStrikes {
+		if err := a.ensurePrefix(s, fmt.Sprintf("OVER%d", i)); err == nil {
+			t.Fatalf("attempt %d past the full share was accepted", i)
+		}
+		if i < addonHostPrefixStrikes-1 && a.throttled {
+			t.Fatalf("throttled after %d refusals, want %d", i+1, addonHostPrefixStrikes)
+		}
+	}
+	if !a.throttled {
+		t.Fatalf("not throttled after %d refusals", addonHostPrefixStrikes)
+	}
+}
+
+// addon_start takes at most the add-on's share of prefixes: a thousand are refused before the sidecar starts, the
+// session registers none, and the daemon still answers status well inside a second.
+//
+// Mutations these tests catch: no cap on addon_start's `prefixes` (the list a later harvest walks on the session
+// loop), and a refusal that still started the sidecar or touched the session.
+func TestServeAddonHostRefusesPrefixFlood(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	hook := &addonHostWire{t: t}
+	a := startAddonHostServe(t, f, hook)
+	prefixes := make([]string, 1000)
+	for i := range prefixes {
+		prefixes[i] = fmt.Sprintf("PF%04d", i)
+	}
+	began := time.Now()
+	raw, rerr, err := a.tryCall("addon_start", map[string]any{"dir": tinyAddonDir(t), "prefixes": prefixes})
+	if err == nil && rerr == nil {
+		t.Fatalf("addon_start took %d prefixes: %s", len(prefixes), raw)
+	}
+	if elapsed := time.Since(began); elapsed > time.Second {
+		t.Fatalf("the refusal took %s", elapsed)
+	}
+	if reg, _ := hook.registration(); len(reg) != 0 {
+		t.Fatalf("a refused start registered %d prefixes", len(reg))
+	}
+	began = time.Now()
+	if _, rerr, err := a.tryCall("status", nil); err != nil || rerr != nil {
+		t.Fatalf("status after the refusal: %v %v", err, rerr)
+	}
+	if elapsed := time.Since(began); elapsed > time.Second {
+		t.Fatalf("status took %s after the refusal", elapsed)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// A session whose registered prefix list is unknown (a registration packet failed after the unregister-all) cannot
+// have its prefixes reserved, so the add-on host refuses to start instead of reserving only TBM and PBC.
+//
+// Mutation this test catches: reserving the two daemon prefixes and starting anyway, which lets the add-on send
+// under every prefix the session might still hold on the server.
+func TestAddonHostUnknownRegistrationRefused(t *testing.T) {
+	s, tr := addonTestSession()
+	if err := s.RegisterAddonPrefixes("OLD:"); err != nil {
+		t.Fatalf("first registration: %v", err)
+	}
+	tr.fail = map[int]error{3: errAddonSend} // unregister-all, register, then the next pair: its register fails
+	if err := s.RegisterAddonPrefixes("NEW:"); err == nil {
+		t.Fatal("the registration reported success")
+	}
+	if _, err := addonSessionPrefixes(s); err == nil {
+		t.Fatal("a session with an unknown prefix list was reservable")
+	}
+	// A known session hands its list over.
+	s2, _ := addonTestSession()
+	if err := s2.RegisterAddonPrefixes("KEEP:"); err != nil {
+		t.Fatalf("registration: %v", err)
+	}
+	held, err := addonSessionPrefixes(s2)
+	if err != nil {
+		t.Fatalf("a known list: %v", err)
+	}
+	if !slices.Equal(held, []string{"KEEP:"}) {
+		t.Fatalf("the session's list %v, want [KEEP:]", held)
+	}
+}
+
 // Mutations these tests catch: no field limit in the client (state holds ~75 MiB), a limit that truncates instead
 // of refusing (the fake sees a 15 MiB packet), and a refusal that is not marked in state.
 func TestServeAddonHostRefusesOversizeAddonText(t *testing.T) {

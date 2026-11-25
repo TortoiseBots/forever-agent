@@ -1,8 +1,8 @@
 // Package addonhost runs a real Forever add-on headless: a lua5.1 sidecar loads the add-on's .toc files on a
 // small client mock (lua/mock.lua) and is driven over stdin/stdout, one JSON object per line (lua/host.lua
 // documents the ops). What the add-on asks the client to do (SendAddonMessage, SendChatMessage, TargetUnit,
-// TargetByName) comes back as Out values for the caller to perform on its session; the host itself touches no
-// connection.
+// TargetByName, and a prefix registered after the load) comes back as Out values for the caller to perform on its
+// session; the host itself touches no connection.
 //
 // A sidecar rather than a Go Lua VM: the add-on runs on the same C Lua 5.1 an add-on is written for, the module
 // keeps no dependencies, and an add-on that errors or loops cannot take the daemon down: a call that does not
@@ -132,8 +132,8 @@ var ErrStopped = errors.New("addon host stopped")
 
 // Out is one thing the add-on asked the client to do during a call.
 type Out struct {
-	Out     string `json:"out"`               // "addon", "chat" or "target"
-	Prefix  string `json:"prefix,omitempty"`  // addon: the message prefix
+	Out     string `json:"out"`               // "addon", "chat", "target" or "register"
+	Prefix  string `json:"prefix,omitempty"`  // addon: the message prefix; register: the prefix to register
 	Channel string `json:"channel,omitempty"` // addon: PARTY, RAID, GUILD, OFFICER, WHISPER, INSTANCE_CHAT
 	Type    string `json:"type,omitempty"`    // chat: SAY, PARTY, WHISPER, ...
 	Text    string `json:"text,omitempty"`
