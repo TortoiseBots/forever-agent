@@ -335,6 +335,11 @@ type playRun struct {
 	// regroups counts the regroups each pull has cost, by pullKey: a pull that keeps costing them stops the run
 	// (`regroup-limit:<pull>`) instead of being re-entered for ever (#256).
 	regroups map[string]int
+	// downPolls counts, by lowercased bot name, the consecutive gate polls that read a member down (missing, dead or a
+	// ghost), and downPollAt is the instant of the last poll that counted: a one-poll flicker of a roster row is not a
+	// member down (partyDown).
+	downPolls  map[string]int
+	downPollAt time.Time
 
 	// self is the agent's own position and map, refreshed before every decision that needs them.
 	self    Vec3
@@ -476,10 +481,16 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 		if p.stall != "" {
 			stall := p.stall
 			p.stall = ""
-			if stall == StateWipe && (next == StateFight || (p.selfMap == p.route.Map && p.inCombat())) {
-				p.joinFight()
+			fighting := next == StateFight || (p.selfMap == p.route.Map && (p.inCombat() || p.aggro()))
+			switch {
+			case stall == StateWipe && fighting && (p.joinFight() || next == StateFight):
 				next = StateFight
-			} else {
+			case stall == StateWipe:
+				// The regroup takes the run out of a pull that no fight has started: its record is closed (one
+				// pull_end for every pull_start), and the pull re-enters with its own record after the regroup.
+				p.rec.PullAbort(p.now(), "regroup")
+				next = stall
+			default:
 				next = stall
 			}
 		}
@@ -590,6 +601,7 @@ func (p *playRun) finish() {
 	p.rec.sum.Wipes = p.wipes
 	p.rec.sum.Deaths = p.deaths
 	p.drainCombat()
+	p.rec.PullAbort(p.now(), "stop") // a stop inside a pull leaves no pull_start without its pull_end
 	p.rec.sum.Play = p.playRecord(p.now())
 	p.rec.Finish(p.now(), p.stopReason, p.lastLegName())
 }
@@ -1300,7 +1312,7 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 		// wait's stop. The run comes back to what the wait interrupted: outside the instance that is TRAVEL (ENTER has
 		// not run yet), inside it the leg walk, which re-enters the pull or the boss it was gathering for.
 		p.noteDeaths()
-		if down := p.downBots(); len(down) > 0 {
+		if down := p.partyDown(ctx); len(down) > 0 {
 			p.stallRegroup("wait", down)
 			return false
 		}

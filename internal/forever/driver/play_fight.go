@@ -593,17 +593,35 @@ func (p *playRun) pullApproach(ctx context.Context, g Group) bool {
 	if !p.holdParty(ctx, "gather") {
 		return false
 	}
+	if !p.backToStand(ctx, stand) {
+		return false
+	}
+	if !p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt, "gather") {
+		return false
+	}
+	// The gather's own waits run the party gate (a walk back of up to PlayRegroupBackYd), so the leader may stand off the
+	// stand when the party is in: it goes back to the stand before the pull is marked and ordered, and the party that
+	// follows it is gathered once more.
 	if dist3(p.self, stand) > PlayArriveYd {
-		// The gate's walk back took the leader off the stand, and the pull is marked and ordered from the stand: it
-		// walks back on (the gate's episode is spent, so the approach is not held again).
-		p.pullWalk = true
-		p.walkTo(ctx, stand, false, false)
-		p.pullWalk = false
-		if p.stopReason != "" || p.stall != "" {
+		if !p.backToStand(ctx, stand) {
 			return false
 		}
+		return p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt, "gather")
 	}
-	return p.waitNear(ctx, PlayPullGatherYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt, "gather")
+	return true
+}
+
+// backToStand walks the leader back to the pull's stand when it stands off it (the gate's walk back took it away): the
+// pull is marked and ordered from the stand. It reports false when the run stopped or a regroup is next.
+func (p *playRun) backToStand(ctx context.Context, stand Vec3) bool {
+	p.refreshSelf()
+	if dist3(p.self, stand) <= PlayArriveYd {
+		return true
+	}
+	p.pullWalk = true
+	p.walkTo(ctx, stand, false, false)
+	p.pullWalk = false
+	return p.stopReason == "" && p.stall == ""
 }
 
 // pullStep moves the agent closer after a pull no one answered: the walk goes to PlayPullStepYd along the line to the

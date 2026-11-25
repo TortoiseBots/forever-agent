@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/trace"
 )
@@ -831,5 +832,382 @@ func TestPlayRegroupLimitStopsNamingTheGroup(t *testing.T) {
 	tf := regroupTrace(t, res)
 	if got := len(events(tf, "regroup_down")); got != PlayRegroupLimit+1 {
 		t.Fatalf("regroups = %d; want %d (the limit's own count)", got, PlayRegroupLimit+1)
+	}
+}
+
+// regroupTwoPackPlan is one leg that ends at the stand of pack A (group 0), with pack B (group 1) 100 yd behind it: the
+// shape of the live run's hypothesis, a party left back fighting a pack while its leader gathers for another.
+func regroupTwoPackPlan() *dungeon.Plan {
+	return &dungeon.Plan{
+		Version: 1, Name: "test_regroup_two_packs", Map: 400,
+		Entrance:        dungeon.Point{X: 10},
+		EntranceTrigger: 900,
+		Portal:          &dungeon.Portal{Map: 1, Point: dungeon.Point{X: 100}},
+		Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 40},
+			PullGroups: []dungeon.PullGroup{
+				{Entries: []uint32{11320}, Positions: []dungeon.Point{{X: 40, Y: 10}}},
+				{Entries: []uint32{11321}, Positions: []dungeon.Point{{X: -60}}},
+			},
+		}},
+	}
+}
+
+// pullStartsOf are every pull_start event of the trace and the ones that named group.
+func pullStartsOf(tf *trace.File, group int) (all, ofGroup []trace.Event) {
+	for _, e := range events(tf, "pull_start") {
+		all = append(all, e)
+		if g, ok := e.D["group"].(float64); ok && int(g) == group {
+			ofGroup = append(ofGroup, e)
+		}
+	}
+	return all, ofGroup
+}
+
+// TestPlayRegroupJoinedFightMarksOnlyTheFoughtPack: the leader gathers for pack A while its party, 100 yd back, fights
+// pack B. The fight is armed from B's units, B dies, and only B is pulled: A was never fought, so the run pulls A
+// afterwards instead of walking past it. The joined fight has its own pull record, for B, marked joined.
+func TestPlayRegroupJoinedFightMarksOnlyTheFoughtPack(t *testing.T) {
+	stand := Vec3{40, 0, 0}
+	rig := newPlayFightRig(t, regroupTwoPackPlan(), func(f *PlayFake) {
+		f.SpawnPacks()
+		jumped := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if jumped || f.SelfMap != f.Route.Map || dist3(to, stand) > 0.01 {
+				return
+			}
+			jumped = true
+			back := Vec3{stand[0] - 100, stand[1], stand[2]}
+			for _, name := range playBots {
+				key := strings.ToLower(name)
+				delete(f.Moved, key)
+				f.BotPos[key] = back
+			}
+			b, ok := f.UnitOf(11321)
+			if !ok {
+				t.Fatal("pack B has no unit in the view")
+			}
+			f.MoveUnit(b.GUID, back)
+			f.AggroUnit(b.GUID)
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+	}
+	tf := regroupTrace(t, res)
+	join, ok := firstEvent(tf, "fight_join")
+	if !ok {
+		t.Fatal("the party fought pack B and the leader never joined")
+	}
+	if g, _ := join.D["group"].(float64); int(g) != 1 {
+		t.Fatalf("fight_join group = %v; want 1 (the pack the party fought)", join.D["group"])
+	}
+	all, ofB := pullStartsOf(tf, 1)
+	if len(ofB) != 1 || ofB[0].D["joined"] != true {
+		t.Fatalf("pull_start of the joined fight = %v; want one record for group 1 marked joined", ofB)
+	}
+	_, ofA := pullStartsOf(tf, 0)
+	if len(ofA) != 1 {
+		t.Fatalf("pack A was pulled %d times; want once, after the joined fight (the run walked past a live pack)", len(ofA))
+	}
+	if ofA[0].T < ofB[0].T || ofA[0].D["joined"] == true {
+		t.Fatalf("pack A's pull = %+v, joined pull = %+v; want A pulled for real, after B", ofA[0], ofB[0])
+	}
+	if ends := events(tf, "pull_end"); len(ends) != len(all) {
+		t.Fatalf("pull_start = %d, pull_end = %d; want one pair per pull", len(all), len(ends))
+	}
+}
+
+// TestPlayRegroupJoinedFightNoGroupOwnsIt: a fight the party is in with a hostile no plan group owns marks nothing
+// pulled and writes no pull record; the pack the leader was gathering for is still pulled afterwards.
+func TestPlayRegroupJoinedFightNoGroupOwnsIt(t *testing.T) {
+	stand := Vec3{40, 0, 0}
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.SpawnPacks()
+		f.SpawnBosses()
+		jumped := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if jumped || f.SelfMap != f.Route.Map || dist3(to, stand) > 0.01 {
+				return
+			}
+			jumped = true
+			back := Vec3{stand[0] - 100, stand[1], stand[2]}
+			for _, name := range playBots {
+				key := strings.ToLower(name)
+				delete(f.Moved, key)
+				f.BotPos[key] = back
+			}
+			f.AddUnit(Unit{GUID: fightGUID(9), Entry: 11319, Pos: back}) // far from every group's positions
+			f.AggroUnit(fightGUID(9))
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+	}
+	tf := regroupTrace(t, res)
+	join, ok := firstEvent(tf, "fight_join")
+	if !ok {
+		t.Fatal("the party fought and the leader never joined")
+	}
+	if g, _ := join.D["group"].(float64); int(g) != -1 {
+		t.Fatalf("fight_join group = %v; want -1 (no group owns the unit)", join.D["group"])
+	}
+	for _, e := range events(tf, "pull_start") {
+		if e.D["joined"] == true {
+			t.Fatalf("a joined fight no group owns wrote a pull record: %+v", e)
+		}
+	}
+	if _, ofA := pullStartsOf(tf, 0); len(ofA) != 1 {
+		t.Fatalf("pack A was pulled %d times; want once: the unowned fight must not mark it pulled", len(ofA))
+	}
+}
+
+// pullRecordRig is the pull a death interrupts after its orders: the pack answers the first order late (the pull
+// window runs out, and the retry gathers again), and a member falls with the first order, so the gather reads the fall
+// on two polls. aggro says whether the pack turns on the party between the window's end and the gather's reading of the fall.
+func pullRecordRig(t *testing.T, aggro bool) *playRig {
+	t.Helper()
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.SpawnPacks()
+		f.SpawnBosses()
+		f.AggroDelay = 10 * time.Minute
+		fell := false
+		f.AttackCode = func(guid wire.GUID) string {
+			if fell {
+				return ""
+			}
+			fell = true
+			f.Clock.After(time.Second, func() { f.AggroDelay = 0 }) // the orders after it are answered at once
+			f.GoldenOwner.Bots[3].Dead = true
+			f.Clock.After(30*time.Second, func() { f.GoldenOwner.Bots[3].Dead = false })
+			if aggro {
+				// The pack turns on the party just after the pull's window, before the gather reads the fall.
+				f.Clock.After(21*time.Second, func() { f.AggroUnit(guid) })
+			}
+			return ""
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	return rig
+}
+
+// TestPlayRegroupPullRecordClosedOnAStall: a member found down after the pull's orders, with the party not in combat,
+// takes the run to its regroup and closes the pull's record (pull_end, aborted: regroup); the re-entered pull writes its
+// own. Every pull_start has exactly one pull_end. With the pack already on the party the run fights instead, and that
+// fight's end closes the one record: no abort.
+func TestPlayRegroupPullRecordClosedOnAStall(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		aggro   bool
+		aborted int
+	}{{"not in combat", false, 1}, {"pack on the party", true, 0}} {
+		t.Run(tc.name, func(t *testing.T) {
+			rig := pullRecordRig(t, tc.aggro)
+			res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+			if res.Stop != "clear" {
+				t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+			}
+			tf := regroupTrace(t, res)
+			if _, ok := firstEvent(tf, "regroup_down"); !ok {
+				var seq []string
+				for _, e := range tf.Events {
+					seq = append(seq, e.Ev)
+				}
+				t.Fatalf("the member's fall never reached the regroup: the scenario did not stall the pull; events %v states %v", seq, res.States)
+			}
+			starts, ends := events(tf, "pull_start"), events(tf, "pull_end")
+			if len(starts) != len(ends) {
+				t.Fatalf("pull_start = %d, pull_end = %d; want exactly one pull_end per pull_start", len(starts), len(ends))
+			}
+			aborted := 0
+			for _, e := range ends {
+				if e.D["aborted"] == "regroup" {
+					aborted++
+				}
+			}
+			if aborted != tc.aborted {
+				t.Fatalf("pulls closed by the regroup = %d; want %d (states %v)", aborted, tc.aborted, res.States)
+			}
+			if !tc.aggro && len(starts) < 2 {
+				t.Fatalf("pull_start = %d; want the interrupted pull and its re-entry", len(starts))
+			}
+		})
+	}
+}
+
+// TestPlayRegroupLimitOutsideAPull: a death that repeats at the same place of a leg walk is capped like a pull's: the
+// run stops `regroup-limit:walk-<leg>-<via>` after PlayRegroupLimit regroups instead of walking, dying and reviving
+// until its time ends, and the regroup_down events carry the same key.
+func TestPlayRegroupLimitOutsideAPull(t *testing.T) {
+	rig := regroupBossRig(t, regroupViaPlan(), func(f *PlayFake) {
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if f.SelfMap != f.Route.Map || f.GoldenOwner.Bots[3].Dead {
+				return
+			}
+			// The mage falls on the walk to the first via point every time it stands again.
+			f.GoldenOwner.Bots[3].Dead = true
+			f.Clock.After(20*time.Second, func() { f.GoldenOwner.Bots[3].Dead = false })
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "regroup-limit:walk-0-0" {
+		t.Fatalf("stop = %q; want regroup-limit:walk-0-0 (states %v)", res.Stop, res.States)
+	}
+	tf := regroupTrace(t, res)
+	downs := events(tf, "regroup_down")
+	if len(downs) != PlayRegroupLimit+1 {
+		t.Fatalf("regroups = %d; want %d (the limit's own count)", len(downs), PlayRegroupLimit+1)
+	}
+	for _, e := range downs {
+		if e.D["key"] != "walk-0-0" {
+			t.Fatalf("regroup_down key = %v; want walk-0-0", e.D["key"])
+		}
+	}
+	starts, ends := events(tf, "pull_start"), events(tf, "pull_end")
+	if len(starts) != len(ends) {
+		t.Fatalf("pull_start = %d, pull_end = %d; want one pair per pull", len(starts), len(ends))
+	}
+}
+
+// TestPlayRegroupDownNeedsTwoPolls: a roster row that drops out for one poll is no member down; the same row missing on
+// two polls (at different instants) is, and the same poll read twice at one instant is still one poll.
+func TestPlayRegroupDownNeedsTwoPolls(t *testing.T) {
+	rig := regroupRig(t, nil)
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults(),
+		pulled: map[int]bool{}, start: rig.fake.Clock.Now()}
+	ctx := context.Background()
+	for _, b := range rig.fake.GoldenOwner.Bots {
+		b.InParty, b.Online = true, true
+	}
+	bot := rig.fake.GoldenOwner.Bots[2]
+	if got, _ := p.readDown(); len(got) != 0 {
+		t.Fatalf("a full roster reads %v down", got)
+	}
+	bot.InParty = false // the row drops out for one poll
+	if got, pending := p.readDown(); len(got) != 0 || !pending {
+		t.Fatalf("one poll without a row reads %v down (pending %v); want none, pending", got, pending)
+	}
+	if got, _ := p.readDown(); len(got) != 0 {
+		t.Fatalf("the same poll read twice at one instant reads %v down; want none", got)
+	}
+	p.sleep(ctx, p.lim.Poll)
+	bot.InParty = true
+	if got, pending := p.readDown(); len(got) != 0 || pending {
+		t.Fatalf("the row came back and reads %v down (pending %v); want none", got, pending)
+	}
+	p.sleep(ctx, p.lim.Poll)
+	bot.InParty = false
+	if got, _ := p.readDown(); len(got) != 0 {
+		t.Fatalf("the row dropped out again and reads %v down on its first poll; want the count started afresh", got)
+	}
+	p.sleep(ctx, p.lim.Poll)
+	got, _ := p.readDown()
+	if len(got) != 1 || !strings.EqualFold(got[0], playBots[2]) {
+		t.Fatalf("the row missing on two polls reads %v down; want %s", got, playBots[2])
+	}
+	// The gate's own reading waits one poll and confirms without the caller polling twice.
+	p2 := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults(),
+		pulled: map[int]bool{}, start: rig.fake.Clock.Now()}
+	if got := p2.partyDown(ctx); len(got) != 1 {
+		t.Fatalf("partyDown with one row missing reads %v; want the one member, confirmed after a poll", got)
+	}
+}
+
+// TestPlayRegroupNoRouteBackHandsOverToTheLadder: a party the navmesh has no complete route to is not a run ending on
+// `walk:partial`: the step back is not taken (regroup_blocked) and the walk's own ladder ends it naming the party.
+func TestPlayRegroupNoRouteBackHandsOverToTheLadder(t *testing.T) {
+	rig := regroupRig(t, func(f *PlayFake) {
+		for _, name := range playBots {
+			f.Stuck[strings.ToLower(name)] = true
+		}
+		leavePartyAt(f, nil)
+	})
+	full := rig.fake.PathFunc
+	rig.fake.PathFunc = func(from, to Vec3) navmesh.Route {
+		r := full(from, to)
+		if to[0] < from[0]-1 { // the way back to the party
+			r.Kind = navmesh.RoutePartial
+		}
+		return r
+	}
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if !strings.HasPrefix(res.Stop, "straggler:") {
+		t.Fatalf("stop = %q; want the ladder's straggler stop (states %v)", res.Stop, res.States)
+	}
+	tf := regroupTrace(t, res)
+	if _, ok := firstEvent(tf, "regroup_blocked"); !ok {
+		t.Fatal("the missing route back left no regroup_blocked event")
+	}
+}
+
+// TestPlayRegroupReturnsToTheStandBeforeThePull: the gate's walk back inside the gather wait takes the leader 15 yd off
+// the stand; it walks back to the stand before the pull is marked and ordered.
+func TestPlayRegroupReturnsToTheStandBeforeThePull(t *testing.T) {
+	stand := Vec3{40, 0, 0}
+	type walked struct {
+		at time.Time
+		to Vec3
+	}
+	var walks []walked
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.SpawnPacks()
+		f.SpawnBosses()
+		jumped := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			walks = append(walks, walked{f.Clock.Now(), to})
+			if to[0] < f.SelfPos[0]-1 && jumped {
+				for _, name := range playBots {
+					f.Moved[strings.ToLower(name)] = true // the way back: the party comes to the leader
+				}
+				return
+			}
+			if jumped || dist3(to, stand) > 0.01 {
+				return
+			}
+			jumped = true
+			near := Vec3{stand[0] - 20, stand[1], stand[2]}
+			for _, name := range playBots {
+				key := strings.ToLower(name)
+				delete(f.Moved, key)
+				f.BotPos[key] = near
+				f.Stuck[key] = true
+			}
+			f.Clock.After(6*time.Second, func() {
+				far := Vec3{stand[0] - 100, stand[1], stand[2]}
+				for _, name := range playBots {
+					f.BotPos[strings.ToLower(name)] = far
+				}
+			})
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+	}
+	tf := regroupTrace(t, res)
+	if _, ok := firstEvent(tf, "regroup_back"); !ok {
+		t.Fatal("the leader never walked back for the party")
+	}
+	order, ok := rig.fake.Line(".bot attack ")
+	if !ok {
+		t.Fatal("the pack was never pulled")
+	}
+	last := -1
+	for i, w := range walks {
+		if !w.at.After(order.At) {
+			last = i
+		}
+	}
+	if last < 0 {
+		t.Fatal("no walk before the pull's order")
+	}
+	if dist3(walks[last].to, stand) > PlayArriveYd {
+		t.Fatalf("the last walk before the pull's order went to %v; want the stand %v", walks[last].to, stand)
 	}
 }
