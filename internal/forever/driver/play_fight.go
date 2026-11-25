@@ -1726,6 +1726,21 @@ func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64
 			best = at
 		}
 	}
+	// A hostile the view no longer carries is unknown: its remembered distance goes with it, so a later sighting cannot
+	// reuse a baseline taken before the walk left the clearance (the unit dropped out of sight in between, and no pass
+	// looked at it to drop the value).
+	for g := range p.approachBase {
+		present := false
+		for _, u := range units {
+			if u.GUID == g {
+				present = true
+				break
+			}
+		}
+		if !present {
+			delete(p.approachBase, g)
+		}
+	}
 	if math.IsInf(best, 1) {
 		return 0, false
 	}

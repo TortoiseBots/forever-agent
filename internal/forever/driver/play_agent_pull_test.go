@@ -1554,6 +1554,46 @@ func TestPackOnPathForgetsTheStartInsideOnceOutside(t *testing.T) {
 	}
 }
 
+// TestPackOnPathForgetsAHostilesBaselineWhileItIsOutOfView: a hostile that leaves the view while the agent stands
+// outside its clearance takes the remembered distance with it. When it reappears with the agent inside the clearance
+// the plain radius applies, so a path that comes nearer than the old distance blocks at the new start's distance, not
+// at the stale reduced one.
+//
+// Mutation this test catches: the baseline kept for a unit the view no longer carries (a hostile that dropped out of
+// sight between two plans keeps a radius taken before the walk left its clearance, and a later path re-enters nearer
+// than the plain radius allows).
+func TestPackOnPathForgetsAHostilesBaselineWhileItIsOutOfView(t *testing.T) {
+	hostile := Vec3{0, 0, 0}
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(45), Entry: 11975, Pos: hostile})
+	})
+	p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults(),
+		approachBase: map[wire.GUID]float64{}}
+	target := Vec3{0, 0, 200}
+	if _, blocked := p.packOnPath(-1, target, []Vec3{{8, 0, 0}, target}, 0); blocked {
+		t.Fatal("the first plan blocked although its path walks away from the hostile")
+	}
+	if got := p.approachBase[fightGUID(45)]; got != 8 {
+		t.Fatalf("the recorded baseline is %.2f; want 8", got)
+	}
+	// The hostile drops out of the view while the agent is away from it: the plan cannot see it, and its baseline goes.
+	rig.fake.RemoveUnit(fightGUID(45))
+	p.packOnPath(-1, target, []Vec3{{35, 0, 0}, target}, 0)
+	if _, ok := p.approachBase[fightGUID(45)]; ok {
+		t.Fatal("the baseline of a hostile the view no longer carries survived")
+	}
+	// It reappears with the agent 20 yd away: the path blocks at that start's own clearance (19.5 yd), not at a stale
+	// 7.5 yd one 12.5 yd along.
+	rig.fake.AddUnit(Unit{GUID: fightGUID(45), Entry: 11975, Pos: hostile})
+	at, blocked := p.packOnPath(-1, target, []Vec3{{20, 0, 0}, {7.5, 0, 0}, {7.5, -40, 0}}, 0)
+	if !blocked {
+		t.Fatal("the reappeared hostile's path did not block")
+	}
+	if math.Abs(at-0.5) > 1e-3 {
+		t.Fatalf("the path blocked at %.2f yd along; want the start's own 19.5 yd clearance at 0.5 yd", at)
+	}
+}
+
 // TestAgentPullApproachCharmedPets: a charm is the controlling ownership. A party's pet charmed by an enemy fights
 // the party and is a pack (the approach keeps its clearance); an enemy's pet charmed by a party member is the party's
 // and is not. The serve unit's Owner still names the summoner in both cases, so only the charm field tells them.
