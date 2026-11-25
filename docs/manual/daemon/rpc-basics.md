@@ -107,6 +107,11 @@ long call (a fight, a walk, an `act` script) holds the queue behind it while it 
 - `events` and `event_log` long-polls wait outside the queue, so an empty poll never blocks a call.
 - Read-only methods (`status`, `units`, `chat_log`, `spells`, `map_snapshot`, `death_status`, ...) are
   still served while the link is reconnecting; actions are not.
+- A `dungeon_run` start preflight holds the command channel for each of its own reads (the module probe and each
+  `.pinfo`). A `bot`, `gm` or `commander` call arriving in that window is refused at once with `-32003` `busy: a
+  run preflight holds the command channel, retry`, having sent nothing, so the check still finishes and every other
+  method (`status` included) keeps answering; retry the call after it. The preflight's waits are bounded: 35 s for
+  the channel, and each read's own deadline (plus 2 s) counted from the moment the channel is its own.
 
 Give every call a timeout. `forever rpc --timeout` defaults to `30s`; `attack` defaults its own run to 25 s
 so an ordinary call gets an answer instead of a cancellation.
