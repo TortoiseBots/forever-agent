@@ -174,7 +174,8 @@ the module's read-only `.tb los` query — the one line of the player run's comm
   stand (`PlayAgentApproachPastYd`), each sample asked as a spot on the ground with the eye at 2 yd above it
   (`PlayLosEyeYd`); the agent walks to the first sample the server clears and then steps 2 yd at a time
   (`PlayAgentLeadYd`) until the tank itself sees the unit. At most 8 tries and 60 s (`PlayTankSightTries`,
-  `PlayTankSightTime`), then the pull goes on as it stands and the module is the judge.
+  `PlayTankSightTime`) and at most 24 spot queries (`PlayTankSightSpots`) a search, then the pull goes on as it stands
+  and the module is the judge.
 - The search is recorded as `pull_tank_sight` (`group`, `target`, `seen`, `yd`) for the pick and `pull_sight_stand`
   (`group`, `target`, `seen`, `known`, `tries`, `x`, `y`, `z`) for the walk.
 

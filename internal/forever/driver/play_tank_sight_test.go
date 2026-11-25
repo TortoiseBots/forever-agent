@@ -216,6 +216,15 @@ func TestPlayTankSightSearchIsBounded(t *testing.T) {
 	if limit := 2*(PlayTankSightTries+2) + 2; tanks > limit {
 		t.Fatalf("%d tank sight queries; want at most %d (the bounded search)", tanks, limit)
 	}
+	spots := 0
+	for _, q := range rig.fake.SrvQueries {
+		if q == "point" {
+			spots++
+		}
+	}
+	if limit := 2 * PlayTankSightSpots; spots > limit {
+		t.Fatalf("%d spot sight queries; want at most %d (the bounded search)", spots, limit)
+	}
 }
 
 // TestPlayTankSightUnknownKeepsTodaysFlow: with the port present but every answer unknown (an older module, a rate

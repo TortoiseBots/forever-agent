@@ -152,7 +152,7 @@ func (w *playServerSight) TankSees(bot string, target wire.GUID) (in bool, dist 
 	if err != nil {
 		return false, 0, false
 	}
-	return w.ask(line, sightcmd.GUIDText(target))
+	return w.ask(line)
 }
 
 func (w *playServerSight) PointSees(at driver.Vec3, target wire.GUID) (in bool, dist float64, known bool) {
@@ -160,12 +160,17 @@ func (w *playServerSight) PointSees(at driver.Vec3, target wire.GUID) (in bool, 
 	if err != nil {
 		return false, 0, false
 	}
-	return w.ask(line, sightcmd.GUIDText(target))
+	return w.ask(line)
 }
 
-// ask sends one sight line and reads its answer: the first collected line that is the module's answer about THIS
-// target. Anything else is unknown.
-func (w *playServerSight) ask(line, target string) (bool, float64, bool) {
+// ask sends one sight line and reads its answer: the first collected line that is the module's answer to THIS question,
+// both sides echoing what was asked. A reply of a later or earlier query about the same unit (a tank answer for a spot
+// query, the spot the search just left) is another question's answer and is skipped. Anything else is unknown.
+func (w *playServerSight) ask(line string) (bool, float64, bool) {
+	q, ok := sightcmd.QueryOf(line)
+	if !ok {
+		return false, 0, false
+	}
 	ctx := w.s.ctx
 	if err := w.rate(ctx); err != nil {
 		return false, 0, false
@@ -177,7 +182,7 @@ func (w *playServerSight) ask(line, target string) (bool, float64, bool) {
 	}
 	for _, ln := range rep.Lines {
 		a, ok := sightcmd.Parse(strings.TrimSpace(ln.Raw))
-		if !ok || !strings.EqualFold(a.B, target) {
+		if !ok || !strings.EqualFold(a.A, q.A) || !strings.EqualFold(a.B, q.B) {
 			continue
 		}
 		return a.Verdict()

@@ -120,12 +120,14 @@ const (
 	// behind, so the agent's own stand alone brings the tank no sight.
 	//
 	// PlayTankSightTries and PlayTankSightTime bound the search: at most 8 tries and 60 s from the first look, then the
-	// pull goes on as it stands and the module is the judge.
+	// pull goes on as it stands and the module is the judge. PlayTankSightSpots bounds the spot queries one search makes
+	// while it looks for a stand along the path (24: at the module's rate under a quarter of PlayTankSightTime).
 	PlaySrvSightStepYd = 2.0
 	PlayLosEyeYd       = 2.0
 	PlayAgentLeadYd    = 2.0
 	PlayTankSightTries = 8
 	PlayTankSightTime  = 60 * time.Second
+	PlayTankSightSpots = 24
 )
 
 // pull is the pack in the way: the agent first walks to the plan's stand with the party beside it, then the skull goes
@@ -639,7 +641,13 @@ func (p *playRun) tankSightStand(ctx context.Context, group int, u Unit) (seen, 
 	samples := p.tankSightSamples(group, route.Points, u)
 	stand := Vec3{}
 	walked := false
+	spots := 0
 	for _, at := range samples {
+		// The search's own bound is read before every query: a long, wholly blocked path is no unbounded loop.
+		if spots >= PlayTankSightSpots || p.now().Sub(start) >= PlayTankSightTime {
+			return false, true
+		}
+		spots++
 		in, _, ok := p.pointSight(at, u)
 		if !ok {
 			return false, false

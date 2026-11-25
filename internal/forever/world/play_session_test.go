@@ -332,6 +332,18 @@ func TestPlayServerSightAsksAndReads(t *testing.T) {
 		}
 	}
 
+	// A late answer to an earlier query about the SAME unit is another question's answer (its `a=` side differs) and is
+	// skipped: only the line that echoes both sides of this query counts.
+	answer = ""
+	sc.onSay = func(text string) {
+		asks = append(asks, text)
+		sc.sys("los a=1.00,2.00,3.00 b=" + guid + " map=389 los=0 dist=0.0 same_map=0 in_world=1 reason=different-maps")
+		sc.sys("los a=Bottwo b=" + guid + " map=389 los=1 dist=17.4 same_map=1 in_world=1")
+	}
+	if in, dist, known := st.TankSees("Bottwo", target); !in || !known || dist != 17.4 {
+		t.Fatalf("TankSees with a stale spot answer first = (%v, %v, %v); want the tank's own answer", in, dist, known)
+	}
+
 	// A module without the command answers the core's own line: unknown, never a refusal of sight.
 	answer = ""
 	sc.onSay = func(text string) {
