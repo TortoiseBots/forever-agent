@@ -428,11 +428,16 @@ func TestPlayRegroupDeathAtThePullGatherResumesThePull(t *testing.T) {
 			f.Clock.After(30*time.Second, func() { f.GoldenOwner.Bots[0].Dead = false })
 		}
 	})
+	rig.cfg.Out = t.TempDir() // the summary (and so the death count) is written by the recorder
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
 	if res.Stop != "clear" {
 		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
 	}
 	if res.Summary.Deaths != 1 {
 		t.Fatalf("deaths = %d; want 1 (the tank at the gather)", res.Summary.Deaths)
+	}
+	tf := regroupTrace(t, res)
+	if _, ok := firstEvent(tf, "regroup_down"); !ok {
+		t.Fatal("the tank's fall at the gather is not in the record")
 	}
 }
