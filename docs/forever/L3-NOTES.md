@@ -41,6 +41,14 @@ The files are written into a sibling staging directory (`<out>.tmp.<pid>`), and 
 after every query finished and every file exists. A failing query, ssh connection or container leaves the previous
 export untouched instead of a mixed generation. The staging directory is removed on exit.
 
+## Shared plan files
+
+A plan file serves both stacks. A Forever check never deletes a Turtle spawn, leg or step: where ForeverCore lacks
+content a plan uses (Deadmines' Defias Companions, Shadowfang Keep's Sever/Prelate Ironmane/Mistblade Rippers,
+Blackfathom Deeps' Velthelaxx wing), the plan keeps it, `forever_status` says `refused` with the missing content named,
+and `alt_entries` is the only per-server field (object entries at one position). The plans that can be cleared for
+Forever say `exported`; a plan whose Forever data does not match says `refused` with the field or spawns named.
+
 ## What it writes
 
 The tables are the ForeverCore schema at server revision `25fc7ca` (`sql/base/dev/world_database.sql`,
