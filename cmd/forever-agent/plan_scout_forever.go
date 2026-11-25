@@ -538,7 +538,11 @@ func foreverServerSightAt(ctx context.Context, c scoutForeverClient, spot plansc
 		if u.Dead {
 			continue
 		}
-		low := uint32(u.GUID.Key() & 0xFFFFFF)
+		guid, err := world.ParseGUID(string(u.GUID))
+		if err != nil {
+			continue
+		}
+		low := world.Low24(guid)
 		if _, seen := byLow[low]; !seen {
 			byLow[low] = string(u.GUID)
 		}
