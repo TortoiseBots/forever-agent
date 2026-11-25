@@ -447,17 +447,29 @@ func TestRaidSuiteForeverUncooperativeWatchIsBounded(t *testing.T) {
 	prevStop := raidSuiteWatchStop
 	raidSuiteWatchStop = 30 * time.Millisecond
 	t.Cleanup(func() { raidSuiteWatchStop = prevStop })
+	prevRenew := raidSuiteRenewHeld
+	t.Cleanup(func() { raidSuiteRenewHeld = prevRenew })
+	raidSuiteRenewHeld = func(w *autoForeverWorld, f autoForeverSlot) error { return errors.New("the store is busy") }
 	rig := newRaidForeverRig(t)
 	slotsPath := raidForeverSlots(t)
 	unblock := make(chan struct{})
+	started := make(chan struct{})
 	watched := make(chan struct{})
 	rig.watch = func(ctx context.Context, args []string, out string) int {
+		close(started)
 		defer close(watched)
 		<-unblock // a session stuck in a read: cancellation is never observed
 		writeSuiteSummary(t, out, suiteSummary(raidSuiteForeverUntil, time.Now(), 300))
 		return exitOK
 	}
-	code, rep, stderr := raidForeverRun(t, slotsPath, raidForeverEntry(), raidForeverEntry())
+	second := raidForeverEntry()
+	second.Plan = "zul_gurub"
+	code, rep, stderr := raidForeverRun(t, slotsPath, raidForeverEntry(), second)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("the watch never started (stderr %q, raids %+v)", stderr, rep.Raids)
+	}
 	close(unblock)
 	<-watched
 	if code == exitOK {
