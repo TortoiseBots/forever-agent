@@ -77,9 +77,8 @@ your test lands in is automatic, by test name or by package. Do not maintain a l
 
 # Page frontmatter
 
-`generated.by` names the producer and version that last wrote the page, in `<producer>/<version>` form, and
-`generated.at` is when; a page touched by several producers lists the last one. No page carries `verified` until a
-person has checked it against the code, and that check is the only thing that may add it.
+`generated.by` names the producer and version that last wrote the page, in `<producer>/<version>` form (a page touched by several lists the last one).
+`generated.at` is when; no page carries `verified` until a person has checked it against the code, and only that check may add it.
 
 # Generated files
 
