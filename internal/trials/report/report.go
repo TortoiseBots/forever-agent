@@ -423,6 +423,36 @@ func WriteCard(runDir string, runTrials []map[string]any) ([]any, error) {
 			})
 		}
 	}
+	classRules := sectionRows(runTrials, "class_rules")
+	if len(classRules) > 0 {
+		lines = append(lines, "", "## Class rules", "",
+			"| trial | repeat | rule | verdict | tanks | detail |",
+			"|---|---|---|---|---|---|")
+		for _, rowVal := range classRules {
+			row, ok := pyjson.Object(rowVal)
+			if !ok {
+				continue
+			}
+			tanks := "-"
+			if n := intField(row["n"]); n > 0 {
+				tanks = fmt.Sprintf("%d/%d", intField(row["k"]), n)
+			}
+			lines = append(lines, fmt.Sprintf("| %s | %s | %s | %s | %s | %s |",
+				pyjson.Str(row["trial"]), pyjson.Str(row["rep"]), pyjson.Str(row["id"]),
+				pyjson.Str(row["verdict"]), tanks, orEmpty(row["reason"])))
+		}
+		for _, rowVal := range classRules {
+			row, ok := pyjson.Object(rowVal)
+			if !ok || pyjson.Str(row["verdict"]) == "PASS" {
+				continue
+			}
+			evidence, _ := pyjson.List(row["evidence"])
+			for _, line := range evidence {
+				lines = append(lines, fmt.Sprintf("- %s %s %s: %s", pyjson.Str(row["trial"]),
+					pyjson.Str(row["rep"]), pyjson.Str(row["id"]), pyjson.Str(line)))
+			}
+		}
+	}
 	playerData := playerDataRows(runTrials)
 	if len(playerData) > 0 {
 		lines = append(lines, "", "## Player data (aotc.gg)", "",
@@ -506,6 +536,9 @@ func WriteCard(runDir string, runTrials []map[string]any) ([]any, error) {
 	if len(playerData) > 0 {
 		doc["player_data"] = playerData
 		doc["player_data_credit"] = aotc.Credit
+	}
+	if len(classRules) > 0 {
+		doc["class_rules"] = classRules
 	}
 	if err := pyjson.Dump(filepath.Join(runDir, "card.json"), doc); err != nil {
 		return nil, fmt.Errorf("write card.json: %w", err)
@@ -1017,9 +1050,16 @@ func orEmpty(v any) string {
 // `trials score --player-data`) with the trial id added: the card's own section and card.json's
 // `player_data`.
 func playerDataRows(runTrials []map[string]any) []any {
+	return sectionRows(runTrials, "player_data")
+}
+
+// sectionRows is every trial's rows of one bench-reading section (trial.json's `player_data` or
+// `class_rules`) with the trial id added: the card's own section and card.json's key of the same
+// name.
+func sectionRows(runTrials []map[string]any, key string) []any {
 	var out []any
 	for _, trial := range runTrials {
-		rows, _ := pyjson.List(trial["player_data"])
+		rows, _ := pyjson.List(trial[key])
 		for _, rowVal := range rows {
 			row, ok := pyjson.Object(rowVal)
 			if !ok {

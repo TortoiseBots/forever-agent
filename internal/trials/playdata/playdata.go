@@ -7,8 +7,10 @@
 // that data is contrary only when its stat family is known and none of the families the spec's own
 // players wear in that slot is its own; the acceptable families are summed by share from the data
 // (familyShareFloor, not a union), never taken from a single priority stat, so a hybrid spec
-// (enhancement, protection paladin) is not read as a pure caster and a shared item one hybrid
-// wearer names does not make its family acceptable for every slot. An item whose family is unknown
+// (protection paladin, retribution paladin) is not read as a pure caster and a shared item one
+// hybrid wearer names does not make its family acceptable for every slot. Which specs read as
+// hybrids is the data's answer: an enhancement shaman's own three priority rows are stamina,
+// intellect and spell power, so it reads as a caster, which is the mail its players wear. An item whose family is unknown
 // is INCONCLUSIVE, never a FAIL; stamina, crit and hit name no family, so they never make an item
 // contrary. Item level is never a reason. A record with no item data is INCONCLUSIVE, never a pass.
 //

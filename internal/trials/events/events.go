@@ -811,6 +811,122 @@ func Normalise(repDir string, trial map[string]any) ([]Row, error) {
 // RowT is a row's re-based time, 0 when it has none.
 func RowT(row Row) float64 { return rowT(row) }
 
+// FightWindow is the scored fight: (lo, hi, fightEndMissing, ok) on the events' own time base.
+// lo is the fight_start mark (the pull, the fight's first hostile action), else 0 when only
+// setup_ok exists, else the first sample; hi is the fight_end mark, else the last sample taken in
+// combat, else the last sample. A recording with neither marks nor samples has no window, so a
+// caller must report the missing evidence instead of judging an empty span.
+func FightWindow(marks, samples []Row) (float64, float64, bool, bool) {
+	var fs, so, fe Row
+	for _, mark := range marks {
+		switch pyjson.Str(mark["kind"]) {
+		case "fight_start":
+			if fs == nil {
+				fs = mark
+			}
+		case "setup_ok":
+			if so == nil {
+				so = mark
+			}
+		case "fight_end":
+			fe = mark
+		}
+	}
+	var base float64
+	hasBase := false
+	if fs != nil {
+		base, hasBase = WallSecs(fs["wall"])
+	}
+	if !hasBase && so != nil {
+		base, hasBase = WallSecs(so["wall"])
+	}
+	type timed struct {
+		T      float64
+		Sample Row
+	}
+	var times []timed
+	for _, sample := range samples {
+		t, ok := pyjson.Float(sample["t"])
+		if !ok {
+			continue
+		}
+		times = append(times, timed{T: t, Sample: sample})
+	}
+	var lo *float64
+	if fs != nil {
+		lo = markTime(fs, base, hasBase)
+	}
+	if lo == nil {
+		if fs != nil || so != nil {
+			v := 0.0
+			lo = &v
+		} else if len(times) > 0 {
+			v := times[0].T
+			for _, item := range times[1:] {
+				if item.T < v {
+					v = item.T
+				}
+			}
+			lo = &v
+		}
+	}
+	var hi *float64
+	if fe != nil {
+		hi = markTime(fe, base, hasBase)
+	}
+	missing := hi == nil
+	if missing {
+		var fight, later []float64
+		for _, item := range times {
+			if lo == nil || item.T >= *lo {
+				later = append(later, item.T)
+				if pyjson.Truthy(item.Sample["in_combat"]) {
+					fight = append(fight, item.T)
+				}
+			}
+		}
+		pickMax := func(vals []float64) *float64 {
+			if len(vals) == 0 {
+				return nil
+			}
+			v := vals[0]
+			for _, x := range vals[1:] {
+				if x > v {
+					v = x
+				}
+			}
+			return &v
+		}
+		hi = pickMax(fight)
+		if hi == nil {
+			hi = pickMax(later)
+		}
+	}
+	if lo == nil || hi == nil {
+		return 0, 0, missing, false
+	}
+	if *hi < *lo {
+		return *lo, *lo, missing, true
+	}
+	return *lo, *hi, missing, true
+}
+
+// markTime is a mark's time on the normaliser's base: its ISO wall minus the base wall, else its
+// plain numeric t.
+func markTime(mark Row, baseWall float64, hasBase bool) *float64 {
+	if mark == nil {
+		return nil
+	}
+	if wall, ok := WallSecs(mark["wall"]); ok && hasBase {
+		v := wall - baseWall
+		return &v
+	}
+	if f, ok := pyjson.Float(mark["t"]); ok {
+		return &f
+	}
+	return nil
+}
+
 func rowT(row Row) float64 {
 	if n, ok := pyjson.Num(row["t"]); ok {
 		return n

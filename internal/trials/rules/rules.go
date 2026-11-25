@@ -827,6 +827,26 @@ func Matches(row Row, where Row, byGUID map[string][]TimedSample, ctx *Ctx, tria
 			return false
 		}
 	}
+	// dst_power_lt is src_power_lt on the other side: the target's mana (or energy, rage)
+	// percent at the event's time, read from the freshest sample at or before it. A target
+	// with no power of its own, or no sample to prove one, does not match: an unknown bar is
+	// never "below the limit".
+	if where["dst_power_lt"] != nil {
+		sample := At(byGUID, row["dst_guid"], rowNum(row, "t"))
+		if sample == nil {
+			return false
+		}
+		power, okP := pyjson.Float(sample["power"])
+		maxPower, okM := pyjson.Float(sample["max_power"])
+		if !okP || !okM || maxPower == 0 {
+			return false
+		}
+		pct := 100.0 * power / maxPower
+		limit := Num(where["dst_power_lt"], ctx, nil)
+		if limit == nil || !(pct < *limit) {
+			return false
+		}
+	}
 	for _, key := range []string{"src_target_of", "dst_target_of"} {
 		if where[key] == nil {
 			continue
@@ -950,7 +970,7 @@ func isWhereKey(key string) bool {
 	case "kind", "src", "dst", "spell", "spell_id",
 		"dst_hp_gt", "dst_hp_lt", "dst_hp_le", "in_combat",
 		"t_from", "t_to", "dst_has_aura", "dst_lacks_aura",
-		"src_power_lt", "response_dst", "same_dst",
+		"src_power_lt", "dst_power_lt", "response_dst", "same_dst",
 		"trigger_debounce_s", "src_target_of", "dst_target_of",
 		"src_within_of_marked", "marked_has_cc",
 		"spell_interruptible", "src_hp_le", "not_within_s_after_mark",
@@ -1018,6 +1038,7 @@ func AliasNames(rule Row, trial map[string]any) []string {
 	check := pyjson.ObjectOrEmpty(rule["check"])
 	blobs := []Row{
 		pyjson.ObjectOrEmpty(check["where"]),
+		pyjson.ObjectOrEmpty(check["where_fallback"]),
 		pyjson.ObjectOrEmpty(check["num"]),
 		pyjson.ObjectOrEmpty(check["den"]),
 		pyjson.ObjectOrEmpty(check["trigger"]),
@@ -1518,6 +1539,25 @@ func Evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 	return res
 }
 
+// checkWhere is the filter a check matches with: its where, or its where_fallback when the
+// recording carries no aura rows at all. Some agents' combat logs never write an aura event, and an
+// aura check cannot be answered from such a recording, so the fallback (the cast form) stands in.
+// note says which form was read and is carried in the result's evidence.
+func checkWhere(check Row, allRows []Row) (Row, string) {
+	where := pyjson.ObjectOrEmpty(check["where"])
+	fallback := pyjson.ObjectOrEmpty(check["where_fallback"])
+	if len(fallback) == 0 {
+		return where, ""
+	}
+	for _, r := range allRows {
+		switch pyjson.Str(r["kind"]) {
+		case "aura_on", "aura_off":
+			return where, "counted landed auras"
+		}
+	}
+	return fallback, "counted casts: the recording carries no aura rows"
+}
+
 func evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result {
 	trial := ctx.Trial
 	if trial == nil {
@@ -1526,6 +1566,7 @@ func evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 	// The scored window is fight_start..fight_end: only rows and samples inside it count
 	// (excluded rows stay: they carry the spans). Hp / aura / combat lookups still read ALL
 	// samples so the window's first events have their data.
+	allRows := rows
 	window := ctx.Window
 	allSamples := samples
 	if window != nil {
@@ -1534,7 +1575,7 @@ func evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 	}
 	check := pyjson.ObjectOrEmpty(rule["check"])
 	metric := pyjson.Str(check["metric"])
-	where := pyjson.ObjectOrEmpty(check["where"])
+	where, whereNote := checkWhere(check, allRows)
 	// where.not_within_s_after_mark: drop the events and samples within s seconds after each
 	// mark of that kind. Excluded-span rows stay. Hp/aura lookups still read all samples.
 	spans := AfterMarkSpans(rule, marks)
@@ -1754,6 +1795,9 @@ func evaluate(rule Row, rows []Row, samples []Row, marks []Row, ctx *Ctx) Result
 			}
 		}
 		ev = append(ev, attackEv...)
+		if whereNote != "" {
+			ev = append(ev, whereNote)
+		}
 		verdict := "FAIL"
 		if Pass(rule["pass_if"], int64(len(hits))) {
 			verdict = "PASS"
@@ -2525,18 +2569,40 @@ func OpportunitySeconds(trial map[string]any, samples []Row, excluded [][2]float
 				v := 100.0 * hp / maxHP
 				pct = &v
 			}
+			var powerPct *float64
+			power, okP := pyjson.Float(sample["power"])
+			maxPower, okMP := pyjson.Float(sample["max_power"])
+			if okP && okMP && maxPower > 0 {
+				v := 100.0 * power / maxPower
+				powerPct = &v
+			}
 			ok2 := true
-			if opp["hp_lt"] != nil {
-				negInf := math.Inf(-1)
-				limit := Num(opp["hp_lt"], ctx, &negInf)
-				if !(pct != nil && limit != nil && *pct < *limit) {
+			// power_lt/power_gt read the sample's own bar (mana on a caster, energy on a
+			// rogue): a unit with no readable bar never holds the opportunity, the same
+			// way a missing hp never satisfies hp_lt.
+			for _, bound := range []struct {
+				key  string
+				lt   bool
+				pct  *float64
+				zero float64
+			}{
+				{"hp_lt", true, pct, math.Inf(-1)},
+				{"hp_gt", false, pct, 0},
+				{"power_lt", true, powerPct, math.Inf(-1)},
+				{"power_gt", false, powerPct, 0},
+			} {
+				if opp[bound.key] == nil {
+					continue
+				}
+				limit := Num(opp[bound.key], ctx, &bound.zero)
+				if ok := bound.pct != nil && limit != nil; !ok {
+					ok2 = false
+					continue
+				}
+				if bound.lt && !(*bound.pct < *limit) {
 					ok2 = false
 				}
-			}
-			if opp["hp_gt"] != nil {
-				zero := 0.0
-				limit := Num(opp["hp_gt"], ctx, &zero)
-				if !(pct != nil && limit != nil && *pct > *limit) {
+				if !bound.lt && !(*bound.pct > *limit) {
 					ok2 = false
 				}
 			}

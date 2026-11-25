@@ -35,7 +35,8 @@ var etRole = map[string]string{
 }
 
 var etEdgeIDs = []string{"dps-rogue-low-energy", "dps-rogue-thistle-tea", "priest-holy-low-mana-drinks",
-	"priest-holy-low-mana-fight", "priest-holy-low-mana-innervate", "priest-holy-low-mana-potion",
+	"priest-holy-low-mana-fight", "priest-holy-low-mana-innervate", "priest-holy-low-mana-innervate-ally",
+	"priest-holy-low-mana-potion",
 	"tank-warrior-two-bot-tanks", "tank-warrior-zero-rage-opening"}
 
 var etExpect = map[string]string{
@@ -45,8 +46,10 @@ var etExpect = map[string]string{
 	"PRI-LOWMANA-NO-NUKE": "PASS", "PRI-LOWMANA-HEALS": "?",
 	"PRI-LOWMANA-POTION": "PASS", "PRI-LOWMANA-POTION-HEALS": "PASS",
 	"DRU-BAL-INNERVATE-HEALER": "PASS", "DRU-BAL-INNERVATE-NOT-PLAYER": "PASS",
-	"DRU-BAL-INNERVATE-PRECOND": "?",
-	"TNK-WAR-RAGE0-BLOODRAGE":   "?", "TNK-WAR-RAGE0-ENGAGE": "PASS", "TNK-WAR-RAGE0-EMPTY": "PASS",
+	"DRU-BAL-INNERVATE-PRECOND":        "?",
+	"DRU-BAL-INNERVATE-LOWMANA-TARGET": "PASS", "DRU-BAL-INNERVATE-NOT-SELF-TARGET": "PASS",
+	"PRI-LOWMANA-ACTED":       "?",
+	"TNK-WAR-RAGE0-BLOODRAGE": "?", "TNK-WAR-RAGE0-ENGAGE": "PASS", "TNK-WAR-RAGE0-EMPTY": "PASS",
 	"TNK-WAR-RAGE0-STANCE":     "PASS",
 	"DPS-ROG-LOWENERGY-SWINGS": "PASS", "DPS-ROG-LOWENERGY-ACTIVE": "PASS", "DPS-ROG-LOWENERGY-STANCE": "PASS",
 	"DPS-ROG-TEA": "?", "DPS-ROG-TEA-ACTIVE": "PASS", "DPS-ROG-TEA-STANCE": "PASS",

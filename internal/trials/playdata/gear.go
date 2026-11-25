@@ -24,9 +24,15 @@ import (
 // whose wearers name the agility and strength families is FINE for a feral druid (the feral's own
 // data is agility and strength too): an outfit in the wrong armour class but the right stat family
 // passes. And an enhancement shaman's own slot data names a caster family for Wrist, Hands, Waist
-// and Feet, so hunter-only agility mail there is contrary even though the spec's own agility mail
+// and Feet, so hunter-worn agility mail there is contrary even though the spec's own agility mail
 // (rule (a)) is fine: 4 of the 8 armour slots, 4 of the 7 that have such an item at all. Both need
 // the item read-out of #20 (item stats), not a threshold change.
+//
+// A spec's family set is every family among its top PriorityStats priority rows, so which specs
+// read as hybrids is the data's answer, not a rule: protection and retribution paladins keep
+// strength beside a caster family, while an enhancement shaman's three rows are stamina, intellect
+// and spell power — stamina names no family, so it reads as a caster, which is what its own players
+// wear in mail.
 func gearRow(rec Record, in Inputs) Row {
 	row := Row{ID: RuleGear, Verdict: VerdictInconclusive}
 	class, spec := strings.ToLower(strings.TrimSpace(rec.Class)), SpecName(rec.Spec)

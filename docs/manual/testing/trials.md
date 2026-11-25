@@ -4,7 +4,7 @@ title: Trials
 description: "Run the behaviour test bench: hire a bot into a scripted fight, score each specified behaviour, and read the card."
 tags: [testing, trials, behaviour, verdicts]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-24T20:35:15Z }
+generated: { by: forever-agent docs, at: 2026-11-25T09:30:41Z }
 sources:
   - id: trials-cmd
     resource: cmd/forever-agent/trials_cmd.go
@@ -20,6 +20,14 @@ sources:
     resource: internal/trials/score/score.go
   - id: playdata
     resource: internal/trials/playdata/playdata.go
+  - id: classrules
+    resource: internal/trials/classrules/classrules.go
+  - id: classrules-heal
+    resource: internal/trials/classrules/heal.go
+  - id: rules-engine
+    resource: internal/trials/rules/rules.go
+  - id: trial-innervate
+    resource: internal/trials/trialdefs/edge/priest-holy-low-mana-innervate-ally.json
   - id: playdata-gear
     resource: internal/trials/playdata/gear.go
   - id: aotc
@@ -73,6 +81,8 @@ A trial is one JSON object. Unknown keys at any level are a validation error, so
 Situation kinds the live runner drives: `tank_damage`, `caster_mob`, `pack`, `cc_target`, `debuff`, `ooc_buffs`, `ooc_hurt`. The dummy spell/damage bench is the separate `dummy` kind.
 
 A rule has `id`, `desc`, `source`, `expect_today` (`PASS`, `FAIL` or `?`), `why_expect`, `check`, and `pass_if`. The check says what is measured (`metric`: `count`, `ratio`, `latency`, `uptime`, `first`, `rate`, `walk_metric`), which trigger and response events it pairs, and `within_s` for a latency. `pass_if` is a comparison such as `>= 0.8`; `min_n` and `min_reps` say when there is too little evidence to judge. `pool: true` scores one verdict from the summed k/n over every valid repeat instead of a majority vote.
+
+A count check may carry `where_fallback` beside `where`: when the recording has no aura rows at all (an agent whose combat log never writes aura events cannot answer an aura check), the fallback filter is read instead and the result's evidence says which form was read. `min_opportunity_s` then applies to the trial's `opportunity` block, turning a `PASS` or `FAIL` into `INCONCLUSIVE` when the chance never lasted that long.
 
 ```json
 {
@@ -156,13 +166,47 @@ forever-agent trials score ./runs/2026-11-24-paladin --player-data
 | `AOTC-GEAR-FITS-SPEC` | each equipped item against its spec's level 60 gear tables and the stat families its players wear in that slot |
 | `AOTC-TALENTS-IMPLY-SPELLS` | the talents most players of the spec take that grant an active spell, against what the bot learned and cast in its combat windows |
 
-The gear rule is data-driven. An item any row of the bot's spec's own level 60 gear tables names (any population, share or slot) is fine. An item outside that data is judged by its stat family: its own primary stats when the record carries them, otherwise the families of the specs that commonly wear it. The families the spec's own players wear in that slot are summed by wear share, and a family is acceptable when it holds at least 20% of the slot's summed family share or is the single largest family. An item whose family is unknown is `INCONCLUSIVE`, never `FAIL`; stamina, crit and hit name no family, item level is never a reason, and a record with no item data is `INCONCLUSIVE`.
+The gear rule is data-driven. An item any row of the bot's spec's own level 60 gear tables names (any population, share or slot) is fine. An item outside that data is judged by its stat family: its own primary stats when the record carries them, otherwise the families of the specs that commonly wear it, each spec read through the families in its top three stat-priority rows. The families the spec's own players wear in that slot are summed by wear share, and a family is acceptable when it holds at least 20% of the slot's summed family share or is the single largest family. An item whose family is unknown is `INCONCLUSIVE`, never `FAIL`; stamina, crit and hit name no family, item level is never a reason, and a record with no item data is `INCONCLUSIVE`.
 
-Known limits: the tables carry no item stats or armour type, only wearer choices. A feral druid in strength plate is fine, because strength is one of its own families; and an enhancement shaman in hunter-only agility mail fails in Wrist, Hands, Waist and Feet, where its own slot data names a caster family above the 20% floor; the same kind of mail is fine in the other four armour slots, and the agility mail its own players wear is fine in every slot. The outfit test pins those verdicts.
+Which specs read as hybrids is the data's answer: protection and retribution paladins keep strength beside a caster family, while an enhancement shaman's three rows are stamina, intellect and spell power, so it reads as a caster — the mail its own players wear, and what keeps a shaman in warrior plate contrary. The largest-family fallback ("or the single largest family") adds no family on the shipped data: with at most three families and each share counted once per family it names, the largest family always holds at least a third of the summed share, above the 20% floor.
+
+Known limits: the tables carry no item stats or armour type, only wearer choices. A feral druid in strength plate is fine, because strength is one of its own families; and an enhancement shaman in hunter-worn agility items fails in Wrist, Hands, Waist and Feet, where its own slot data names a caster family above the 20% floor — 4 of the 8 armour slots, 4 of the 7 that have such an item at all (the Hunter-worn Head pieces are also in the shaman's own tables, so they are fine by the own-data rule); the same kind of mail is fine in the other four armour slots, and the agility mail its own players wear is fine in every slot. The outfit test pins those verdicts.
 
 The talent rule expects only a talent the record proves learned, judges only a combat window of at least 30 s and spells whose cooldown fits the window, and never fails a spell the spec's spell lists call situational (it reports it as held). A partial talent read-back can turn a `PASS` into `INCONCLUSIVE`, never into a `FAIL`; no talent data or no proven combat is `INCONCLUSIVE`.
 
 The rows print under `## Player data` (the heading names the data source) with the source credit line, `card.json` carries `player_data` and `player_data_credit`, and `trials report` re-renders them. They are bench readings, not part of the trial verdict: they never change the exit code, and `--player-data` adds a second line with the player-data `PASS`, `FAIL` and `INCONCLUSIVE` counts.
+
+# Judging the class rules
+
+```sh
+forever-agent trials score ./runs/2026-11-25-priest --class-rules
+```
+
+`--class-rules` adds the class rules, off by default: they read the run's own record (the trial's party roles, the recording's marks and samples, and the events), not a spell list, so a default score stays exactly the bench's.
+
+| Rule | What it reads |
+|---|---|
+| `HEAL-ASSIGNMENT` | the party's heal rows by caster and target, against the roles the trial names (the player's role or forced role, the bot's role, the extras' roles) |
+
+The rule measures one fight per repeat: `fight_start` (the pull, the fight's first hostile action) to `fight_end`, or to the last in-combat sample when the end mark is missing. Only heal rows inside that window and outside the recording's `excluded` spans (GM heals and the like, written by the normaliser from the marks) count: a heal before the pull, after the fight or inside an excluded span never sets a share. A fight shorter than 30 s is `INCONCLUSIVE`, because too few heals fit in it to read a distribution.
+
+A healer is the party member whose role is `healer`; it is judged only with at least 10 **placed** heal events of its own (a placed heal is one on a party member the setup named). The tanks are the party members whose role is `tank`. The main healer is the judged healer with the most healing (a tie at the top is no main healer). It passes when all three hold:
+
+- the main healer puts at least 60% of its healing on the tanks;
+- every other judged healer puts at most 40% of its healing on the tanks;
+- the other healers healed at least 2 distinct non-tank party members between them.
+
+Why those numbers: 60% is a clear majority for the healer whose job is the tank, and 40% is its mirror (the pair sums to 100), so the two lines describe one split between the tank healer and the group healer. Ten placed heals is about one every 3 s in the 30 s fight the rule needs, the least that has a distribution; two distinct allies is a spread, where one could be a single off-target.
+
+Heals on pets or units the setup did not name are left out of the shares and reported in an `other` count, so one pet heal cannot silence the rule; they never make it `INCONCLUSIVE` by themselves. It reports `INCONCLUSIVE`, never `FAIL`, when the recording cannot carry the verdict: no `events.jsonl`, no usable fight window, a fight under 30 s, no heal rows, no tank role in the party, no healer role, a tank or healer the setup proves no guid for, fewer than 10 placed heals by every healer ("too few placed heals"), a single judged healer ("one healer only" — a split needs a second healer), a placed heal row with no readable amount, or two healers tied on healing. A healer's heals on itself count in its own total but neither for the tank nor as cover of the rest.
+
+The shares are of **gross** healing: the heal log's `amount` is the heal's original amount (`SMSG_SPELL_HEAL_LOG`'s `OriginalHeal`) and the combat log carries no overheal, so a heal that mostly overheated still counts in full. What the rule cannot see: overheal, absorb or shield healing (a shield is not a heal row), the mana spent per heal, whether a heal was needed at the time, a pet's own healing, or a heal on a unit the setup did not name.
+
+The `edge` trial `priest-holy-low-mana-innervate-ally` stages the case the class rules were written for: a level 60 Holy priest hire at 15% mana in a 90 s fight, with a Balance druid hire. Its rules are the ordinary bench rules, not the class ones: `DRU-BAL-INNERVATE-LOWMANA-TARGET` counts the landed Innervate aura on the priest while the priest's own mana reads below 35% (`dst_power_lt`); a recording with no aura rows at all cannot answer an aura check, so it counts the cast instead and says which form it read in the evidence (`where_fallback`). A cast on the druid itself or on a target at or above 35% does not count, and `min_opportunity_s` 5 makes the rule `INCONCLUSIVE` ("opportunity 0 s < 5 s") when the priest never sat that low, instead of failing it from an empty opportunity. `DRU-BAL-INNERVATE-NOT-SELF-TARGET` is the druid's self-casts over its own casts (`ratio`, `pass_if "== 0"`): a druid that cast nothing is `INCONCLUSIVE` (no denominator), a self-cast while the priest sat low is `FAIL`, and the same self-cast in a fight where the priest never sat low is `INCONCLUSIVE` from the opportunity floor. `PRI-LOWMANA-ACTED` is the precondition that the priest cast something (3 casts). What the two Innervate rules cannot see: whether Innervate was off its cooldown, the mana the spell actually returned, or a landing on a unit the client never saw (a recording without that aura row cannot show it).
+
+No shipped trial stages two healers yet (the live damage situations hurt one victim), so on today's trial set the rule reports "one healer only" and stays `INCONCLUSIVE`; it judges any run whose party does name two healers.
+
+The rows print under `## Class rules` (trial, repeat, rule, verdict, the main healer's heals on the tanks, and the reason), `card.json` carries `class_rules`, and `--class-rules` adds a second count line with the class rules' `PASS`, `FAIL` and `INCONCLUSIVE` counts. They are bench readings, not part of the trial verdict: they never change the exit code.
 
 # Validating trial files
 
