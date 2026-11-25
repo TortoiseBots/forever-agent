@@ -381,6 +381,14 @@ func (m *Mover) noteTeleport() {
 	m.teleported = true
 }
 
+// endLeg is the deferred cleanup of every movement leg (MoveTo, WalkPath, ChaseTo): the leg stops walking and drops a
+// teleport it never settled. The pending marker and its origin belong to one leg, so a leg that ends on a failed
+// wait, a cancellation, a map change or a knockback cannot hand its first origin to the next leg.
+func (m *Mover) endLeg() {
+	m.walking = false
+	m.teleported = false
+}
+
 // settleTeleport settles the teleport a leg met: it clears the flag and reports whether it was a correction in
 // place, so the leg adopts the corrected position and goes on. False means the character was moved and the leg must
 // end where the server put it (ErrTeleported).
@@ -460,7 +468,7 @@ func (m *Mover) MoveTo(ctx context.Context, tx, ty, tz float32) error {
 		return err
 	}
 	m.walking = true
-	defer func() { m.walking = false }()
+	defer m.endLeg()
 	m.logf("walk: start forward from %.2f %.2f %.2f to %.2f %.2f %.2f (%.2f yd, facing %.2f, run %.1f yd/s)",
 		sx, sy, sz, tx, ty, tz, dist, dir, m.RunSpeed)
 
@@ -648,7 +656,7 @@ func (m *Mover) WalkPath(ctx context.Context, corners [][3]float32) error {
 		return err
 	}
 	m.walking = true
-	defer func() { m.walking = false }()
+	defer m.endLeg()
 	m.logf("path: start forward at %.2f %.2f %.2f, %d point(s), %.2f yd, run %.1f yd/s",
 		m.X, m.Y, m.Z, len(points), total, m.RunSpeed)
 
@@ -899,7 +907,7 @@ func (m *Mover) ChaseTo(ctx context.Context, goal ChaseGoal) error {
 		return fmt.Errorf("objects: CMSG_MOVE_START_FORWARD: %w", err)
 	}
 	m.walking = true
-	defer func() { m.walking = false }()
+	defer m.endLeg()
 	m.logf("chase: start forward from %.2f %.2f %.2f after %.2f %.2f %.2f (%.2f yd, run %.1f yd/s)",
 		sx, sy, sz, tx, ty, tz, dist, m.RunSpeed)
 
