@@ -358,3 +358,42 @@ func TestFightScoreForeverKeepsSeconds(t *testing.T) {
 		t.Fatalf("Magebot: %+v", f)
 	}
 }
+
+// A record with nothing to judge is not a clean reading: a fight with no bots, or a bot with no spells, carries a
+// warning in the result (the JSON array and the text line) instead of an "ok" summary that judged nothing.
+//
+// Mutation this test catches: the warning removed (an empty reading prints "0 bot(s) judged ok" and exits 0 as if it
+// had checked something).
+func TestFightScoreWarnsWhenNothingIsJudged(t *testing.T) {
+	dir := t.TempDir()
+	noBots := filepath.Join(dir, "nobots.json")
+	if err := os.WriteFile(noBots, []byte(`{"id":"empty","dur_ms":60000,"bots":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noSpells := filepath.Join(dir, "nospells.json")
+	if err := os.WriteFile(noSpells, []byte(`{"id":"quiet","dur_ms":60000,"bots":[{"name":"Quiet","class":"warrior","role":"tank","spells":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{noBots, "no bots in the fight record"},
+		{noSpells, "bot Quiet has no spells"},
+	} {
+		t.Run(filepath.Base(tc.path), func(t *testing.T) {
+			r := scoreJSON(t, tc.path)
+			found := false
+			for _, w := range r.Warnings {
+				if strings.Contains(w, tc.want) {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("warnings %v do not carry %q", r.Warnings, tc.want)
+			}
+			out, _ := runFightScore(t, tc.path)
+			scoreLine(t, out, "warning:", tc.want)
+		})
+	}
+}

@@ -182,8 +182,17 @@ func scoreFight(f *fightJSON, mtName, otNames string, cfg tracecheck.Config, o *
 	for _, b := range offTanks(f, mt, otNames) {
 		r.OTs = append(r.OTs, tauntRow(b, o.Common.Taunts))
 	}
+	// A reading with nothing to judge is not a clean one: say so in the result (a --json consumer sees it beside the
+	// findings, and the text reading prints it as a warning line), rather than leaving an "ok" summary that judged
+	// no bot at all.
+	if len(f.Bots) == 0 {
+		r.Warnings = append(r.Warnings, "no bots in the fight record: nothing was judged")
+	}
 	active := float64(f.DurMS) / 1000
 	for _, b := range f.Bots {
+		if len(b.Spells) == 0 {
+			r.Warnings = append(r.Warnings, fmt.Sprintf("bot %s has no spells in the record: its casts cannot be judged (and its spec is only inferred from an empty list)", b.Name))
+		}
 		casts := map[string]int{}
 		for _, s := range b.Spells {
 			casts[s.Name] += s.N
