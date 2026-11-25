@@ -103,6 +103,11 @@ const (
 	// read once a plan has one. A pack the view does not carry is unknown and counts for nothing (the check fails
 	// open there); the manual says so.
 	PlayAgentApproachPackYd = 22.0
+	// PlayAgentApproachStartEpsYd is the slack of the clearance's start-inside rule (0.5 yd): when the agent already
+	// stands inside a hostile's clearance, a point of its path blocks only when it is nearer to that hostile than the
+	// agent's own distance by more than this, so a path that walks away (or only sidesteps) is not refused for the
+	// ground the agent already stands on.
+	PlayAgentApproachStartEpsYd = 0.5
 )
 
 // pull is the pack in the way: the agent first walks to the plan's stand with the party beside it, then the skull goes
@@ -1594,7 +1599,11 @@ func (p *playRun) agentApproachPoint(group int, at Vec3) (Vec3, []Vec3, string, 
 // path is the navmesh polyline from the agent to the mob, walked from its start to stop yd short of its end. The units
 // are the view's: any live hostile the pull is not taking - another pack of the plan, a patrol no plan group claims,
 // a stranger - but not one already fighting the party, not one within PlayAssistYd of the skull (that is the pull's own
-// social add) and not the pull's own units. A pack the view does not carry is unknown and blocks nothing.
+// social add) and not the pull's own units. The party's own pets, totems and guardians (units a roster member owns)
+// and critters are no pack; a unit owned by anyone else (an enemy hunter's pet, a hostile totem) is. Where the agent
+// already stands inside a hostile's clearance, the path blocks only where it comes nearer to that hostile than the
+// agent stands now (less PlayAgentApproachStartEpsYd); outside it the clearance is the plain radius. A pack the view
+// does not carry is unknown and blocks nothing.
 func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64) (float64, bool) {
 	limit := pathLength(points) - stop
 	if limit <= 0 {
@@ -1617,7 +1626,7 @@ func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64
 	}
 	best := math.Inf(1)
 	for i, u := range units {
-		if u.Dead || u.Friendly {
+		if u.Dead || u.Friendly || u.Critter || p.partyOwned(u) {
 			continue
 		}
 		if gid, ok := claim.GroupOf(i); ok && group >= 0 && gid == group {
@@ -1629,7 +1638,16 @@ func (p *playRun) packOnPath(group int, target Vec3, points []Vec3, stop float64
 		if dist3(u.Pos, target) <= PlayAssistYd {
 			continue
 		}
-		if at, ok := pathEnterYd(points, limit, u.Pos, PlayAgentApproachPackYd); ok && at < best {
+		// Standing inside the clearance already: only nearer than here counts (a hostile the agent stands on, within the
+		// slack, can be walked away from and blocks nothing).
+		radius := PlayAgentApproachPackYd
+		if here := dist3(points[0], u.Pos); here < radius {
+			radius = here - PlayAgentApproachStartEpsYd
+		}
+		if radius <= 0 {
+			continue
+		}
+		if at, ok := pathEnterYd(points, limit, u.Pos, radius); ok && at < best {
 			best = at
 		}
 	}

@@ -2,6 +2,7 @@ package driver
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"path/filepath"
 	"slices"
@@ -1245,5 +1246,228 @@ func TestAgentPullApproachNoSightBound(t *testing.T) {
 	}
 	if d := dist3(rig.fake.SelfPos, livePullSelf); d <= PlayArriveYd {
 		t.Fatalf("the agent stood %.1f yd from where the fallback began; want the approach's walk", d)
+	}
+}
+
+// approachPoint is the point that lies along yd along the live approach's own line (from the agent toward the skull)
+// and off yd to the side of it: the place a test puts a hostile to be a known distance from the checked path.
+func approachPoint(along, off float64) Vec3 {
+	dx := float64(livePullSkull[0] - livePullSelf[0])
+	dy := float64(livePullSkull[1] - livePullSelf[1])
+	n := math.Hypot(dx, dy)
+	dx, dy = dx/n, dy/n
+	return Vec3{
+		livePullSelf[0] + float32(dx*along-dy*off),
+		livePullSelf[1] + float32(dy*along+dx*off),
+		0,
+	}
+}
+
+// approachOutcome is what a test reads of a finished approach rig: the failure's detail ("" when the fallback did not
+// fail) and whether the pull engaged the skull.
+func approachOutcome(t *testing.T, rig *playRig) (failed bool, reason, detail string, engaged bool) {
+	t.Helper()
+	ev := playEvents(t, rig)
+	f := ev["agent_pull_failed"]
+	reason, _ = f.D["reason"].(string)
+	detail, _ = f.D["detail"].(string)
+	return f.Ev != "", reason, detail, ev["agent_pull_engaged"].Ev != ""
+}
+
+// wantPackNear fails unless the approach was refused as no-path with the pack-near bound, before any swing.
+func wantPackNear(t *testing.T, rig *playRig) {
+	t.Helper()
+	failed, reason, detail, engaged := approachOutcome(t, rig)
+	if !failed || reason != "no-path" || detail != "pack-near" || engaged {
+		t.Fatalf("approach: failed=%v reason=%q detail=%q engaged=%v; want no-path / pack-near and no engage", failed, reason, detail, engaged)
+	}
+	if len(rig.fake.agentAttacks) != 0 {
+		t.Fatalf("the agent attacked %v; want no swing through a pack's clearance", rig.fake.agentAttacks)
+	}
+}
+
+// wantApproachClears fails unless the approach was not refused and the skull was pulled. A later failure of the pull
+// (the hostile a test leaves standing may draw the bring-back into its own trouble) is not the approach's.
+func wantApproachClears(t *testing.T, rig *playRig) {
+	t.Helper()
+	_, reason, detail, engaged := approachOutcome(t, rig)
+	if reason == "no-path" || !engaged {
+		t.Fatalf("approach: reason=%q detail=%q engaged=%v; want the approach walked and the skull pulled", reason, detail, engaged)
+	}
+}
+
+// TestAgentPullApproachIgnoresPartyOwnedUnits: a hunter's or warlock's pet (and a shaman's totem, a guardian) is owned
+// by a party member and is not marked friendly. It stands by the party, inside the clearance of the agent's start, and
+// it is not a pack: the approach walks and pulls. Counted, it blocked every approach with pack-near.
+func TestAgentPullApproachIgnoresPartyOwnedUnits(t *testing.T) {
+	cases := map[string]Vec3{
+		"at the stand":     {40, 5, 0},
+		"beside the agent": {45, 18, 0},
+		"on the path":      approachPoint(3, 1),
+	}
+	for name, pos := range cases {
+		t.Run(name, func(t *testing.T) {
+			rig := approachRig(t, livePullSkull, nil)
+			owner := rig.ports.Group.Roster()[0].GUID // the agent's own character is always in its roster
+			rig.fake.AddUnit(Unit{GUID: fightGUID(20), Entry: 11999, Pos: pos, Owner: owner})
+			Play(context.Background(), rig.route, rig.ports, rig.cfg)
+			wantApproachClears(t, rig)
+		})
+	}
+}
+
+// TestAgentPullApproachCountsAnotherOwnersUnits: a unit that has an owner who is not in the party (an enemy hunter's
+// pet, a hostile totem) is a real hostile and still keeps the clearance; only the party's own units are skipped.
+func TestAgentPullApproachCountsAnotherOwnersUnits(t *testing.T) {
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(21), Entry: 11998, Pos: Vec3{52, 30, 0}, Owner: fightGUID(22)})
+	})
+	Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	wantPackNear(t, rig)
+}
+
+// TestAgentPullApproachIgnoresCritters: a critter (the ambient creature type) never aggroes, so one standing beside the
+// path is not a pack. The same unit without the critter type blocks (the case above).
+func TestAgentPullApproachIgnoresCritters(t *testing.T) {
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(23), Entry: 11997, Pos: Vec3{52, 30, 0}, Critter: true})
+	})
+	Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	wantApproachClears(t, rig)
+}
+
+// TestAgentPullApproachFromInsideTheClearance: the agent already stands inside the clearance of a hostile (a tight
+// corridor). A path that walks away from it is clear; one that walks closer is not. Both ends of the path are inside
+// the 22 yd radius of the hostile in the first case: only getting nearer than the start counts.
+func TestAgentPullApproachFromInsideTheClearance(t *testing.T) {
+	t.Run("walking away passes", func(t *testing.T) {
+		// 9 yd behind the agent: the whole path (to 20 yd of it) is inside the radius but never nearer than the start.
+		rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+			f.AddUnit(Unit{GUID: fightGUID(24), Entry: 11996, Pos: Vec3{44, 10, 0}})
+		})
+		if d := dist3(livePullSelf, Vec3{44, 10, 0}); d >= PlayAgentApproachPackYd {
+			t.Fatalf("the test's start is %.1f yd from the hostile; want it inside the clearance", d)
+		}
+		Play(context.Background(), rig.route, rig.ports, rig.cfg)
+		wantApproachClears(t, rig)
+	})
+	t.Run("walking closer blocks", func(t *testing.T) {
+		rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+			f.AddUnit(Unit{GUID: fightGUID(25), Entry: 11995, Pos: Vec3{51, 25, 0}})
+		})
+		Play(context.Background(), rig.route, rig.ports, rig.cfg)
+		wantPackNear(t, rig)
+	})
+}
+
+// TestAgentPullApproachClearanceIs22: a hostile that stands beside the path's end blocks at 12, 18 and 20 yd off it
+// (the first two with the agent's start inside the radius, the last with the start outside it) and not at 24 yd: the
+// clearance is PlayAgentApproachPackYd, not the 10 yd the assistance radius is.
+func TestAgentPullApproachClearanceIs22(t *testing.T) {
+	end := dist3(livePullSelf, livePullSkull) - (PlayAgentReachYd - PlayAgentPullMarginYd)
+	for _, c := range []struct {
+		off   float64
+		block bool
+	}{{12, true}, {18, true}, {20, true}, {24, false}} {
+		t.Run(fmt.Sprintf("%.0f yd off", c.off), func(t *testing.T) {
+			rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+				f.AddUnit(Unit{GUID: fightGUID(26), Entry: 11994, Pos: approachPoint(end, c.off)})
+			})
+			Play(context.Background(), rig.route, rig.ports, rig.cfg)
+			if c.block {
+				wantPackNear(t, rig)
+			} else {
+				wantApproachClears(t, rig)
+			}
+		})
+	}
+}
+
+// TestAgentPullApproachWalksTheClearPrefix: the checked path enters a hostile's clearance partway. The approach walks
+// the longest prefix that ends short of it (the agent moves, no swing yet), plans again from there, and once the
+// hostile has gone off (a patrol walking on) the second plan is clear and the agent walks in and pulls.
+func TestAgentPullApproachWalksTheClearPrefix(t *testing.T) {
+	patrolAt := approachPoint(16, 20)
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(27), Entry: 11993, Pos: patrolAt})
+	})
+	var prefixEnd Vec3
+	walked := false
+	rig.fake.OnWalk = func(f *PlayFake, to Vec3) {
+		if walked || dist3(f.SelfPos, livePullSelf) > 0.5 {
+			return
+		}
+		walked, prefixEnd = true, to
+		if len(f.agentAttacks) != 0 {
+			t.Errorf("the agent attacked before the prefix was walked")
+		}
+		for i := range f.units {
+			if f.units[i].Entry == 11993 {
+				f.units[i].Pos = Vec3{patrolAt[0] + 200, patrolAt[1], patrolAt[2]}
+			}
+		}
+	}
+	Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if !walked {
+		t.Fatalf("the approach never walked")
+	}
+	// Enters the clearance about 6.8 yd along; the prefix ends a walk margin short of that, well short of the stop.
+	if d := dist3(livePullSelf, prefixEnd); d < PlayArriveYd+1 || d > 6 {
+		t.Fatalf("the first walk went %.1f yd; want the clear prefix (about 4.8 yd), not the whole path", d)
+	}
+	wantApproachClears(t, rig)
+}
+
+// TestAgentPullApproachPrefixThenPackNear: the same hostile stays. The prefix is walked (the agent has moved), the
+// second plan finds the clearance edge at the agent's feet, and the pull fails no-path with pack-near: never through.
+func TestAgentPullApproachPrefixThenPackNear(t *testing.T) {
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(28), Entry: 11992, Pos: approachPoint(16, 20)})
+	})
+	Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	wantPackNear(t, rig)
+	if d := dist3(rig.fake.SelfPos, livePullSelf); d < PlayArriveYd+1 {
+		t.Fatalf("the agent stands %.1f yd from where the fallback began; want the clear prefix walked first", d)
+	}
+}
+
+// TestAgentPullApproachNoProgressIsPackNear: a hostile the path would walk straight toward from inside its clearance
+// leaves no clear prefix, so the agent does not take a step and the pull fails no-path with pack-near.
+func TestAgentPullApproachNoProgressIsPackNear(t *testing.T) {
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(29), Entry: 11991, Pos: Vec3{52, 30, 0}})
+	})
+	steps := 0
+	rig.fake.OnWalk = func(f *PlayFake, to Vec3) {
+		if dist3(f.SelfPos, livePullSelf) < 0.5 {
+			steps++
+		}
+	}
+	Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	wantPackNear(t, rig)
+	if steps != 0 {
+		t.Fatalf("the agent walked %d times from where the fallback began; want no step toward the pack", steps)
+	}
+}
+
+// TestAgentPullApproachPartialRouteIsNoPath: a route the navmesh only half answers (a partial one) is not a path to the
+// skull: the pull fails no-path with detail path, before any step or swing.
+func TestAgentPullApproachPartialRouteIsNoPath(t *testing.T) {
+	rig := approachRig(t, livePullSkull, func(f *PlayFake) {
+		f.PathFunc = func(from, to Vec3) navmesh.Route {
+			kind := navmesh.RouteComplete
+			if dist3(to, livePullSkull) <= 0.5 {
+				kind = navmesh.RoutePartial
+			}
+			return navmesh.Route{Kind: kind, Points: []Vec3{from, to}}
+		}
+	})
+	Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	failed, reason, detail, engaged := approachOutcome(t, rig)
+	if !failed || reason != "no-path" || detail != "path" || engaged {
+		t.Fatalf("approach: failed=%v reason=%q detail=%q engaged=%v; want no-path / path", failed, reason, detail, engaged)
+	}
+	if len(rig.fake.agentAttacks) != 0 {
+		t.Fatalf("the agent attacked %v; want no swing on a partial route", rig.fake.agentAttacks)
 	}
 }

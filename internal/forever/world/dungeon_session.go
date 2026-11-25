@@ -402,6 +402,7 @@ func (w dungeonWorld) Units() []driver.Unit {
 			Owner:    owner,
 			Faction:  o.Info.FactionTemplate,
 			Flags:    o.Info.Flags,
+			Critter:  o.Info.HasUnit && o.Info.CreatureType == creatureTypeCritter,
 		}
 		if cs, ok := w.s.world.Combat(o.GUID); ok && cs.Cast != nil {
 			u.Cast = uint32(cs.Cast.SpellID)
