@@ -427,6 +427,9 @@ func (s *session) applyNewWorld(ctx context.Context, nw objects.NewWorldPacket) 
 	s.report.WalkClientPos = pos
 	s.world.ResetForMap(uint32(nw.MapID))
 	s.dropKnockbacks()
+	// The trigger send hold is a crossing on one map: a character that zones in and straight back out stands at the
+	// portal volume again within the hold, and that is a new crossing of the new map, not the same one heard twice.
+	s.clearTriggerSends()
 	// A roster held before this character's own GUID was known is the old map's: the new map's party update follows
 	// the new world, so keeping it would apply a stale snapshot after the clear.
 	if s.party != nil && s.party.DropHeld() {

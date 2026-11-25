@@ -82,9 +82,10 @@ did, from a volume the character still stands in, less than 10 s ago — the wat
 or an earlier call. One crossing is one packet, so the explicit call that follows a walk into the portal (a follow
 loop zoning after its lead, a ghost run taking its corpse's entrance) does not repeat it.
 
-The hold clears as soon as the character leaves the volume, the map changes, a volume of that id is armed again, or
-10 s pass, so a transfer that really failed is retried by the next attempt. A trigger the watch never armed has no
-volume to hold, and every explicit call sends it.
+The hold clears as soon as the character leaves the volume, on the map change itself (a character that zones in and
+straight back out stands at the portal volume again, and that is a new crossing), when a volume of that id is armed
+again at another point, or after 10 s, so a transfer that really failed is retried by the next attempt. A trigger the
+watch never armed has no volume to hold, and every explicit call sends it.
 
 There is no server answer to wait for: check `status.map` afterwards. A map change appears in `event_log` as
 a `session` row whose `data.state` is `map_change`.

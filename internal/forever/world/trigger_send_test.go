@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/objects"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 // TestWalkThenExplicitSendSendsThePortalTriggerOnce: the walk to the portal fires the watch's packet, and the
@@ -163,5 +166,143 @@ func TestTheHeldSendClearsOnAMapChange(t *testing.T) {
 	}
 	if n := areaTriggerSends(link); n != 2 {
 		t.Fatalf("the walk and the send on the new map made %d packet(s), want two", n)
+	}
+}
+
+// transferNewWorld feeds one whole map change through the session: the transfer pending, its suspend token and the
+// new world.
+func transferNewWorld(t *testing.T, s *session, mapID int32, counter int32, x, y, z float32) {
+	t.Helper()
+	if err := feed(t, s, sideRealm, wire.SMSGTransferPending, pendingPayload(mapID, x, y, z)); err != nil {
+		t.Fatal(err)
+	}
+	if err := feed(t, s, sideInstance, wire.SMSGSuspendToken, tokenPayload(uint32(counter), 1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := feed(t, s, sideRealm, wire.SMSGNewWorld, newWorldPayload(mapID, x, y, z, 0, objects.NewWorldReasonNormal, counter)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestTriggerHoldClearsOnAMapChange: the hold is a crossing on one map. A character that zones in and straight back
+// out stands at the volume again within triggerSendHold, and that is a new crossing: the send goes out instead of
+// being swallowed as a repeat of the crossing before the zoning.
+//
+// Mutation this test catches: a hold that only compares the record's map with the session's (the round trip puts the
+// same map back, and the send is held again).
+func TestTriggerHoldClearsOnAMapChange(t *testing.T) {
+	s, link, _ := planTriggerSession(t, "auto")
+	x, y, z := float32(1000), float32(2000), float32(50)
+	r := float32(4)
+	if _, err := s.serveAreaTriggerWatch(serveAreaTriggerWatchParams{ID: 500, X: &x, Y: &y, Z: &z, Radius: &r}); err != nil {
+		t.Fatalf("the arm answered %v", err)
+	}
+	if n := areaTriggerSends(link); n != 1 {
+		t.Fatalf("arming under the character sent %d trigger(s), want one", n)
+	}
+	if err := s.EnterAreaTrigger(500); err != nil {
+		t.Fatalf("the explicit send while standing in the volume answered %v", err)
+	}
+	if n := areaTriggerSends(link); n != 1 {
+		t.Fatalf("the explicit send in the volume sent %d trigger(s) in all, want the arm's one", n)
+	}
+	// Zoning in and straight back out: the map change ends the record, so the volume's send is a new crossing.
+	transferNewWorld(t, s, 36, 3, 1000, 2000, 50)
+	transferNewWorld(t, s, 0, 4, 1000, 2000, 50)
+	if len(s.trigSends) != 0 {
+		t.Fatalf("the round trip kept %d send record(s): %+v", len(s.trigSends), s.trigSends)
+	}
+	if err := s.EnterAreaTrigger(500); err != nil {
+		t.Fatalf("the send after the round trip answered %v", err)
+	}
+	if n := areaTriggerSends(link); n != 2 {
+		t.Fatalf("the send after the round trip sent %d trigger(s) in all, want two", n)
+	}
+}
+
+// TestTriggerHoldDropsOnARearmAndOnAClear: an identical re-arm keeps the send record (the same crossing is not
+// repeated), a re-arm at another point drops it (the volume it went out from is no longer armed), and clearing the
+// watch drops every record.
+//
+// Mutations these tests catch: a re-arm that keeps the record of a moved volume (a send from the old volume holds the
+// new one), and a clear that empties the volumes but keeps the sends.
+func TestTriggerHoldDropsOnARearmAndOnAClear(t *testing.T) {
+	s, link, _ := planTriggerSession(t, "auto")
+	x, y, z := float32(1000), float32(2000), float32(50)
+	r := float32(4)
+	if _, err := s.serveAreaTriggerWatch(serveAreaTriggerWatchParams{ID: 500, X: &x, Y: &y, Z: &z, Radius: &r}); err != nil {
+		t.Fatalf("the arm answered %v", err)
+	}
+	if _, ok := s.trigSends[500]; !ok {
+		t.Fatalf("arming under the character recorded no send")
+	}
+	// An identical re-arm keeps the record, so the explicit send stays held.
+	if _, err := s.serveAreaTriggerWatch(serveAreaTriggerWatchParams{ID: 500, X: &x, Y: &y, Z: &z, Radius: &r}); err != nil {
+		t.Fatalf("the identical re-arm answered %v", err)
+	}
+	if err := s.EnterAreaTrigger(500); err != nil {
+		t.Fatalf("the explicit send answered %v", err)
+	}
+	if n := areaTriggerSends(link); n != 1 {
+		t.Fatalf("the identical re-arm's explicit send sent %d trigger(s) in all, want the arm's one", n)
+	}
+	// A moved volume drops the old record: the send belonged to a volume that is no longer armed. (The character is
+	// still inside it, so the moved arm is not a new crossing and records nothing.)
+	x2 := float32(1000.5)
+	if _, err := s.serveAreaTriggerWatch(serveAreaTriggerWatchParams{ID: 500, X: &x2, Y: &y, Z: &z, Radius: &r}); err != nil {
+		t.Fatalf("the moved re-arm answered %v", err)
+	}
+	if rec, ok := s.trigSends[500]; ok {
+		t.Fatalf("a moved volume kept the send record %+v", rec)
+	}
+	// Another id armed under the character is a crossing of its own, with its record.
+	x3 := float32(1000)
+	if _, err := s.serveAreaTriggerWatch(serveAreaTriggerWatchParams{ID: 501, X: &x3, Y: &y, Z: &z, Radius: &r}); err != nil {
+		t.Fatalf("the second arm answered %v", err)
+	}
+	if _, ok := s.trigSends[501]; !ok {
+		t.Fatalf("arming a new volume under the character recorded no send")
+	}
+	// The clear drops every record, so a trigger goes out again.
+	if _, err := s.serveAreaTriggerWatch(serveAreaTriggerWatchParams{Clear: true}); err != nil {
+		t.Fatalf("the clear answered %v", err)
+	}
+	if len(s.trigSends) != 0 {
+		t.Fatalf("the clear kept %d send record(s): %+v", len(s.trigSends), s.trigSends)
+	}
+}
+
+// TestCancelledWalkToDisarmsItsVolumes: a walk_to whose context is cancelled still removes the volumes it armed: the
+// disarm is a defer, not a line after the walk.
+//
+// Mutation this test catches: a disarm only on the walk's success path (a cancelled walk leaves the portal armed, and
+// the next crossing sends the trigger from a walk that never reached it).
+func TestCancelledWalkToDisarmsItsVolumes(t *testing.T) {
+	s, link, _ := planTriggerSession(t, "auto")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.serveWalkTo(ctx, 1010, 2000, 50); err == nil {
+		t.Fatalf("a cancelled walk answered success")
+	}
+	if s.triggerArmed(78) {
+		t.Fatalf("the cancelled walk left its volume armed: %+v", s.triggers)
+	}
+	if n := areaTriggerSends(link); n != 0 {
+		t.Fatalf("the cancelled walk sent %d trigger(s), want none", n)
+	}
+}
+
+// TestDungeonLegWalkArmsNothing: the dungeon driver's own walking port arms no trigger volume: automatic arming is
+// the daemon's walk_to and walk_path alone (a leg's walk through the same session must not arm a volume the plan's
+// step keeps, nor fire its zone from the walk in).
+//
+// Mutation this test catches: the port arming the plan's volumes for a leg walk.
+func TestDungeonLegWalkArmsNothing(t *testing.T) {
+	s, _, _ := planTriggerSession(t, "auto")
+	if err := (dungeonWalker{s: s}).Walk(context.Background(), [][3]float32{{1010, 2000, 50}}); err != nil {
+		t.Fatalf("the leg walk answered %v", err)
+	}
+	if len(s.triggers) != 0 || len(s.trigSends) != 0 {
+		t.Fatalf("a dungeon leg armed %+v and recorded %+v", s.triggers, s.trigSends)
 	}
 }
