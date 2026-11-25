@@ -383,16 +383,26 @@ type PlayFrameBot struct {
 	Combat bool
 }
 
-// PlayFrame writes one frame of a player run from the party roster, the agent's own GUID and the hostile units in
+// PlaySelf is the player run's own character as a frame writes it: its guid (the party's leader), where it stands, its
+// map and whether it is alive.
+type PlaySelf struct {
+	GUID  string
+	Pos   Vec3
+	Map   uint32
+	Alive bool
+}
+
+// PlayFrame writes one frame of a player run from the party roster, the run's own character and the hostile units in
 // view. The first frame a bot is in also writes its party record (guid, role, class and level), which the spell judge
 // joins the combat log on. A unit owned by a party member (the agent included) is the frame's pet, not a mob. It
 // reports whether the writer kept the frame (it samples). A frame never carries a character name.
-func (r *Recorder) PlayFrame(t time.Time, selfGUID string, bots []PlayFrameBot, units []Unit) bool {
+func (r *Recorder) PlayFrame(t time.Time, self PlaySelf, bots []PlayFrameBot, units []Unit) bool {
 	if r == nil || r.trace == nil {
 		return false
 	}
 	ms := r.ms(t)
 	f := trace.Frame{Via: "session", Envelope: trace.Envelope{T: ms}}
+	f.Self = &trace.Self{X: self.Pos[0], Y: self.Pos[1], Z: self.Pos[2], Map: self.Map, Alive: self.Alive}
 	for _, b := range bots {
 		m := b.Member
 		g := m.GUID.String()
@@ -418,7 +428,7 @@ func (r *Recorder) PlayFrame(t time.Time, selfGUID string, bots []PlayFrameBot, 
 		}
 	}
 	members := frameMembers(f.Bots)
-	if g := strings.ToUpper(strings.TrimSpace(selfGUID)); g != "" {
+	if g := strings.ToUpper(strings.TrimSpace(self.GUID)); g != "" {
 		members[g] = true
 	}
 	for _, u := range units {

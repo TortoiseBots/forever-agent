@@ -286,12 +286,25 @@ type Pet struct {
 	Z      float32 `json:"z"`
 }
 
+// Self is the character a frame's writer plays, where a frame is the agent's own: where it stood, its map and whether
+// it was alive. The player run's frames carry it, so a frame says how far the party stood from its leader (the distance
+// the party rules read) instead of leaving a split party to be guessed from the bots' side alone. A self is never a
+// character's name.
+type Self struct {
+	X     float32 `json:"x"`
+	Y     float32 `json:"y"`
+	Z     float32 `json:"z"`
+	Map   uint32  `json:"map,omitempty"`
+	Alive bool    `json:"al"`
+}
+
 // Frame is a sample of the world. Via is "session" (the agent's own object store and party list) or "feed" (a TBM:VIEW frame).
 type Frame struct {
 	Envelope
 	Via  string `json:"via"`
 	Seq  uint64 `json:"seq,omitempty"` // the feed's frame number
 	Cut  bool   `json:"cut,omitempty"` // the source marked the frame as cut short
+	Self *Self  `json:"self,omitempty"`
 	Bots []Bot  `json:"bots"`
 	Mobs []Mob  `json:"mobs"`
 	Pets []Pet  `json:"pt,omitempty"`

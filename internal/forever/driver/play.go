@@ -322,6 +322,13 @@ type playRun struct {
 
 	stopReason string
 	lost       bool
+	// stall is the state the run visits next whatever the state that set it returned: a walk or a wait that finds a
+	// member down hands the run to its own regroup (#256), so a death outside a fight is revived and counted instead of
+	// being walked past.
+	stall string
+	// regroupSince is when the party gate last found a living member left behind: one episode's attempts are spent once,
+	// and the walk's own straggler ladder carries the episode after them (#256).
+	regroupSince time.Time
 
 	// self is the agent's own position and map, refreshed before every decision that needs them.
 	self    Vec3
@@ -455,6 +462,11 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 	for p.stopReason == "" {
 		p.states = append(p.states, st)
 		next := p.state(ctx, st)
+		// #256: a state that found a member down (a wait, a walk) does not stop the run and does not walk on: the
+		// regroup is the next state.
+		if p.stall != "" {
+			next, p.stall = p.stall, ""
+		}
 		if p.stopReason != "" {
 			break
 		}
@@ -891,6 +903,11 @@ func (p *playRun) legWalk(ctx context.Context) string {
 	if leg == nil {
 		return StateDone
 	}
+	// #256 (i): before the run leaves the stand its fight ended on, the party is checked there: a member down hands the
+	// run to its regroup, and a living member left behind is waited for, told to follow and fetched.
+	if !p.holdParty(ctx, "stand") {
+		return ""
+	}
 	points := append(append([]Vec3(nil), leg.Via...), leg.To)
 	for p.walkAt < len(points) {
 		exact, direct := false, false
@@ -1063,6 +1080,11 @@ func (p *playRun) walkSegments(ctx context.Context, segs [][][3]float32) walkEnd
 		p.refreshSelf()
 		if _, bad := p.route.InAvoid(p.self); bad {
 			p.stop("avoid")
+			return walkStopped
+		}
+		// #256 (i): the party is checked between the walk's segments too: a member down hands the run to its regroup,
+		// and a living member a whole leg behind is waited for, told to follow and fetched before the walk goes on.
+		if !p.holdParty(ctx, "walk") {
 			return walkStopped
 		}
 		if !p.waitNear(ctx, PlayFollowYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt) {
@@ -1249,6 +1271,15 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 			p.stop("time")
 			return false
 		}
+		// #256 (ii)/(iii): a death while the walk waits is counted here (the waits are where a fight is not, and the
+		// run's deaths were only counted in one), and a member down hands the run to its own regroup instead of the
+		// wait's stop.
+		p.noteDeaths()
+		if down := p.downBots(); len(down) > 0 {
+			p.rec.Event(p.now(), "regroup_down", map[string]any{"why": "wait", "down": p.slots(down)})
+			p.stall = StateWipe
+			return false
+		}
 		far := p.farBots(yd)
 		if len(far) == 0 {
 			clear(p.farSince)
@@ -1275,7 +1306,7 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 			}
 			d := now.Sub(p.farSince[name])
 			if !now.Before(p.farStopAt[name]) {
-				p.stop("straggler")
+				p.stopStraggler(far)
 				return false
 			}
 			if d >= followAt && p.farStage[name] < 1 {
@@ -1583,19 +1614,22 @@ func (p *playRun) add(ctx context.Context, bot string) (botcmd.Reply, error) {
 	return p.ports.Owner.Add(ctx, bot)
 }
 
-// follow sends `.bot follow`.
+// follow sends `.bot follow`. The order and its time go into the record: a party that walks away from its leader is read
+// from the orders it got (#256), never from a count at the run's end.
 func (p *playRun) follow(ctx context.Context, bot string) (botcmd.Reply, error) {
 	if err := p.sendBot(botcmd.VerbFollow, bot); err != nil {
 		return botcmd.Reply{}, err
 	}
+	p.rec.Event(p.now(), "order", map[string]any{"bot": p.slot(bot), "verb": "follow"})
 	return p.ports.Owner.Follow(ctx, bot)
 }
 
-// summon sends `.bot summon`.
+// summon sends `.bot summon`, recorded like follow.
 func (p *playRun) summon(ctx context.Context, bot string) (botcmd.Reply, error) {
 	if err := p.sendBot(botcmd.VerbSummon, bot); err != nil {
 		return botcmd.Reply{}, err
 	}
+	p.rec.Event(p.now(), "order", map[string]any{"bot": p.slot(bot), "verb": "summon"})
 	return p.ports.Owner.Summon(ctx, bot)
 }
 
