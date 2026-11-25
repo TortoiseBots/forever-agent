@@ -238,7 +238,12 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			if said == ".gm" {
 				f.mu.Lock()
 				f.serveGMSent = true
+				noGM := f.serveNoGM
 				f.mu.Unlock()
+				if noGM {
+					c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSay, chat.LanguageCommon, mustGUID(f.clientGUID), wire.EmptyGUID, "", "", "", "", said))
+					continue
+				}
 				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "|- gm on"))
 				c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSystem, chat.LanguageUniversal, wire.EmptyGUID, wire.EmptyGUID, "", "", "", "", "|- gm off"))
 				continue
@@ -247,7 +252,12 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 				f.mu.Lock()
 				f.serveBotSent = true
 				script := f.serveCommander
+				echo := f.serveEchoTB
 				f.mu.Unlock()
+				if echo {
+					c.writeFrame(fakeSMSGChat, buildServerChat(chat.TypeSay, chat.LanguageCommon, mustGUID(f.clientGUID), wire.EmptyGUID, "", "", "", "", said))
+					continue
+				}
 				if script != nil {
 					// The typed client's answers carry the run's own token (the line's trailing "#..." word); the
 					// script matches the line itself and writes "#T" where the token goes.

@@ -268,3 +268,57 @@ func TestLiveLOSCheckServerBesideTheRay(t *testing.T) {
 		t.Fatalf("a pass with no server answer got the note %q", note)
 	}
 }
+
+// TestLiveKeysBySpawnID: a live unit a Forever read matched to its export spawn is keyed by that spawn id, never by
+// the low bits of its 128-bit guid (live_aggro's spawn lookup and live_joiners' position both); SpawnID 0 keeps the
+// guid's low 24 bits, as before.
+func TestLiveKeysBySpawnID(t *testing.T) {
+	rows := rowsOf(move(-20, 0, 0), move(0, 0, 0), mkPull(10, 0, 0, 5, 100))
+	w := &worldspawn.World{Spawns: []worldspawn.Spawn{
+		{GUID: 500, Entry: 100, LevelMax: 60, DetectionYd: 20, Faction: 14, Pos: dungeon.Point{X: 10}},
+		{GUID: 600, Entry: 200, LevelMax: 60, DetectionYd: 20, Faction: 14},
+	}}
+	// The guid's low 24 bits name no spawn of the export: only the SpawnID can.
+	u := world.Unit{GUID: 0x2F, SpawnID: 600, Entry: 200, Name: "Stranger", X: 3, Y: 0, Z: 0, Level: 60, Hostile: true}
+	rep := mergeOn(t, rows, nil, w, LiveData{
+		Units: map[int][]world.Unit{2: {u}},
+		LOS:   map[LOSKey]bool{{Step: 2, Guid: 600}: false},
+	})
+	if c := checkAt(t, rep, 2, CheckLiveAggro); c == nil || c.Verdict != VerdictWarn ||
+		!strings.Contains(c.Reason, "out of sight") {
+		t.Fatalf("live_aggro by spawn id: %+v", c)
+	}
+	// The same row with SpawnID 0 and the guid carrying spawn 600 behaves the same.
+	u.SpawnID, u.GUID = 0, unitGUID(200, 600)
+	rep = mergeOn(t, rows, nil, w, LiveData{
+		Units: map[int][]world.Unit{2: {u}},
+		LOS:   map[LOSKey]bool{{Step: 2, Guid: 600}: false},
+	})
+	if c := checkAt(t, rep, 2, CheckLiveAggro); c == nil || c.Verdict != VerdictWarn ||
+		!strings.Contains(c.Reason, "out of sight") {
+		t.Fatalf("live_aggro by guid: %+v", c)
+	}
+}
+
+// TestLiveJoinersKeyBySpawnID: live_joiners takes the joiner positions from the units' spawn keys, so a Forever read
+// (128-bit guid, spawn id carried) still moves them and its sight keys are the spawn ids.
+func TestLiveJoinersKeyBySpawnID(t *testing.T) {
+	rows := rowsOf(move(-20, 0, 0), move(0, 0, 0), mkPull(10, 0, 0, 5, 100))
+	w := &worldspawn.World{Spawns: []worldspawn.Spawn{
+		{GUID: 500, Entry: 100, LevelMax: 60, DetectionYd: 20, Faction: 14, Pos: dungeon.Point{X: 10}},
+		{GUID: 601, Entry: 200, LevelMax: 60, DetectionYd: 20, Faction: 14, Pos: dungeon.Point{X: 14}},
+		{GUID: 602, Entry: 200, LevelMax: 60, DetectionYd: 20, Faction: 14, Pos: dungeon.Point{X: 14, Y: 1}},
+		{GUID: 603, Entry: 200, LevelMax: 60, DetectionYd: 20, Faction: 14, Pos: dungeon.Point{X: 15}},
+	}}
+	units := []world.Unit{
+		{GUID: 0x2F, SpawnID: 601, Entry: 200, Name: "j1", X: 14, Y: 0, Z: 0, Level: 60, Hostile: true},
+		{GUID: 0x30, SpawnID: 602, Entry: 200, Name: "j2", X: 14, Y: 1, Z: 0, Level: 60, Hostile: true},
+		{GUID: 0x31, SpawnID: 603, Entry: 200, Name: "j3", X: 15, Y: 0, Z: 0, Level: 60, Hostile: true},
+	}
+	rep := mergeOn(t, rows, nil, w, LiveData{Units: map[int][]world.Unit{3: units},
+		LOS: map[LOSKey]bool{{Step: 3, Guid: 601}: true, {Step: 3, Guid: 602}: true, {Step: 3, Guid: 603}: true}})
+	c := checkAt(t, rep, 3, CheckLiveJoiners)
+	if c == nil || c.Verdict != VerdictFail || len(c.Guids) != 3 {
+		t.Fatalf("live_joiners by spawn id: %+v", c)
+	}
+}

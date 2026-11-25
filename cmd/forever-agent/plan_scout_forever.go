@@ -44,6 +44,10 @@ const (
 	// scoutForeverSightPass bounds the sight queries of one live pass. A pack larger than the bound leaves its later
 	// stands not asked (the report says so); the pass itself is never held by a slow or refusing server.
 	scoutForeverSightPass = time.Minute
+	// scoutSpawnMatchYd is how near a live unit may stand to its export spawn point (plus the spawn's wander radius)
+	// and still be that spawn: a serve unit carries no DB spawn id (a Forever guid is 128 bits), so entry and position
+	// name it, as the play run matches its packs.
+	scoutSpawnMatchYd = 10.0
 )
 
 // scoutForeverCeilingDur is how long --max-minutes gives the live pass; the tests shorten it.
@@ -392,12 +396,20 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 				}
 				return abort(fmt.Sprintf("units at %.1f %.1f %.1f: %v", spot.Point.X, spot.Point.Y, spot.Point.Z, err))
 			}
+			// A Forever serve prints 128-bit guids, whose low part is no spawn id: each live unit is named by the
+			// export spawn of its entry that stands nearest it, once per read.
+			var spawns []worldspawn.Spawn
+			var patrols []worldspawn.Patrol
+			if w != nil {
+				spawns, patrols = w.Spawns, w.Patrols
+			}
+			match := foreverMatchSpawns(units, spawns, patrols)
 			wu := make([]world.Unit, 0, len(units))
-			for _, u := range units {
+			for i, u := range units {
 				if foreverDist2D(u.X, u.Y, spot.Point.X, spot.Point.Y) > scoutForeverUnitsYd {
 					continue
 				}
-				wu = append(wu, foreverWorldUnit(u))
+				wu = append(wu, foreverWorldUnit(u, match[i]))
 			}
 			data.Units[spot.Step] = wu
 			if losOK {
@@ -417,7 +429,7 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 			}
 			// The server's own sight answer for the pull's pack, read from the stand it pulls from: it is recorded
 			// beside the ray, never instead of it, so the report can show where the two disagree.
-			if err := foreverServerSightAt(ctx, client, spot, units, &data, &sight); err != nil {
+			if err := foreverServerSightAt(ctx, client, spot, units, match, &data, &sight); err != nil {
 				if r := ceiling(); r != "" {
 					return abort(r)
 				}
@@ -442,6 +454,9 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 	}
 	if sight.unread > 0 {
 		data.Notes = append(data.Notes, fmt.Sprintf("live sight: the module's answer was not understood for %d pack unit(s) (answer not understood); those units stay unanswered and the pass went on", sight.unread))
+	}
+	if sight.unmatched > 0 {
+		data.Notes = append(data.Notes, fmt.Sprintf("live sight: %d target pack unit(s) had no live unit of their entry near their spawn; those stay unanswered", sight.unmatched))
 	}
 	budget := o.walkBudgetD
 	if budget <= 0 {
@@ -546,11 +561,12 @@ func foreverWalkRayAt(ctx context.Context, c scoutForeverClient, spot planscout.
 		if u.Dead {
 			continue
 		}
-		low := world.Low24(u.GUID)
-		if seen[low] || foreverDist2D(u.X, u.Y, spot.Point.X, spot.Point.Y) > scoutForeverUnitsYd {
+		// An unmatched unit (key 0) has no spawn to name it by: it is not read, never stored under 0.
+		key := world.UnitSpawnKey(u)
+		if key == 0 || seen[key] || foreverDist2D(u.X, u.Y, spot.Point.X, spot.Point.Y) > scoutForeverUnitsYd {
 			continue
 		}
-		seen[low] = true
+		seen[key] = true
 		ans, rerr := c.WalkRay(ctx, &from, u.X, u.Y, u.Z)
 		if rerr != nil {
 			if code, coded := serveclient.CodeOf(rerr); coded && code == rpc.CodeMethodNotFound {
@@ -565,7 +581,7 @@ func foreverWalkRayAt(ctx context.Context, c scoutForeverClient, spot planscout.
 			continue
 		}
 		if ans.Known {
-			out[planscout.LOSKey{Step: spot.Step, Guid: low}] = ans.In
+			out[planscout.LOSKey{Step: spot.Step, Guid: key}] = ans.In
 		}
 	}
 	return true, err
@@ -578,15 +594,16 @@ func foreverWalkRayAt(ctx context.Context, c scoutForeverClient, spot planscout.
 // GM, where a unit that did not resolve and a query the caller may not read answer the same code) or an answer for
 // one unit that is not understood skips that unit alone.
 type scoutForeverSight struct {
-	ok       bool
-	said     bool
-	last     time.Time // the previous query, for the pace
-	end      time.Time // the pass's bound, set at its first query
-	notAsked int       // stands whose pack was never asked
-	skipped  int       // pack units the module refused one by one
-	noAccess int       // pack units answered no-access (the creature gone, the caller below GM)
-	unread   int       // pack units whose answer was not a record this client understands (each is left unanswered)
-	timedOut bool      // the bound, not a refusal, stopped the pass
+	ok        bool
+	said      bool
+	last      time.Time // the previous query, for the pace
+	end       time.Time // the pass's bound, set at its first query
+	notAsked  int       // stands whose pack was never asked
+	skipped   int       // pack units the module refused one by one
+	noAccess  int       // pack units answered no-access (the creature gone, the caller below GM)
+	unread    int       // pack units whose answer was not a record this client understands (each is left unanswered)
+	unmatched int       // target pack units no live unit near their spawn stood for (those stay unanswered)
+	timedOut  bool      // the bound, not a refusal, stopped the pass
 }
 
 // errScoutSightEnd is the sight pass's own bound: the stand it happens on is left not asked, and the pass goes on with
@@ -654,7 +671,7 @@ func foreverLOSUnread(err error) bool {
 // the pass asks no more, while a unit the server no longer has, or whose answer is not understood, is skipped alone. An error is
 // returned only for the pass's own context ending.
 func foreverServerSightAt(ctx context.Context, c scoutForeverClient, spot planscout.LiveSpot, units []serveclient.Unit,
-	data *planscout.LiveData, sight *scoutForeverSight) error {
+	match map[int]uint32, data *planscout.LiveData, sight *scoutForeverSight) error {
 	if len(spot.TargetGuids) == 0 {
 		return nil
 	}
@@ -662,18 +679,12 @@ func foreverServerSightAt(ctx context.Context, c scoutForeverClient, spot plansc
 		sight.notAsked++
 		return nil
 	}
-	byLow := make(map[uint32]string, len(units))
-	for _, u := range units {
-		if u.Dead {
-			continue
-		}
-		guid, err := world.ParseGUID(string(u.GUID))
-		if err != nil {
-			continue
-		}
-		low := world.Low24(guid)
-		if _, seen := byLow[low]; !seen {
-			byLow[low] = string(u.GUID)
+	// The target map is the spawn match, not a guid parse: a Forever guid is 128 bits, and the `los` query takes the
+	// guid string exactly as the serve printed it.
+	bySpawn := make(map[uint32]string, len(match))
+	for ui, spawnID := range match {
+		if _, seen := bySpawn[spawnID]; !seen {
+			bySpawn[spawnID] = string(units[ui].GUID)
 		}
 	}
 	stand := fmt.Sprintf("%s,%s,%s", foreverNum(spot.LOSPoint.X), foreverNum(spot.LOSPoint.Y), foreverNum(spot.LOSPoint.Z))
@@ -685,9 +696,11 @@ func foreverServerSightAt(ctx context.Context, c scoutForeverClient, spot plansc
 		}
 	}
 	for _, t := range spot.TargetGuids {
-		guid, ok := byLow[t.Guid]
+		guid, ok := bySpawn[t.Guid]
 		if !ok {
-			continue // a pack unit the live read never saw: there is no guid to name it by
+			// A pack unit the live read never saw (or saw nowhere near its spawn): there is no guid to name it by.
+			sight.unmatched++
+			continue
 		}
 		ans, err := sight.ask(ctx, c, stand, guid)
 		if err != nil {
@@ -926,8 +939,103 @@ func foreverDist2D(ax, ay, bx, by float32) float64 {
 	return math.Hypot(float64(ax-bx), float64(ay-by))
 }
 
+// foreverMatchSpawns names each live creature by its export spawn: same entry, nearest spawn point within
+// scoutSpawnMatchYd + the spawn's wander radius, one live unit per spawn, pairs taken nearest first (deterministic).
+// A spawn that walks a patrol also matches a unit within scoutSpawnMatchYd of that patrol's loop (its closing leg
+// included). Players, dead units and entry 0 are never matched; a spawn id that does not fit uint32 is skipped.
+func foreverMatchSpawns(units []serveclient.Unit, spawns []worldspawn.Spawn, patrols []worldspawn.Patrol) map[int]uint32 {
+	paths := map[uint64][]dungeon.Point{}
+	for _, pt := range patrols {
+		if len(pt.Path) < 2 {
+			continue
+		}
+		for _, g := range pt.SpawnGUIDs {
+			paths[g] = pt.Path
+		}
+	}
+	byEntry := map[uint32][]int{}
+	for i := range spawns {
+		if sp := spawns[i]; sp.Entry != 0 && sp.GUID <= math.MaxUint32 {
+			byEntry[sp.Entry] = append(byEntry[sp.Entry], i)
+		}
+	}
+	type pair struct {
+		spawn, unit int
+		d           float64
+	}
+	var pairs []pair
+	for ui, u := range units {
+		if u.Dead || u.Type == "player" || u.Entry <= 0 {
+			continue
+		}
+		at := dungeon.Point{X: u.X, Y: u.Y, Z: u.Z}
+		for _, si := range byEntry[uint32(u.Entry)] {
+			sp := spawns[si]
+			best, ok := math.Inf(1), false
+			if d := mathDist3(at, sp.Pos); d <= scoutSpawnMatchYd+float64(sp.Wander) {
+				best, ok = d, true
+			}
+			if path, patrolling := paths[sp.GUID]; patrolling {
+				if d := foreverDistToLoop(at, path); d <= scoutSpawnMatchYd && (!ok || d < best) {
+					best, ok = d, true
+				}
+			}
+			if ok {
+				pairs = append(pairs, pair{spawn: si, unit: ui, d: best})
+			}
+		}
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		a, b := pairs[i], pairs[j]
+		if a.d != b.d {
+			return a.d < b.d
+		}
+		if ga, gb := spawns[a.spawn].GUID, spawns[b.spawn].GUID; ga != gb {
+			return ga < gb
+		}
+		return a.unit < b.unit
+	})
+	out := map[int]uint32{}
+	used := map[int]bool{}
+	for _, p := range pairs {
+		if used[p.spawn] {
+			continue
+		}
+		if _, taken := out[p.unit]; taken {
+			continue
+		}
+		used[p.spawn] = true
+		out[p.unit] = uint32(spawns[p.spawn].GUID)
+	}
+	return out
+}
+
+// foreverDistToLoop is the 3D distance from p to a patrol's loop of waypoints, its closing leg included.
+func foreverDistToLoop(p dungeon.Point, path []dungeon.Point) float64 {
+	best := math.Inf(1)
+	for i := range path {
+		if d := foreverDistToSegment(p, path[i], path[(i+1)%len(path)]); d < best {
+			best = d
+		}
+	}
+	return best
+}
+
+// foreverDistToSegment is the 3D distance from p to the segment a-b.
+func foreverDistToSegment(p, a, b dungeon.Point) float64 {
+	dx, dy, dz := float64(b.X-a.X), float64(b.Y-a.Y), float64(b.Z-a.Z)
+	px, py, pz := float64(p.X-a.X), float64(p.Y-a.Y), float64(p.Z-a.Z)
+	l := dx*dx + dy*dy + dz*dz
+	if l == 0 {
+		return math.Sqrt(px*px + py*py + pz*pz)
+	}
+	t := math.Max(0, math.Min(1, (px*dx+py*dy+pz*dz)/l))
+	qx, qy, qz := px-t*dx, py-t*dy, pz-t*dz
+	return math.Sqrt(qx*qx + qy*qy + qz*qz)
+}
+
 // foreverWorldUnit is a serve unit as the scout's live checks take it.
-func foreverWorldUnit(u serveclient.Unit) world.Unit {
+func foreverWorldUnit(u serveclient.Unit, spawnID uint32) world.Unit {
 	guid, _ := world.ParseGUID(string(u.GUID))
 	health := u.Health
 	if health < 0 {
@@ -942,6 +1050,7 @@ func foreverWorldUnit(u serveclient.Unit) world.Unit {
 		X: u.X, Y: u.Y, Z: u.Z, O: u.O, Distance: u.Distance, Distance2D: u.Distance2D,
 		Health: uint32(health), MaxHealth: uint32(maxHealth), Level: uint32(max(u.Level, 0)),
 		Class: u.Class, InCombat: u.InCombat, Dead: u.Dead, Ghost: u.Ghost, Moving: u.Moving,
+		SpawnID: spawnID,
 	}
 }
 

@@ -6,6 +6,7 @@ package world
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -192,4 +193,125 @@ func TestServeLOSParams(t *testing.T) {
 	}
 	a.stop(t)
 	f.wait(t)
+}
+
+// The los method below GM (part of #88): a session whose account is not a GM may still run the one read-only sight
+// line the player run sends, because the module answers that shape for a player account; every other line of the
+// method keeps the guard, and a module that says the line aloud is refused as the module's own answer.
+
+// sightGuid is a creature guid as the daemon prints one.
+const sightGuid = "0000000000000000000000000000BEEF"
+
+// TestServeLOSNonGMSightShapeSkipsProbe: the player run's shape (a spot and a guid) goes out without the GM probe and
+// the module's answer is the call's result.
+func TestServeLOSNonGMSightShapeSkipsProbe(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveNoGM = true
+	f.serveCommander = func(line string) []string {
+		if !strings.HasPrefix(line, ".tb los ") {
+			return nil
+		}
+		return []string{"los a=-7.00,0.00,0.00 b=ForeverRat map=700 los=1 dist=3.0 same_map=1 in_world=1 #T"}
+	}
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	var out ServeLOS
+	json.Unmarshal(a.mustCall(t, "los", map[string]any{"a": "-7,0,0", "b": sightGuid}), &out)
+	if !out.Clear || out.Reason != "" || out.B != "ForeverRat" || out.DistYD == nil || *out.DistYD != 3.0 {
+		t.Fatalf("answer %+v", out)
+	}
+	if lines := f.serveTBLines(); len(lines) != 1 || !strings.HasPrefix(lines[0], ".tb los -7,0,0 "+strings.ToLower(sightGuid)) {
+		t.Fatalf("the fake saw %q; want the one sight line", lines)
+	}
+	if f.serveGMProbed() {
+		t.Fatal("the non-GM sight call sent the GM probe")
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeLOSNonGMOtherShapeStillProbes: a shape outside the player run's sight line ("target" is not a side the
+// player line takes) keeps the guard, and the account's missing permission is the call's error.
+func TestServeLOSNonGMOtherShapeStillProbes(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveNoGM = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	a.mustFail(t, "los", map[string]any{"a": "target", "b": sightGuid}, -32003, "not a GM")
+	if !f.serveGMProbed() {
+		t.Fatal("the call did not probe the GM permission")
+	}
+	if lines := f.serveTBLines(); len(lines) != 0 {
+		t.Fatalf("a guarded call sent %q", lines)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeLOSNonGMSaidAloud: a module that says the sight line aloud gives the account no sight query; the call is
+// refused with the module's own answer and the session's guard is not poisoned (a `.bot` line still goes out).
+func TestServeLOSNonGMSaidAloud(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveNoGM = true
+	f.serveEchoTB = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	a.mustFail(t, "los", map[string]any{"a": "-7,0,0", "b": sightGuid}, -32003, "said aloud")
+	// The guard is not poisoned: a `.bot` owner line still goes out.
+	_, rerr := a.call(t, "bot", map[string]any{"line": ".bot who"})
+	f.mu.Lock()
+	said := append([]string(nil), f.serveGMLines...)
+	f.mu.Unlock()
+	if rerr != nil || !slices.Contains(said, ".bot who") {
+		t.Fatalf("the bot line did not go out after the sight echo: %q (%+v)", said, rerr)
+	}
+	if n := len(f.serveTBLines()); n != 1 {
+		t.Fatalf("%d sight line(s) reached the server, want the one the call sent", n)
+	}
+	if f.serveGMProbed() {
+		t.Fatal("the said-aloud path sent the GM probe")
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeBotTBLineStillGuarded: the `bot` method's `.tb` line is not the player run's sight shape, so an unconfirmed
+// account is refused and nothing is sent.
+func TestServeBotTBLineStillGuarded(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.serveNoGM = true
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	waitServeState(t, a, "online", steps)
+
+	a.mustFail(t, "bot", map[string]any{"line": ".tb state"}, -32003, "not a GM")
+	if !f.serveGMProbed() {
+		t.Fatal("the `.tb` bot line did not probe the GM permission")
+	}
+	if lines := f.serveTBLines(); len(lines) != 0 {
+		t.Fatalf("the guarded line was sent: %q", lines)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// serveGMProbed reports whether the fake saw the `.gm` probe.
+func (f *fakeServer) serveGMProbed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.serveGMSent
 }

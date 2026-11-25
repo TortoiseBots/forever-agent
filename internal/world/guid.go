@@ -27,6 +27,16 @@ func SpawnLow(g GUID) uint32 {
 // internal/raidwalk/gmclear.go's SpawnGUID).
 func Low24(g GUID) uint32 { return uint32(uint64(g) & 0x00FFFFFF) }
 
+// UnitSpawnKey is the DB spawn id a unit is keyed by: its own SpawnID when the reader matched it to a spawn, else the
+// low 24 bits of its guid. A Forever serve prints 128-bit guids whose low part is an instance counter, so a live read
+// there must carry the spawn id itself.
+func UnitSpawnKey(u Unit) uint32 {
+	if u.SpawnID != 0 {
+		return u.SpawnID
+	}
+	return Low24(u.GUID)
+}
+
 // CreatureGUID builds the creature guid of entry and DB spawn id.
 func CreatureGUID(entry, spawn uint32) GUID {
 	return GUID(uint64(packet.HighUnit)<<48 | uint64(entry)<<24 | uint64(spawn))

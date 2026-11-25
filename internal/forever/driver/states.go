@@ -2092,7 +2092,29 @@ func (r *Run) isPatrolMember(g Group, ui int, units []Unit, claim packClaim) boo
 	if _, ok := claim.GroupOf(ui); ok {
 		return false
 	}
-	return onPath(g.Patrol.Path, u.Pos, 10)
+	return patrolOnPath(g, u)
+}
+
+// PatrolPathYd is how near a patrol's path a unit must stand to count as that patrol's member: the watch driver's
+// number. A unit of the patrol's entries standing anywhere else (an add of another pack, a spawn 100 yd back) is not
+// the patrol.
+const PatrolPathYd = 10.0
+
+// patrolOnPath says whether a live unit counts as group g's patrol member: one of the patrol's entries and, when the
+// plan gives the patrol a path, within PatrolPathYd of it. A patrol's path is a loop (its period is the round), so the
+// leg from the last point back to the first is its path too. A patrol without a path keeps the entry-only rule.
+func patrolOnPath(g Group, u Unit) bool {
+	if g.Patrol == nil || u.Dead || u.Friendly || !entryIn(g.Patrol.Entries, u.Entry) {
+		return false
+	}
+	path := g.Patrol.Path
+	if len(path) == 0 {
+		return true
+	}
+	if onPath(path, u.Pos, PatrolPathYd) {
+		return true
+	}
+	return distToSegment(u.Pos, path[len(path)-1], path[0]) <= PatrolPathYd
 }
 
 // onPath says whether p lies within near yards of the patrol's polyline.

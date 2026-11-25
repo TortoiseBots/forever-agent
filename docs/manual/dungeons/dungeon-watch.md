@@ -159,7 +159,7 @@ With `--out` the watch writes:
   read, because the module erases its capture with the run: at most one poll's rows are missing, and the `note` says
   so and names the last sequence read, or says that no row was read. A failed or slow read widens the missing window
   (the rows after the last good read go with the capture): after a failure the watch waits longer before its next try
-  (2 s, then 4 s, 8 s and so on up to a minute), so a hanging module costs one 30 s bound now and then, not one on
+  (4 s, then 8 s, 16 s, 32 s and a minute at most), so a hanging module costs one 30 s bound now and then, not one on
   every status poll. A run this watch stops itself has no such loss: it reads once more before the stop.
 
 The report card (`card: ...`) names the verdict `CLEARED`, `STOPPED AT <leg/step> (<reason>)` or `PAUSED-STUCK AT

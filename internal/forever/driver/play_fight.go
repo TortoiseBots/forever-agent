@@ -2032,6 +2032,7 @@ func (p *playRun) agentWalkTo(ctx context.Context, to Vec3, deadline time.Time) 
 		return
 	}
 	if route.Kind != navmesh.RouteComplete {
+		p.walkPartial(route, to, "pull")
 		p.stop("walk:" + string(route.Kind))
 		return
 	}
@@ -3019,8 +3020,9 @@ func (p *playRun) boss(ctx context.Context) string {
 // --- the fight's small helpers ---
 
 // liveMembers is the pack's living units in view: MatchPacks' claim, plus the group's live patrol members within
-// PlayPullYd of the agent. A patrol walks out of the pack's claim (and its spawn leaves the pack's radius), so a group
-// met only by its patrol would otherwise be marked pulled without a fight.
+// PlayPullYd of the agent on the patrol's path (patrolOnPath). A patrol walks out of the pack's claim (and its spawn
+// leaves the pack's radius), so a group met only by its patrol would otherwise be marked pulled without a fight, and a
+// unit of the patrol's entry off its path is not the patrol (an add of the boss's own fight).
 func (p *playRun) liveMembers(g Group) []Unit {
 	units := p.ports.World.Units()
 	claim := p.claim(units)
@@ -3038,7 +3040,7 @@ func (p *playRun) liveMembers(g Group) []Unit {
 	}
 	if g.Patrol != nil {
 		for _, u := range units {
-			if !slices.Contains(g.Patrol.Entries, u.Entry) {
+			if !patrolOnPath(g, u) {
 				continue
 			}
 			if dist3(u.Pos, p.self) <= PlayPullYd {
