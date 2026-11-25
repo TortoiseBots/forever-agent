@@ -659,7 +659,9 @@ round's notes.
 reads the roster dashboard of a server: the typed login, every logged-in bot (class, level, health, power, map, zone,
 instance, position, target, group, kind and state) and the heartbeat. The heartbeat is taken from the bots answer when
 the dashboard sends it there, and otherwise from `GET /api/v1/status` (this port keeps it there; a dashboard with no
-such route is a roster without a heartbeat, not a failed read). Without `--watch` it prints that roster once.
+such route is a roster without a heartbeat, not a failed read). That fallback read is optional, so it has its own
+half-second bound instead of `--timeout`: a status route that hangs costs a sample half a second, never the roster's
+delivery. Without `--watch` it prints that roster once.
 With `--watch` the first read is the baseline: it prints the roster, then every later read prints the heartbeat line
 (`roster: N bot(s), M human(s); states ...`) at the `--interval` pace, followed by the changes: a bot that died, a bot
 whose state says moving but whose position has not changed for `--stuck-after` (default 20 s), a bot in combat with

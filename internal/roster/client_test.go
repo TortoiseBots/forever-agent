@@ -466,3 +466,44 @@ func TestRosterWithoutAStatusRouteIsStillARoster(t *testing.T) {
 		t.Fatalf("heartbeat = %+v, want nil", r2.Heartbeat)
 	}
 }
+
+// TestRosterDoesNotWaitOnAHangingStatusRoute: the status read only supplies a heartbeat, so a dashboard whose bots
+// route answers while its status route never does must still deliver the roster. The optional read has its own short
+// bound and must not spend the timeout the caller gave the roster (5 s here) before the roster stands.
+func TestRosterDoesNotWaitOnAHangingStatusRoute(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/bots":
+			fmt.Fprint(w, `[{"name":"Ash","guid":1,"kind":"pool","state":"idle","hp":10,"max_hp":10,"map":0,"instance":"","x":0,"y":0,"z":0}]`)
+		case "/api/v1/status":
+			// A status route that hangs while the bots route is healthy: answer only when the client hangs up or the
+			// test is done.
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	c := newTestClient(t, srv.URL, 5*time.Second)
+	start := time.Now()
+	r, err := c.Roster(context.Background())
+	waited := time.Since(start)
+	if err != nil {
+		t.Fatalf("Roster: %v", err)
+	}
+	if len(r.Bots) != 1 {
+		t.Fatalf("bots = %+v, want the roster kept", r.Bots)
+	}
+	if r.Heartbeat != nil {
+		t.Fatalf("heartbeat = %+v, want nil when the status route never answers", r.Heartbeat)
+	}
+	if waited > 2*time.Second {
+		t.Fatalf("Roster waited %v on a status route that never answers: the optional heartbeat read must be bounded well below the caller's request timeout", waited)
+	}
+}

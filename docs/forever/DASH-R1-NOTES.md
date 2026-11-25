@@ -62,7 +62,10 @@ The heartbeat is assumed to travel in the bots answer. If the port moves it to i
 and the `Roster` type change; the watch rules do not read it. This port does exactly that: `GET /api/v1/bots`
 answers a bare list and `GET /api/v1/status` carries the heartbeat (`bots`, `humans`, `states`), so `Client.Roster`
 asks the status route whenever the bots answer has none (#236 point 2). A dashboard without the route is a roster
-without a heartbeat, never a failed read.
+without a heartbeat, never a failed read. The fallback is optional, so its read carries its own half-second bound
+(`heartbeatTimeout`) rather than the caller's `--timeout`: a status route that hangs behind a healthy bots route
+costs each sample half a second, not the 15 s default; a test holds `/api/v1/status` open and asserts `Roster`
+returns promptly.
 
 The same port names seven states: the four the rules read (`idle`, `moving`, `combat`, `dead`) and three macro
 states of its own (`busy`, `stalled`, `resting`). All seven are kept (#236 point 2: a busy bot used to be skipped as

@@ -28,6 +28,11 @@ const (
 	// statusPath carries the same heartbeat this port keeps off the bots answer (#236 point 2): the module's
 	// GET /api/v1/bots is a bare list and its status route holds bots, humans and the state ratios.
 	statusPath = "/api/v1/status"
+	// heartbeatTimeout bounds that optional status read. The roster is the read a watch needs, so a status
+	// route that hangs must cost a fraction of a second per sample, never the caller's request timeout
+	// (15 s by default); a dashboard's status answer is an in-memory snapshot served at its own 2 s cycle,
+	// so half a second is far past a healthy answer.
+	heartbeatTimeout = 500 * time.Millisecond
 )
 
 // serverStatus is the part of GET /api/v1/status the roster reads. The route also carries freshness and tick lag;
@@ -441,8 +446,11 @@ func (c *Client) Roster(ctx context.Context) (*Roster, error) {
 }
 
 // statusHeartbeat reads the heartbeat off GET /api/v1/status. It is best effort: the bots roster is the read that
-// matters, so a dashboard without the route (or a bad answer there) is a roster without a heartbeat.
+// matters, so a dashboard without the route (or a bad answer there) is a roster without a heartbeat. Its read gets
+// heartbeatTimeout, not the client's request timeout, so a hanging status route cannot hold the roster.
 func (c *Client) statusHeartbeat(ctx context.Context) *Heartbeat {
+	ctx, cancel := context.WithTimeout(ctx, heartbeatTimeout)
+	defer cancel()
 	raw, err := c.dash.GetJSON(ctx, statusPath, nil)
 	if err != nil {
 		return nil
