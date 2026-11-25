@@ -6,16 +6,20 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pjerra/forever-agent/internal/forever/wire"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 )
 
-// The party gate of a player run (forever-agent #256): the leader does not leave a fight's stand, and does not walk a
-// leg, while a living member of the party is left behind. A member beyond PlayRegroupYd is waited for, told to follow
-// once, and fetched with a bounded walk back; a party still behind after those attempts is left to the walk's own
-// straggler ladder (the follow, the summon, the stop), whose stop names who was behind and how far. A member down is the
-// run's own regroup (WIPE) before any travel, so the healer's raise (or the corpse-run whispers) brings it back and the
-// death is counted.
+// The party gate of a player run (forever-agent #256): the leader does not leave a fight's stand, does not walk a leg,
+// and does not gather a pull, while a living member of the party is left behind. A member beyond PlayRegroupYd is waited
+// for, told to follow once, and fetched with a bounded walk back on the walk's own rules (the navmesh, the pack
+// clearances, the fight); a party still behind after those attempts is left to the walk's own straggler ladder (the
+// follow, the summon, the stop), whose stop names who was behind and how far. A member down is the run's own regroup
+// (WIPE) before any travel, so the healer's raise (or the corpse-run whispers) brings it back and the death is counted.
 //
 // The numbers are the lead's decisions on issue #256: PlayRegroupYd is well past PlayFollowYd, so a bot a corner behind
 // on a normal walk is not a left-behind party and a normal run waits exactly as it did.
@@ -38,25 +42,42 @@ const (
 	PlayRegroupTries = 2
 	// PlayRegroupBackTime bounds the whole walk back of one party gate (60 s).
 	PlayRegroupBackTime = 60 * time.Second
+	// PlayRegroupLimit is how many regroups one pull may cost before the run stops naming it (2): a death that keeps
+	// taking the party out of the same pull is ground the plan does not mark (the live run's environmental damage at a
+	// pull stand), and re-entering that pull is not a run that can finish.
+	PlayRegroupLimit = 2
+	// PlayRegroupClearYd is how much nearer a walk back's point may come to an uncleared pack than the leader already
+	// stands (0.5 yd): the plan's own pull stand sits beside its pack, so a step away from it is clear and only a step
+	// toward the pack is refused.
+	PlayRegroupClearYd = 0.5
 )
 
-// holdParty is the gate a walk passes before it starts and between its segments: it counts the party's deaths, holds
-// the run while a living member is left behind (wait, one follow order, a bounded walk back), and hands a member's
-// death to the run's regroup. It reports whether the walk may go on; a stop of the run's or the regroup's own state is
-// set when it may not (p.stopReason, or p.stall for the death).
+// holdParty is the gate a walk passes before it starts, between its segments, and at a pull's gather: it counts the
+// party's deaths, holds the run while a living member is left behind (wait, one follow order, a bounded walk back), and
+// hands a member's death to the run's regroup. It reports whether the walk may go on; a stop of the run's or the
+// regroup's own state is set when it may not (p.stopReason, or p.stall for the death or for the fight the party is in).
 func (p *playRun) holdParty(ctx context.Context, why string) bool {
 	if p.stopReason != "" {
 		return false
 	}
 	p.refreshSelf()
+	if !p.leaderAlive() {
+		return false
+	}
 	p.noteDeaths()
 	if down := p.downBots(); len(down) > 0 {
 		// #256 (ii): a member down is brought back before the walk goes on, through the run's own revive path (the
 		// healer's raise out of combat, then the corpse-run whispers), and the death is in the count above.
-		p.rec.Event(p.now(), "regroup_down", map[string]any{"why": why, "down": p.slots(down)})
-		p.stall, p.resume = StateWipe, StateLegWalk
+		p.stallRegroup(why, down)
 		return false
 	}
+	return p.holdGate(ctx, why)
+}
+
+// holdGate is the gate's hold on a living party left behind, after the deaths are read: wait, one follow order, a
+// bounded walk back, and the ladder's own arm when the attempts are spent.
+func (p *playRun) holdGate(ctx context.Context, why string) bool {
+	p.refreshSelf()
 	far := p.regroupFar()
 	if len(far) == 0 {
 		p.regroupSince = time.Time{}
@@ -68,14 +89,15 @@ func (p *playRun) holdParty(ctx context.Context, why string) bool {
 		return true
 	}
 	p.regroupSince = p.now()
-	p.rec.Event(p.now(), "regroup", map[string]any{"why": why, "bots": p.slots(far), "yd": p.regroupYds(far)})
+	p.rec.Event(p.now(), "regroup_hold", map[string]any{"why": why, "bots": p.slots(far), "yd": p.regroupYds(far)})
 	if p.regroupWait(ctx, PlayRegroupWait) {
 		p.regroupSince = time.Time{}
 		p.rec.Event(p.now(), "regroup_join", map[string]any{"why": why})
 		return true
 	}
-	if p.stall != "" {
-		return false // a member fell during the wait: the regroup is next, not a follow order
+	if p.stall != "" || p.stopReason != "" {
+		// A member fell during the wait (the regroup is next), or the party is fighting (FIGHT is), or the run stopped.
+		return false
 	}
 	// One follow order for the ones still behind, and one more bounded wait.
 	far = p.regroupFar()
@@ -90,7 +112,7 @@ func (p *playRun) holdParty(ctx context.Context, why string) bool {
 		p.rec.Event(p.now(), "regroup_join", map[string]any{"why": why})
 		return true
 	}
-	if p.stall != "" {
+	if p.stall != "" || p.stopReason != "" {
 		return false
 	}
 	until := p.now().Add(PlayRegroupBackTime)
@@ -110,15 +132,32 @@ func (p *playRun) holdParty(ctx context.Context, why string) bool {
 			return false
 		}
 		p.rec.Event(p.now(), "regroup_back", map[string]any{"x": to[0], "y": to[1], "z": to[2], "yd": dist3(p.self, to)})
-		if !p.walkBack(ctx, to) {
+		switch p.walkBack(ctx, to, until) {
+		case walkBackStopped:
 			return false
+		case walkBackFight:
+			// The party is in a fight: the leader joins it (FIGHT) instead of standing beside it (#256).
+			p.stallFight()
+			return false
+		case walkBackBlocked:
+			// The way back runs through an uncleared pack or past a patrol's radius: the step is not taken, and the
+			// walk's own ladder is the last arm.
+			p.rec.Event(p.now(), "regroup_blocked", map[string]any{"bots": p.slots(far), "yd": p.regroupYds(far)})
+			until = time.Time{}
+			continue
+		case walkBackTimeout:
+			// The gate's walk-back time is spent: the walk's own ladder is the last arm, and its stop names who was
+			// behind.
+			p.rec.Event(p.now(), "regroup_timeout", map[string]any{"bots": p.slots(far), "yd": p.regroupYds(far)})
+			until = time.Time{}
+			continue
 		}
 		if p.regroupWait(ctx, PlayRegroupFollowWait) {
 			p.regroupSince = time.Time{}
 			p.rec.Event(p.now(), "regroup_join", map[string]any{"why": why})
 			return true
 		}
-		if p.stall != "" {
+		if p.stall != "" || p.stopReason != "" {
 			return false
 		}
 	}
@@ -130,6 +169,118 @@ func (p *playRun) holdParty(ctx context.Context, why string) bool {
 	// was behind and how far (stopStraggler).
 	p.rec.Event(p.now(), "regroup_giveup", map[string]any{"why": why, "bots": p.slots(far), "yd": p.regroupYds(far)})
 	return true
+}
+
+// stallRegroup hands a walk's or a wait's member-down to the run's own regroup: the state goes to WIPE, the resume is
+// what the death interrupted (TRAVEL outside the instance, else the leg walk that re-enters the pull or the boss it was
+// gathering for), and a pull that keeps costing regroups stops the run naming it (#256).
+func (p *playRun) stallRegroup(why string, down []string) {
+	p.rec.Event(p.now(), "regroup_down", map[string]any{"why": why, "down": p.slots(down)})
+	p.resume = StateLegWalk
+	if p.selfMap != p.route.Map {
+		p.resume = StateTravel
+	}
+	p.stall = StateWipe
+	if !p.regroupAllowed() {
+		p.stall = ""
+	}
+}
+
+// stallFight hands the run to the fight its party is already in: the chief's FIGHT state, with the pull in hand or, when
+// the fight is not the run's own, armed from the view (joinFight), and the leg walk the regroup goes back to after it.
+func (p *playRun) stallFight() {
+	if p.selfMap != p.route.Map {
+		return // outside the instance the plan's fight rules do not hold; the gate's own waits carry it
+	}
+	p.joinFight()
+	p.stall, p.resume = StateFight, StateLegWalk
+}
+
+// joinFight arms the fight a regroup walks into: a hostile already on the party is the pull's set (and the one on the
+// tank, else the nearest, its skull), so a fight the leader was not the one to start is ordered and watched like its
+// own. A pull already in hand keeps its own set and skull.
+func (p *playRun) joinFight() {
+	units := p.ports.World.Units()
+	// A pull in hand whose own units are on the party is the fight's already: its set and skull stay.
+	if len(p.pullSet) > 0 && !p.skull.IsZero() {
+		for _, u := range units {
+			if !u.Dead && !u.Friendly && slices.Contains(p.pullSet, u.GUID) && p.partyMember(u.Target) {
+				return
+			}
+		}
+	}
+	set := make([]wire.GUID, 0, len(units))
+	best, bestD := Unit{}, math.Inf(1)
+	tank := p.tankGUID()
+	var onTank Unit
+	for _, u := range units {
+		if u.Dead || u.Friendly || !p.partyMember(u.Target) {
+			continue
+		}
+		set = append(set, u.GUID)
+		if !tank.IsZero() && u.Target == tank {
+			onTank = u
+		}
+		if d := dist3(u.Pos, p.self); d < bestD {
+			best, bestD = u, d
+		}
+	}
+	if len(set) == 0 {
+		return
+	}
+	p.pullSet = set
+	p.skull = best.GUID
+	if !onTank.GUID.IsZero() {
+		p.skull = onTank.GUID
+	}
+	p.rec.Event(p.now(), "fight_join", map[string]any{"skull": p.skull.String(), "units": len(set)})
+}
+
+// regroupAllowed counts a regroup against the pull in hand and stops the run once that pull has had its
+// PlayRegroupLimit already: `regroup-limit:group-<id>`, `regroup-limit:boss-<entry>` or
+// `regroup-limit:stranger-<entry>` names the pull the run will not re-enter.
+func (p *playRun) regroupAllowed() bool {
+	key := p.pullKey()
+	if key == "" {
+		return true
+	}
+	if p.regroups == nil {
+		p.regroups = map[string]int{}
+	}
+	p.regroups[key]++
+	if p.regroups[key] <= PlayRegroupLimit {
+		return true
+	}
+	p.stop("regroup-limit:" + key)
+	return false
+}
+
+// pullKey names the pull in hand: `group-<id>`, `boss-<entry>`, `stranger-<entry>`, or "" between pulls.
+func (p *playRun) pullKey() string {
+	switch {
+	case !p.stranger.IsZero():
+		if u, ok := unitByGUID(p.ports.World.Units(), p.stranger); ok {
+			return "stranger-" + strconv.FormatUint(uint64(u.Entry), 10)
+		}
+		return "stranger"
+	case p.pack >= 0:
+		return "group-" + strconv.Itoa(p.pack)
+	case p.bossRun:
+		if leg := p.leg(); leg != nil && leg.Boss != nil {
+			return "boss-" + strconv.FormatUint(uint64(leg.Boss.Entry), 10)
+		}
+	}
+	return ""
+}
+
+// leaderAlive says whether the character still stands: the gate's waits stop the run when the leader falls, because no
+// wait or walk can put it back (the character's own death is DEAD_WAIT's, entered from a fight it can see).
+func (p *playRun) leaderAlive() bool {
+	if p.ports.Player.Phase() == PhaseAlive {
+		return true
+	}
+	p.stop("not-alive")
+	return false
 }
 
 // resumed is the state the run goes back to after a regroup's rest: the one a death interrupted (TRAVEL outside the
@@ -174,15 +325,24 @@ func (p *playRun) regroupYds(names []string) []int {
 
 // regroupWait waits up to d for the party to come back, reporting whether it did. A member that falls during the wait
 // is not a party that came back: the run's regroup is next (p.stall, p.resume) and the wait reports false, so the gate
-// does not send its follow or walk on past the corpse. A stop of the run's ends it too.
+// does not send its follow or walk on past the corpse. A party found fighting is the fight's: the leader joins it
+// (FIGHT) instead of standing out of it (#256). A stop of the run's ends the wait too.
 func (p *playRun) regroupWait(ctx context.Context, d time.Duration) bool {
 	until := p.now().Add(d)
 	for {
+		if !p.leaderAlive() {
+			return false
+		}
 		p.noteDeaths()
 		if down := p.downBots(); len(down) > 0 {
-			p.rec.Event(p.now(), "regroup_down", map[string]any{"why": "wait", "down": p.slots(down)})
-			p.stall, p.resume = StateWipe, StateLegWalk
+			p.stallRegroup("wait", down)
 			return false
+		}
+		if p.selfMap == p.route.Map && p.inCombat() {
+			p.stallFight()
+			if p.stall != "" {
+				return false
+			}
 		}
 		if len(p.regroupFar()) == 0 {
 			return true
@@ -241,13 +401,38 @@ func (p *playRun) backTarget(far []string) (Vec3, bool) {
 	return to, true
 }
 
-// walkBack walks the leader one bounded step back toward its party: a plain walk on ground the party stands on, with no
-// party gate (this is the gate's own step) and no pack in the way (a pack met there is fought by the leg after the
-// party is together). A map change, a lost link or a walk the walker refuses is the run's.
-func (p *playRun) walkBack(ctx context.Context, to Vec3) bool {
-	from := [3]float32{p.self[0], p.self[1], p.self[2]}
-	end := [3]float32{to[0], to[1], to[2]}
-	if err := p.ports.Walker.Walk(ctx, [][3]float32{from, end}); err != nil {
+// walkBackEnd is how a walk back ended.
+type walkBackEnd int
+
+const (
+	// walkBackArrived is the step's end reached.
+	walkBackArrived walkBackEnd = iota
+	// walkBackTimeout is the gate's or the run's own time spent on the step.
+	walkBackTimeout
+	// walkBackBlocked is a way back through an uncleared pack or past a patrol-radius hostile: the step is not taken.
+	walkBackBlocked
+	// walkBackFight is a party already fighting: the run's FIGHT is next.
+	walkBackFight
+	// walkBackStopped is a stop of the run's own.
+	walkBackStopped
+)
+
+// walkBack walks the leader one bounded step back toward its party on the walk's own rules: the navmesh route cut into
+// segments of PlaySegmentYd, out of the plan's avoid ground, clear of every uncleared pack's radius and every
+// patrol-radius hostile the plan does not name, under the earlier of the gate's deadline (until) and the run's own
+// budget — a blocked walker is cancelled there, never waited out. It skips the party gate (this is the gate's own step)
+// and a party found fighting hands the run to FIGHT at once (#256).
+func (p *playRun) walkBack(ctx context.Context, to Vec3, until time.Time) walkBackEnd {
+	if p.timeUp() {
+		p.stop("time")
+		return walkBackStopped
+	}
+	p.refreshSelf()
+	if dist3(p.self, to) <= PlayArriveYd {
+		return walkBackArrived
+	}
+	route, err := p.ports.Walker.Path(p.self, to)
+	if err != nil {
 		switch {
 		case errors.Is(err, ErrMapChange):
 			p.stop("walk:mapchange")
@@ -256,14 +441,143 @@ func (p *playRun) walkBack(ctx context.Context, to Vec3) bool {
 		default:
 			p.stop("walk")
 		}
+		return walkBackStopped
+	}
+	if route.Kind != navmesh.RouteComplete || len(route.Points) < 2 {
+		p.stop("walk:" + string(route.Kind))
+		return walkBackStopped
+	}
+	// The gate's clock is the run's own (virtual under the fake) and a context deadline is wall time: the remaining
+	// duration, not the deadline instant, is what a blocked walker is given (agentWalkPath's rule).
+	left := until.Sub(p.now())
+	if end := p.runEnd(); !end.IsZero() {
+		if l := end.Sub(p.now()); l < left {
+			left = l
+		}
+	}
+	if left <= 0 {
+		return walkBackTimeout
+	}
+	wctx, cancel := context.WithTimeout(ctx, left)
+	defer cancel()
+	for _, seg := range SplitRoute(route.Points, PlaySegmentYd) {
+		if p.timeUp() {
+			p.stop("time")
+			return walkBackStopped
+		}
+		if !p.now().Before(until) {
+			return walkBackTimeout
+		}
+		if !p.walkClear(seg) {
+			return walkBackBlocked
+		}
+		if p.selfMap == p.route.Map && p.inCombat() {
+			return walkBackFight
+		}
+		if err := p.ports.Walker.Walk(wctx, seg); err != nil {
+			switch {
+			case errors.Is(err, ErrMapChange):
+				p.stop("walk:mapchange")
+			case errors.Is(err, ErrLinkLost):
+				p.linkLost()
+			case errors.Is(wctx.Err(), context.DeadlineExceeded):
+				return walkBackTimeout
+			case wctx.Err() != nil:
+				p.stop("interrupt")
+			default:
+				p.stop("walk")
+			}
+			return walkBackStopped
+		}
+		p.refreshSelf()
+		if _, bad := p.route.InAvoid(p.self); bad {
+			p.stop("avoid")
+			return walkBackStopped
+		}
+		if p.selfMap == p.route.Map && p.inCombat() {
+			return walkBackFight
+		}
+	}
+	return walkBackArrived
+}
+
+// walkClear says whether a walk back's segment stays out of the ground the walk's own rules refuse: the plan's avoid
+// boxes, every uncleared plan pack's radius (a point nearer than the leader already stands, PlayRegroupClearYd of
+// slack) and every patrol-radius hostile the plan does not name. The pull's own stand sits beside its pack, so a step
+// away is clear and only a step toward a pack is refused (#256).
+func (p *playRun) walkClear(seg [][3]float32) bool {
+	pts := make([]Vec3, len(seg))
+	for i := range seg {
+		pts[i] = Vec3(seg[i])
+		if _, bad := p.route.InAvoid(pts[i]); bad {
+			return false
+		}
+	}
+	units := p.ports.World.Units()
+	groups := p.route.AllGroups()
+	claim := MatchPacks(units, groups, len(groups))
+	for i := range groups {
+		g := &groups[i]
+		if p.pulled[g.ID] {
+			continue
+		}
+		at := append([]Vec3(nil), g.Positions...)
+		for _, ui := range claim.Members(g.ID) {
+			if u := units[ui]; !u.Dead && !u.Friendly {
+				at = append(at, u.Pos)
+			}
+		}
+		if g.Patrol != nil {
+			for _, u := range units {
+				if !u.Dead && !u.Friendly && slices.Contains(g.Patrol.Entries, u.Entry) {
+					at = append(at, u.Pos)
+				}
+			}
+		}
+		if p.nearerTo(at, pts) {
+			return false
+		}
+	}
+	for ui, u := range units {
+		if u.Dead || u.Friendly || p.partyOwned(u) || p.strangerGaveUp[u.GUID] {
+			continue
+		}
+		if g, ok := claim.GroupOf(ui); ok && !p.pulled[g] {
+			continue // its pack's radius is the check above
+		}
+		if p.planNames(u.Entry) || p.skipListed(u.Entry) || u.Flags&UnitNotAttackable != 0 || p.notHostile(u) {
+			continue
+		}
+		if distPolyline(u.Pos, pts) > PlayPatrolYd {
+			continue
+		}
+		if p.nearerTo([]Vec3{u.Pos}, pts) {
+			return false
+		}
+	}
+	return true
+}
+
+// nearerTo says whether a point of at comes closer to a point of seg than the leader already stands to at, by more
+// than PlayRegroupClearYd: the step toward ground the run keeps out of.
+func (p *playRun) nearerTo(at, seg []Vec3) bool {
+	if len(at) == 0 || len(seg) == 0 {
 		return false
 	}
-	p.refreshSelf()
-	if _, bad := p.route.InAvoid(p.self); bad {
-		p.stop("avoid")
-		return false
+	now := math.Inf(1)
+	for _, a := range at {
+		if d := dist3(a, p.self); d < now {
+			now = d
+		}
 	}
-	return p.stopReason == ""
+	for _, pt := range seg {
+		for _, a := range at {
+			if dist3(a, pt) < now-PlayRegroupClearYd {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // stopStraggler ends the run naming who was behind and how far (forever-agent #256): `straggler:heal@97yd` for one,

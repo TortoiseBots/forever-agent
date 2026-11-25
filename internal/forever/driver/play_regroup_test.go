@@ -123,7 +123,7 @@ func TestPlayRegroupWaitsAndFollows(t *testing.T) {
 		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
 	}
 	tf := regroupTrace(t, res)
-	regroup, ok := firstEvent(tf, "regroup")
+	regroup, ok := firstEvent(tf, "regroup_hold")
 	if !ok {
 		t.Fatal("the party was left behind and the run never held for it")
 	}
@@ -301,7 +301,7 @@ func TestPlayRegroupNormalRunUnchanged(t *testing.T) {
 		t.Fatalf("states = %q; want %q", strings.Join(res.States, " "), want)
 	}
 	tf := regroupTrace(t, res)
-	for _, ev := range []string{"regroup", "regroup_follow", "regroup_back", "regroup_join", "regroup_down"} {
+	for _, ev := range []string{"regroup_hold", "regroup_follow", "regroup_back", "regroup_join", "regroup_down"} {
 		if e, ok := firstEvent(tf, ev); ok {
 			t.Fatalf("a party that follows got a %s event at %d", ev, e.T)
 		}
@@ -439,5 +439,397 @@ func TestPlayRegroupDeathAtThePullGatherResumesThePull(t *testing.T) {
 	tf := regroupTrace(t, res)
 	if _, ok := firstEvent(tf, "regroup_down"); !ok {
 		t.Fatal("the tank's fall at the gather is not in the record")
+	}
+}
+
+// regroupViaPlan is one leg walked through two via points before its end, with a boss alive at the end: the leg whose
+// own place the stall must leave alone.
+func regroupViaPlan() *dungeon.Plan {
+	return &dungeon.Plan{
+		Version: 1, Name: "test_regroup_via", Map: 400,
+		Entrance:        dungeon.Point{X: 10},
+		EntranceTrigger: 900,
+		Portal:          &dungeon.Portal{Map: 1, Point: dungeon.Point{X: 100}},
+		Legs: []dungeon.Leg{{
+			Name: "one",
+			Via: []dungeon.Waypoint{
+				{Point: dungeon.Point{X: 30, Y: 30}},
+				{Point: dungeon.Point{X: 60}},
+			},
+			To:   dungeon.Point{X: 90},
+			Boss: &dungeon.Boss{Entry: 200, Position: dungeon.Point{X: 90}},
+		}},
+	}
+}
+
+// regroupBossRig is a party rig over a plan whose boss is alive and in view: the run's own boss pull and fight are the
+// leg's end, so a leg that was walked whole is a leg whose boss is fought. Its walker answers a corner every 10 yd, as a
+// real navmesh route has: the run cuts a walk at those corners and polls the party between them.
+func regroupBossRig(t *testing.T, plan *dungeon.Plan, mut func(*PlayFake)) *playRig {
+	t.Helper()
+	route := mustPlayRoute(t, plan)
+	clock := NewVClock(time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC))
+	fake := NewPlayFake(route, clock, "Ownerchar", playBots[:]...)
+	fake.SetBotHP("Botone", 900, 900)
+	fake.SetBotPower("Bottwo", 0, 1000, 1000)
+	fake.PathFunc = func(from, to Vec3) navmesh.Route {
+		points := []Vec3{from}
+		n := int(dist3(from, to)/10) + 1
+		for i := 1; i <= n; i++ {
+			f := float64(i) / float64(n)
+			points = append(points, Vec3{
+				from[0] + float32(float64(to[0]-from[0])*f),
+				from[1] + float32(float64(to[1]-from[1])*f),
+				from[2] + float32(float64(to[2]-from[2])*f),
+			})
+		}
+		return navmesh.Route{Kind: navmesh.RouteComplete, Corners: len(points), Start: from, End: to, Points: points, Length: float32(dist3(from, to))}
+	}
+	fake.SpawnBosses()
+	if mut != nil {
+		mut(fake)
+	}
+	cfg := PlayConfig{Plan: route.Name, Bots: playBots, RunID: "play-regroup"}
+	cfg.Out = t.TempDir()
+	return &playRig{
+		fake: fake, route: route, cfg: cfg,
+		ports: PlayPorts{Owner: fake.Module, Group: fake, Player: fake, World: fake, Walker: fake, Clock: clock},
+	}
+}
+
+// walkReached says whether some walk of the fake ended within PlayArriveYd of at.
+func walkReached(f *PlayFake, at Vec3) bool {
+	for _, w := range f.Walks {
+		if len(w) == 0 {
+			continue
+		}
+		if dist3(Vec3(w[len(w)-1]), at) <= PlayArriveYd {
+			return true
+		}
+	}
+	return false
+}
+
+// TestPlayRegroupResumesAtTheDeadViaPoint: a death found mid-walk does not move the walk's own place. The leg resumes
+// at the via point the death interrupted, walks the points after it, and pulls the leg's living boss: before, the walk
+// counted a waypoint it never reached and the leg went on from the wrong point.
+func TestPlayRegroupResumesAtTheDeadViaPoint(t *testing.T) {
+	via := []Vec3{{30, 30, 0}, {60, 0, 0}}
+	rig := regroupBossRig(t, regroupViaPlan(), func(f *PlayFake) {
+		died := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if died || f.SelfMap != f.Route.Map {
+				return
+			}
+			died = true
+			f.GoldenOwner.Bots[3].Dead = true
+			f.Clock.After(20*time.Second, func() { f.GoldenOwner.Bots[3].Dead = false })
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+	}
+	if res.Summary.Deaths != 1 {
+		t.Fatalf("deaths = %d; want 1 (the death on the walk)", res.Summary.Deaths)
+	}
+	for _, at := range via {
+		if !walkReached(rig.fake, at) {
+			t.Fatalf("no walk reached the via point %.0f,%.0f after the regroup: the leg went on from the wrong point (walks %v)",
+				at[0], at[1], rig.fake.Walks)
+		}
+	}
+	if !strings.Contains(strings.Join(res.States, " "), StateBoss) {
+		t.Fatalf("states = %v; want the leg's boss pulled after the walk", res.States)
+	}
+	tf := regroupTrace(t, res)
+	if _, ok := firstEvent(tf, "leg_done"); !ok {
+		t.Fatal("the leg never finished its walk")
+	}
+}
+
+// TestPlayRegroupLeaderDeathStopsTheGateWait: the character's own death during the gate's wait is the run's end: no wait
+// or walk can put the leader back, so the run stops `not-alive` at once instead of waiting out the gate and the ladder.
+func TestPlayRegroupLeaderDeathStopsTheGateWait(t *testing.T) {
+	rig := regroupRig(t, func(f *PlayFake) {
+		for _, name := range playBots {
+			f.Stuck[strings.ToLower(name)] = true
+		}
+		leavePartyAt(f, nil)
+		f.Clock.After(10*time.Second, func() { f.SelfPhase = PhaseDead })
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "not-alive" {
+		t.Fatalf("stop = %q; want not-alive (states %v)", res.Stop, res.States)
+	}
+}
+
+// TestPlayRegroupWalkBackJoinsTheFight: a party found fighting is a party the leader joins: the walk back and the waits
+// are not taken while the group fights a hostile 100 yd back, and the run goes to FIGHT at once (#256, the live run's
+// open question).
+func TestPlayRegroupWalkBackJoinsTheFight(t *testing.T) {
+	mob := fightGUID(9)
+	rig := regroupRig(t, func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: mob, Entry: 11319, Pos: Vec3{-30, 0, 0}})
+		split := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if split || f.SelfMap != f.Route.Map {
+				return
+			}
+			split = true
+			behind := Vec3{f.SelfPos[0] - 100, f.SelfPos[1], f.SelfPos[2]}
+			for _, name := range playBots {
+				key := strings.ToLower(name)
+				delete(f.Moved, key)
+				f.BotPos[key] = behind
+			}
+			f.MoveUnit(mob, behind)
+			f.AggroUnit(mob)
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+	}
+	tf := regroupTrace(t, res)
+	if _, ok := firstEvent(tf, "fight_join"); !ok {
+		t.Fatal("the party was fighting and the leader never joined the fight")
+	}
+	if e, ok := firstEvent(tf, "regroup_back"); ok {
+		t.Fatalf("the leader walked back at %d while its party fought; want FIGHT at once", e.T)
+	}
+	if slicesIndex(res.States, StateFight) < 0 {
+		t.Fatalf("states = %v; want FIGHT", res.States)
+	}
+	if got := playCountLines(rig.fake.Actions, ".bot attack "); got == 0 {
+		t.Fatal("no attack order was sent: the joined fight never ran")
+	}
+}
+
+// TestPlayRegroupAtThePullGather: the live run's own shape. The leader stands at the pull's gather while its four
+// living bots drift 100 yd back, out of combat: the gather runs the party gate on its own polls (wait, one follow, a
+// bounded walk back), the party is gathered, and the pull happens. Before, the gather only had the ladder (follow,
+// summon, named stop).
+func TestPlayRegroupAtThePullGather(t *testing.T) {
+	stand := Vec3{40, 0, 0}
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.SpawnPacks()
+		f.SpawnBosses()
+		jumped := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if to[0] < f.SelfPos[0]-1 && jumped {
+				// The way back: the party comes to the leader.
+				for _, name := range playBots {
+					f.Moved[strings.ToLower(name)] = true
+				}
+				return
+			}
+			if jumped || dist3(to, stand) > 0.01 {
+				return
+			}
+			jumped = true
+			// The party is 20 yd behind at the stand, and drifts 100 yd back while the gather waits.
+			near := Vec3{stand[0] - 20, stand[1], stand[2]}
+			for _, name := range playBots {
+				key := strings.ToLower(name)
+				delete(f.Moved, key)
+				f.BotPos[key] = near
+				f.Stuck[key] = true
+			}
+			f.Clock.After(6*time.Second, func() {
+				far := Vec3{stand[0] - 100, stand[1], stand[2]}
+				for _, name := range playBots {
+					f.BotPos[strings.ToLower(name)] = far
+				}
+			})
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear: the gather did not hold for the party (states %v)", res.Stop, res.States)
+	}
+	tf := regroupTrace(t, res)
+	hold, ok := firstEvent(tf, "regroup_hold")
+	if !ok {
+		t.Fatal("the party was left behind at the gather and the gate never ran")
+	}
+	if why, _ := hold.D["why"].(string); why != "gather" {
+		t.Fatalf("regroup_hold why = %q; want the pull's own gather", why)
+	}
+	if _, ok := firstEvent(tf, "regroup_back"); !ok {
+		t.Fatal("the party did not come to the follow order and the leader never walked back")
+	}
+	for _, name := range playBots {
+		if n := len(rig.fake.Lines(".bot follow " + name)); n == 0 {
+			t.Fatalf("%s was left behind at the gather and never told to follow", name)
+		}
+	}
+	var packStarts int
+	for _, e := range events(tf, "pull_start") {
+		if g, ok := e.D["group"].(float64); ok && g >= 0 {
+			packStarts++
+		}
+	}
+	if packStarts != 1 {
+		t.Fatalf("the pack's pulls = %d; want one (the pull the gather held for)", packStarts)
+	}
+}
+
+// TestPlayRegroupPullRecordsPairOnce: a pull that a regroup interrupts before its gather leaves no pull record: the
+// summary and the trace carry exactly one pull_start/pull_end pair per pull that happened, and one pull_stand for the
+// approach that reached the stand.
+func TestPlayRegroupPullRecordsPairOnce(t *testing.T) {
+	stand := Vec3{40, -20, 0}
+	plan := playFightPlan()
+	plan.Legs[0].PullGroups[0].Approach = []dungeon.Point{{X: 40, Y: -20}}
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.SpawnPacks()
+		f.SpawnBosses()
+		died := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if died || dist3(to, stand) > 0.01 {
+				return
+			}
+			died = true
+			f.GoldenOwner.Bots[3].Dead = true
+			f.Clock.After(10*time.Second, func() { f.GoldenOwner.Bots[3].Dead = false })
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+	}
+	tf := regroupTrace(t, res)
+	starts, ends := len(events(tf, "pull_start")), len(events(tf, "pull_end"))
+	if starts != ends {
+		t.Fatalf("pull_start = %d, pull_end = %d; want one pair per pull", starts, ends)
+	}
+	if got := len(res.Summary.Pulls); got != ends {
+		t.Fatalf("summary pulls = %d, pull_end events = %d; want the same", got, ends)
+	}
+	if got := len(events(tf, "pull_stand")); got != 1 {
+		t.Fatalf("pull_stand = %d; want one: the interrupted approach did not reach the stand", got)
+	}
+}
+
+// TestPlayRegroupWalkBackBounded: every walk back runs under the earlier of the gate's deadline and the run's own
+// budget: a walker that blocks until its context ends is cancelled at that bound (never waited out), and a run whose
+// budget is spent takes no walk at all.
+func TestPlayRegroupWalkBackBounded(t *testing.T) {
+	t.Run("the gate's deadline", func(t *testing.T) {
+		rig := regroupRig(t, func(f *PlayFake) {
+			f.WalkBlock = func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			}
+		})
+		p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults(),
+			pulled: map[int]bool{}, start: rig.fake.Clock.Now()}
+		p.refreshSelf()
+		started := time.Now()
+		to := Vec3{p.self[0] - 20, p.self[1], p.self[2]}
+		if end := p.walkBack(context.Background(), to, p.now().Add(100*time.Millisecond)); end != walkBackTimeout {
+			t.Fatalf("walk back = %v; want the deadline's own end", end)
+		}
+		if spent := time.Since(started); spent > 10*time.Second {
+			t.Fatalf("the blocked walk back held the run for %v; want it cancelled at its bound", spent)
+		}
+	})
+	t.Run("the run's budget", func(t *testing.T) {
+		rig := regroupRig(t, nil)
+		rig.cfg.MaxMinutes = 1
+		p := &playRun{cfg: rig.cfg, route: rig.route, ports: rig.ports, lim: rig.cfg.Limits.withDefaults(),
+			pulled: map[int]bool{}, start: rig.fake.Clock.Now().Add(-2 * time.Minute)}
+		p.refreshSelf()
+		to := Vec3{p.self[0] - 20, p.self[1], p.self[2]}
+		if end := p.walkBack(context.Background(), to, p.now().Add(time.Minute)); end != walkBackStopped {
+			t.Fatalf("walk back = %v; want the run's end", end)
+		}
+		if p.stopReason != "time" {
+			t.Fatalf("stop = %q; want time", p.stopReason)
+		}
+		if len(rig.fake.Walks) != 0 {
+			t.Fatalf("the run walked %d times past its budget; want none", len(rig.fake.Walks))
+		}
+	})
+}
+
+// TestPlayRegroupWalkBackClearsAPack: the walk back keeps out of an uncleared pack's radius: a party that stands past
+// one is not walked through, the step is refused (`regroup_blocked`), and the ladder ends the run naming the party.
+func TestPlayRegroupWalkBackClearsAPack(t *testing.T) {
+	plan := regroupPlan()
+	plan.Legs[0].PullGroups = []dungeon.PullGroup{{Entries: []uint32{11319}, Positions: []dungeon.Point{{X: -40, Y: 0}}}}
+	rig := regroupBossRig(t, plan, func(f *PlayFake) {
+		f.SpawnPacks()
+		for _, name := range playBots {
+			f.Stuck[strings.ToLower(name)] = true
+		}
+		// The party stands past the pack: the leader at the leg's start, the pack 40 yd behind it, the party 100 yd.
+		split := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if split {
+				return
+			}
+			split = true
+			for _, name := range playBots {
+				key := strings.ToLower(name)
+				delete(f.Moved, key)
+				f.BotPos[key] = Vec3{f.SelfPos[0] - 100, f.SelfPos[1], f.SelfPos[2]}
+			}
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if !strings.HasPrefix(res.Stop, "straggler:") {
+		t.Fatalf("stop = %q; want the named straggler (states %v)", res.Stop, res.States)
+	}
+	tf := regroupTrace(t, res)
+	if _, ok := firstEvent(tf, "regroup_blocked"); !ok {
+		t.Fatal("the walk back was never refused: the leader walked into the pack's radius")
+	}
+	for _, w := range rig.fake.Walks {
+		if len(w) == 0 {
+			continue
+		}
+		end := Vec3(w[len(w)-1])
+		if end[0] < -20 {
+			t.Fatalf("a walk ended at %.0f, inside the pack's radius; want every step refused", end[0])
+		}
+	}
+}
+
+// TestPlayRegroupLimitStopsNamingTheGroup: a pull that keeps costing regroups is not re-entered for ever: after
+// PlayRegroupLimit regroups of the same pull the run stops `regroup-limit:<group>`.
+func TestPlayRegroupLimitStopsNamingTheGroup(t *testing.T) {
+	stand := Vec3{40, -20, 0}
+	plan := playFightPlan()
+	plan.Legs[0].PullGroups[0].Approach = []dungeon.Point{{X: 40, Y: -20}}
+	rig := newPlayFightRig(t, plan, func(f *PlayFake) {
+		f.SpawnPacks()
+		f.SpawnBosses()
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if dist3(to, stand) > 0.01 {
+				return
+			}
+			// Every gather finds the party far behind and the tank down ten seconds in: the environmental death the
+			// live run's stand kept producing.
+			for _, name := range playBots {
+				key := strings.ToLower(name)
+				delete(f.Moved, key)
+				f.BotPos[key] = Vec3{stand[0] - 100, stand[1], stand[2]}
+			}
+			f.Clock.After(10*time.Second, func() { f.GoldenOwner.Bots[0].Dead = true })
+			f.Clock.After(16*time.Second, func() { f.GoldenOwner.Bots[0].Dead = false })
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if !strings.HasPrefix(res.Stop, "regroup-limit:group-") {
+		t.Fatalf("stop = %q; want regroup-limit:<group>", res.Stop)
+	}
+	tf := regroupTrace(t, res)
+	if got := len(events(tf, "regroup_down")); got != PlayRegroupLimit+1 {
+		t.Fatalf("regroups = %d; want %d (the limit's own count)", got, PlayRegroupLimit+1)
 	}
 }

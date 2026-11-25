@@ -128,7 +128,7 @@ Deaths, wipes and the end:
 | `last-leg` | `--last-leg` names no leg of the plan. | Fix the name. |
 | `state:<STATE>` | A state returned no next state without a reason. | A driver bug; keep the trace. |
 | `out` | The run's record could not be opened. | Fix `--out`. |
-| `not-alive` | The character is dead or a ghost at the start. | Resurrect it. |
+| `not-alive` | The character is dead or a ghost at the start, or it fell during one of the party gate's waits (a walk, a wait, a pull's gather). | Resurrect it. |
 | `not-near-portal` | The character is over 300 yd from the plan's portal, or the plan has none. | Move it outside, near the portal. |
 | `inside-instance` | The character is already on the plan's map; plans have no approach leg. | Leave the instance first. |
 | `not-leader` | A group exists and this character is not its leader, or is not its only non-bot member. | Leave the group, or lead it. |
@@ -146,7 +146,8 @@ Deaths, wipes and the end:
 | `walk`, `walk:<kind>`, `walk:mapchange` | A walk failed; `<kind>` is the navmesh route's answer. The leading player's own approach is not one of these: a route it cannot complete fails the pull (`no-path` with `detail: path`), and only its retreat to the party and its walk back stop the run here. | Plan-check the point. |
 | `exact` | The character could not stand on an `exact` waypoint (1.5 yd). | Check the point's ground. |
 | `avoid` | The character stood in one of the plan's avoid boxes. | The point is wrong; fix the plan or the box. |
-| `straggler:<slot>@<n>yd` | A bot fell behind a walk of a player run for 150 s, even after the party gate's wait, follow order and walk back. The stop names every bot still behind and its distance, nearest first (`straggler:tank@97yd,dps2@103yd`). | Check the bot and how far it stands; the trace's `regroup` and `order` events say what was tried. |
+| `straggler:<slot>@<n>yd` | A bot fell behind a walk of a player run for 150 s, even after the party gate's wait, follow order and walk back. The stop names every bot still behind and its distance, nearest first (`straggler:tank@97yd,dps2@103yd`). | Check the bot and how far it stands; the trace's `regroup_hold`/`regroup_back` and `order` events say what was tried. |
+| `regroup-limit:<pull>` | One pull cost `PlayRegroupLimit` (2) regroups: the party keeps going down at that pull's stand, which is ground the plan does not mark (a `regroup_down` per pass, with the same `group`/`boss`/`stranger` in the trace). `<pull>` is `group-<id>` for a pack, `boss-<entry>` for a leg's boss, `stranger-<entry>` for a patrol candidate. | Plan-check the stand and the ground around it, or skip the pull. |
 | `pull-no-sight` / `pull-failed` | The tank never saw the marked skull / nobody answered the pull. A leading player's own fallback pull that fails is followed by one more tank order (a `pull_retry` event with `after: agent-pull`); when that fails too the run stops `pull-failed`, never `pull-no-sight`. | Check the pack's distance and the geometry. The trace's `agent_pull_failed` names the fallback's reason (`gone`, `already-pulled`, `no-path` with its `detail`, `no-sight-after-approach`, `approach-timeout`, `reach-timeout`, `health-unknown`, `low-health`, `bring-back`); `agent_pull_skipped` with reason `boss-near` means a plan boss stood within 10 yd of the mob, which is the boss's pull, not the agent's. |
 | `fight` | The character's own fight tick failed. | Check the character's state. |
 | `fight-timeout` | A fight ran over 600 s. | Check the pack. |

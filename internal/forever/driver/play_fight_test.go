@@ -3,6 +3,7 @@ package driver
 import (
 	"context"
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -664,5 +665,84 @@ func TestPullStandWalkNoNestedPull(t *testing.T) {
 	// started a nested pull would have left it (marked fought by the pull it interrupted).
 	if u, ok := rig.fake.UnitOf(500); !ok || !u.Dead {
 		t.Fatalf("the pack met on the stand walk is %+v at the end; want it fought at its own pull", u)
+	}
+}
+
+// TestPlayRegroupStallNeverOverridesTheFight: a member found down while the pull already has the party is fought
+// through: the fight goes on (the damage dealers are ordered, the pack dies), and the run's regroup comes after it,
+// when the party is out of combat. Before, the death turned the pull's FIGHT into a wipe with the pack engaged.
+func TestPlayRegroupStallNeverOverridesTheFight(t *testing.T) {
+	pack := []uint32{11320, 11319}
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.SpawnPacks()
+		f.SpawnBosses()
+		armed := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if armed || f.SelfMap != f.Route.Map {
+				return
+			}
+			armed = true
+			// The party gathers 20 yd behind the stand, so the gather waits; four seconds in the pack comes at it and
+			// the mage falls (the pack's aggro and the corpse at the same moment, while the gather waits).
+			for _, name := range playBots {
+				key := strings.ToLower(name)
+				delete(f.Moved, key)
+				f.BotPos[key] = Vec3{40 - 20, 0, 0}
+			}
+			f.Clock.After(6*time.Second, func() {
+				f.GoldenOwner.Bots[3].Dead = true
+				for _, u := range f.Units() {
+					if slices.Contains(pack, u.Entry) {
+						f.AggroUnit(u.GUID)
+					}
+				}
+			})
+			f.Clock.After(46*time.Second, func() { f.GoldenOwner.Bots[3].Dead = false })
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+	}
+	if res.Summary.Deaths != 1 {
+		t.Fatalf("deaths = %d; want 1", res.Summary.Deaths)
+	}
+	fight := slicesIndex(res.States, StateFight)
+	wipe := slicesIndex(res.States, StateWipe)
+	if fight < 0 {
+		t.Fatalf("states = %v; want FIGHT after the pull", res.States)
+	}
+	if wipe >= 0 && wipe < fight {
+		t.Fatalf("states = %v; want the fight before the regroup: the stall overrode FIGHT", res.States)
+	}
+	tf := regroupTrace(t, res)
+	down, ok := firstEvent(tf, "regroup_down")
+	if !ok {
+		t.Fatal("the down member is not in the record")
+	}
+	join, ok := firstEvent(tf, "fight_join")
+	if !ok {
+		t.Fatal("the death found in the gather did not turn into the fight the party was in")
+	}
+	if join.T < down.T {
+		t.Fatalf("the fight came at %d, the death at %d; want the fight the death was found in", join.T, down.T)
+	}
+	regroup, ok := firstEvent(tf, "regroup")
+	if !ok {
+		t.Fatal("the down member never reached the run's regroup")
+	}
+	if quiet := int64(PlayLimits{}.withDefaults().FightQuiet / time.Millisecond); regroup.T-join.T < quiet {
+		t.Fatalf("the regroup came %d ms after the fight began; want the fight's own quiet window (%d ms) first", regroup.T-join.T, quiet)
+	}
+	var whisper int64 = -1
+	for _, a := range rig.fake.Actions {
+		if strings.HasPrefix(a.Line, "whisper ") {
+			whisper = a.At.UnixMilli()
+			break
+		}
+	}
+	if whisper >= 0 && whisper < regroup.T {
+		t.Fatalf("the release whisper was sent at %d, the regroup at %d; want no whisper mid-fight", whisper, regroup.T)
 	}
 }

@@ -63,19 +63,30 @@ pulls it again nor fails `bosses-alive` on it.
 
 ## The party gate
 
-The leader does not walk on without its party. Before it leaves the stand a fight ended on, and between every 15 yd
-segment of a walk, it checks the party:
+The leader does not walk on without its party. Before it leaves the stand a fight ended on, between every 15 yd
+segment of a walk, **and at a pull's gather** (the stand it orders a pull from), it checks the party:
 
 | What it sees | What it does |
 |---|---|
-| A living bot further than **60 yd** (`PlayRegroupYd`) | Stands and waits **20 s** (`PlayRegroupWait`); then sends that bot one `.bot follow`; waits **20 s** more (`PlayRegroupFollowWait`); then walks **15 yd** (`PlayRegroupBackYd`) toward the party, up to **2** times (`PlayRegroupTries`) and **60 s** in all (`PlayRegroupBackTime`). Every step is a `regroup`, `regroup_follow` or `regroup_back` event in the trace. A step that would end in one of the plan's avoid boxes is refused (`regroup_refused`), because that ground kills. |
+| A living bot further than **60 yd** (`PlayRegroupYd`) | Stands and waits **20 s** (`PlayRegroupWait`); then sends that bot one `.bot follow`; waits **20 s** more (`PlayRegroupFollowWait`); then walks **15 yd** (`PlayRegroupBackYd`) toward the party, up to **2** times (`PlayRegroupTries`) and **60 s** in all (`PlayRegroupBackTime`). Every step is a `regroup_hold`, `regroup_follow` or `regroup_back` event in the trace. |
+| The walk back | The walk's own rules: a navmesh route cut into 15 yd segments, out of the plan's avoid boxes (`regroup_refused` ends the gate, because that ground kills), clear of every uncleared pack's radius and of every hostile within the patrol's 20 yd that the plan does not name (a point nearer to it than the leader already stands, less `PlayRegroupClearYd` 0.5 yd, refuses the step: `regroup_blocked`, and the ladder below carries the party). The step runs under the **earlier** of the gate's 60 s and the run's own remaining time (`--max-minutes`), so a blocked movement is cancelled at that bound and never waits the run out. |
+| The party is fighting | The leader joins the fight (`FIGHT`) at once instead of standing beside it: the hostiles on the party become the fight's set (the one on the tank, else the nearest, its skull) and the normal fight runs (`fight_join`). The gate's waits and walk backs are not taken while the group fights. |
 | The party came back | Walks on (`regroup_join`); the next split starts a fresh gate. |
-| Still behind after those attempts | The walk's own straggler ladder is the last arm: a follow at 30 s, a summon at 90 s, and the `straggler` stop at 150 s, which names every bot still behind and its distance. |
-| A member dead, or a ghost | The run's own regroup (`WIPE`) before any travel: out of combat the healer raises the member (waited `BotRez`, 120 s), and one still down gets the release and corpse-run whispers; the party is then waited for. The death is counted in the summary and written as a `death` event, wherever it happened: the walks and the waits count deaths too, not only a fight. After the regroup's rest the run goes back to what the death interrupted: the portal wait (`TRAVEL`) while it is still outside the instance, the leg walk inside it (which re-enters the pull or the boss it was gathering for). |
+| Still behind after those attempts | The walk's own straggler ladder is the last arm: a follow at 30 s, a summon at 90 s, and the `straggler` stop at 150 s, which names every bot still behind and its distance. `regroup_timeout` records a gate whose walk back ran out of time, `regroup_blocked` the step a pack or a patrol refused, and `regroup_giveup` the one whose attempts were spent. |
+| The character dead | The gate's waits stop the run `not-alive`: no wait or walk can put the leader back. This applies everywhere `waitNear` waits, the pull's and the boss's gathers included. |
+| A member dead, or a ghost | The run's own regroup (`WIPE`) before any travel: out of combat the healer raises the member (waited `BotRez`, 120 s), and one still down gets the release and corpse-run whispers; the party is then waited for. The death is counted in the summary and written as a `death` event, wherever it happened: the walks and the waits count deaths too, not only a fight. After the regroup's rest the run goes back to what the death interrupted: the portal wait (`TRAVEL`) while it is still outside the instance, the leg walk inside it (which re-enters the pull or the boss it was gathering for). The walk's own place never moves: a leg resumes at the same via point. |
+| A member down while the pull already has the party | The fight is never overridden: the damage dealers keep their orders, the pack is fought, the pull's record (when it has one) is closed (`pull_end`), and only then does the regroup run (`regroup` after it). A member down at a gather with nothing aggroed is the regroup's instead. |
+| The same pull costing regroups | `PlayRegroupLimit` (**2**) regroups of one pull, then the run stops `regroup-limit:<pull>`, naming it: `regroup-limit:group-<id>` for a pack, `regroup-limit:boss-<entry>` for a leg's boss, `regroup-limit:stranger-<entry>` for a patrol candidate. A stand that keeps killing the party is ground the plan does not mark, and re-entering that pull forever is not a run that can finish. |
+
+A pull's row in the record is opened once, when the party is gathered and the marks go out: a gather a regroup
+interrupts leaves no `pull_start` behind it, so the trace and the summary carry one `pull_start`/`pull_end` pair per
+pull that happened.
 
 The order and its time are in the trace as an `order` event (`{"bot":"dps2","verb":"follow"}`), and every frame
 carries the leader's own position (`self`) beside the bots', so a party that splits can be read from the record
-afterwards.
+afterwards. A bot's `cb` in a frame is the run's own fight **or** a living hostile in view with that bot as its
+target — a party left behind and fighting reads as in combat — so a bug-hunt's "idle in combat" rule may see a
+regroup's or a wait's idling bots as fighting; read those hits beside the `regroup_*` events.
 
 
 # The leading player's own pull
@@ -252,7 +263,7 @@ Every reason a FAIL needs is printed after `verdict: FAIL:` separated by `;`.
 
 # Common problems
 
-- `not-alive` — the character was dead or a ghost when the run started.
+- `not-alive` — the character was dead or a ghost when the run started, or it fell during one of the gate's waits.
 - `not-near-portal` / `inside-instance` — the character is over 300 yd from the plan's portal, or already inside
   the instance, where there is no approach leg to start from. Move it outside first.
 - `not-leader` — a group exists and this character does not lead it with exactly the four named bots.
@@ -262,7 +273,7 @@ Every reason a FAIL needs is printed after `verdict: FAIL:` separated by `;`.
   hire another tank), or its health could not be read at all.
 - `straggler:<slot>@<n>yd` — a bot fell behind a walk for 150 s even after the party gate's follow, the walk's own
   follow and a summon. The reason names every bot still behind and how far (`straggler:tank@97yd,dps2@103yd`); the
-  trace's `regroup`, `regroup_back` and `order` events say what was tried.
+  trace's `regroup_hold`, `regroup_back` and `order` events say what was tried.
 - `wipe-unrecovered` — a wipe was not recovered within 10 minutes; the party did not come back to a standing state.
 - `judge: <bot> failed` — the spell judge saw casts its class and role should not make (or too few of the right
   ones); the judge's lines name what it saw.

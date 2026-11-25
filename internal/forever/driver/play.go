@@ -332,6 +332,9 @@ type playRun struct {
 	// regroupSince is when the party gate last found a living member left behind: one episode's attempts are spent once,
 	// and the walk's own straggler ladder carries the episode after them (#256).
 	regroupSince time.Time
+	// regroups counts the regroups each pull has cost, by pullKey: a pull that keeps costing them stops the run
+	// (`regroup-limit:<pull>`) instead of being re-entered for ever (#256).
+	regroups map[string]int
 
 	// self is the agent's own position and map, refreshed before every decision that needs them.
 	self    Vec3
@@ -440,6 +443,7 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 		agentPulled: map[int]bool{}, agentPulledUnit: map[wire.GUID]bool{},
 		strangerPulls: map[wire.GUID]int{}, strangerGaveUp: map[wire.GUID]bool{}, strangerRetry: map[wire.GUID]time.Time{}, reaction: map[int32]bool{},
 		maxWipes: playMaxWipes(cfg.MaxWipes), deathSeen: map[string]bool{}, looted: map[wire.GUID]bool{},
+		regroups: map[string]int{},
 	}
 	if p.ports.Clock == nil {
 		p.ports.Clock = WallClock{}
@@ -466,9 +470,18 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 		p.states = append(p.states, st)
 		next := p.state(ctx, st)
 		// #256: a state that found a member down (a wait, a walk) does not stop the run and does not walk on: the
-		// regroup is the next state.
+		// regroup is the next state. A fight is never overridden by it: a death found while the pull already has the
+		// party, or while its group is fighting, is fought through, and the fight's own end hands the run to the
+		// regroup (endFight's down-bot branch) — the party is not left fighting alone.
 		if p.stall != "" {
-			next, p.stall = p.stall, ""
+			stall := p.stall
+			p.stall = ""
+			if stall == StateWipe && (next == StateFight || (p.selfMap == p.route.Map && p.inCombat())) {
+				p.joinFight()
+				next = StateFight
+			} else {
+				next = stall
+			}
 		}
 		if p.stopReason != "" {
 			break
@@ -782,11 +795,11 @@ func (p *playRun) travel(ctx context.Context) string {
 	p.refreshSelf()
 	if dist3(p.self, portal.Pos) > PlayArriveYd {
 		p.walkTo(ctx, portal.Pos, false, false)
-		if p.stopReason != "" {
+		if p.stopReason != "" || p.stall != "" {
 			return ""
 		}
 	}
-	if !p.waitNear(ctx, PlayTravelYd, p.lim.TravelFollow, 0, p.lim.Travel) {
+	if !p.waitNear(ctx, PlayTravelYd, p.lim.TravelFollow, 0, p.lim.Travel, "") {
 		return ""
 	}
 	p.rec.Event(p.now(), "travel", map[string]any{"map": p.selfMap})
@@ -918,7 +931,9 @@ func (p *playRun) legWalk(ctx context.Context) string {
 			exact, direct = leg.ViaExact[p.walkAt], leg.ViaDirect[p.walkAt]
 		}
 		p.walkTo(ctx, points[p.walkAt], exact, direct)
-		if p.stopReason != "" {
+		if p.stopReason != "" || p.stall != "" {
+			// #256: a walk that ended on a member's death leaves the walk's own place alone: the leg resumes at the same
+			// via point after the regroup, never one point further.
 			return ""
 		}
 		if p.pack >= 0 || !p.stranger.IsZero() {
@@ -1090,7 +1105,7 @@ func (p *playRun) walkSegments(ctx context.Context, segs [][][3]float32) walkEnd
 		if !p.holdParty(ctx, "walk") {
 			return walkStopped
 		}
-		if !p.waitNear(ctx, PlayFollowYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt) {
+		if !p.waitNear(ctx, PlayFollowYd, p.lim.FollowAt, p.lim.SummonAt, p.lim.StopAt, "") {
 			return walkStopped
 		}
 		if !p.pullWalk {
@@ -1264,7 +1279,10 @@ func (p *playRun) inCombat() bool {
 // summon at summonAt (none when it is not positive: the portal's walk is inside the party's follow), waits out a
 // cooldown or in-combat refusal, and ends the run at stopAt. It reports whether the party is near (false when the run
 // stopped or the context ended).
-func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, stopAt time.Duration) bool {
+// gate names the party gate to run on the wait's own polls (a pull's gather), empty for none: the gate's hold is a
+// wait of its own, so a party that drifts behind while the leader stands is fetched at once and the ladder is only
+// what is left when the gate's attempts are spent (#256).
+func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, stopAt time.Duration, gate string) bool {
 	arriveWindow := p.lim.SummonArrive
 	if d := stopAt - summonAt; summonAt > 0 && d > arriveWindow {
 		arriveWindow = d
@@ -1274,18 +1292,23 @@ func (p *playRun) waitNear(ctx context.Context, yd float64, followAt, summonAt, 
 			p.stop("time")
 			return false
 		}
+		if !p.leaderAlive() {
+			return false
+		}
 		// #256 (ii)/(iii): a death while the walk waits is counted here (the waits are where a fight is not, and the
 		// run's deaths were only counted in one), and a member down hands the run to its own regroup instead of the
 		// wait's stop. The run comes back to what the wait interrupted: outside the instance that is TRAVEL (ENTER has
 		// not run yet), inside it the leg walk, which re-enters the pull or the boss it was gathering for.
 		p.noteDeaths()
 		if down := p.downBots(); len(down) > 0 {
-			p.rec.Event(p.now(), "regroup_down", map[string]any{"why": "wait", "down": p.slots(down)})
-			p.stall, p.resume = StateWipe, StateLegWalk
-			if p.selfMap != p.route.Map {
-				p.resume = StateTravel
-			}
+			p.stallRegroup("wait", down)
 			return false
+		}
+		if gate != "" && p.regroupSince.IsZero() && len(p.regroupFar()) > 0 {
+			if !p.holdGate(ctx, gate) {
+				return false
+			}
+			continue
 		}
 		far := p.farBots(yd)
 		if len(far) == 0 {
@@ -1742,16 +1765,23 @@ func (p *playRun) sleep(ctx context.Context, d time.Duration) bool {
 	return true
 }
 
-// timeUp says whether the run's budget is spent.
-func (p *playRun) timeUp() bool {
+// runEnd is the run's own time budget as an instant, zero when it has none: the deadline every bounded walk and wait
+// reads beside its own.
+func (p *playRun) runEnd() time.Time {
 	max := p.cfg.MaxMinutes
 	if max == 0 {
 		max = p.route.MaxMinutes
 	}
 	if max <= 0 {
-		return false
+		return time.Time{}
 	}
-	return p.now().Sub(p.start) >= time.Duration(max)*time.Minute
+	return p.start.Add(time.Duration(max) * time.Minute)
+}
+
+// timeUp says whether the run's budget is spent.
+func (p *playRun) timeUp() bool {
+	end := p.runEnd()
+	return !end.IsZero() && !p.now().Before(end)
 }
 
 // refreshSelf re-reads the agent's own position and map.
