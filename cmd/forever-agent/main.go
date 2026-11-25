@@ -210,10 +210,12 @@ const usageText = `usage:
   forever-agent slot setup --forever <server> <slot> --holder NAME [--dir DIR] [--binary PATH] [--dungeons-dir DIR] [--character NAME] [--slots FILE]
   forever-agent teardown [--keep-lease] [--release-anyway] [--gm off|on|keep] [--dry-run] [--json] [--slots FILE] <dir>
   forever-agent rpc [--timeout DUR] [--raw] <dir> <method> [<params-json>|-]
-  forever-agent trials score <run-dir> | report <run-dir> | compare <run-dir> --baseline <dir>
+  forever-agent trials score <run-dir> | report <run-dir> | compare <run-dir> --baseline <dir> | realism --snapshot FILE [--baseline FILE] [--json]
   forever-agent route-oracle --plans DIR --mmaps DIR --out DIR [--plan NAME]...
   forever-agent route-edits list [--edit-dir DIR] [--json] [<plan>] | export [--edit-dir DIR] [--config-dir DIR] --to DIR <plan> [vN|latest] | promote [--edit-dir DIR] --worktree PATH <plan> vN
   forever-agent forever login-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] --account EMAIL
+  forever-agent forever spell-diff [--json] [--min-active 30] [--fail-unknown] [--oracle DIR] [--spells DIR] <before> <after>
+  forever-agent forever bot-snapshot --dir DIR [--bots NAME,...] [--wait MS] [--out FILE]
   forever-agent bughunt [--rules LIST] [--names F] [--dispel F] [--baseline DIR] --out DIR INPUT...
   forever-agent version`
 

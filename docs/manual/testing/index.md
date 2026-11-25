@@ -11,6 +11,7 @@
 # Scoring fights
 
 * [forever spell-score](spell-score.md) - Judge a Forever class fight from its watch combat log: each party member's casts against the oracle of its class, failing only wrong-class abilities.
+* [Realism checks](realism.md) - Take a bot snapshot with forever bot-snapshot, judge it against the aggregate player data with trials realism, and read the before/after of a realism batch.
 * [fight-score](fight-score.md) - Score a finished fight JSON from the dashboard with the fight debugger's two tank checks and the class spell oracle.
 
 # Results and records

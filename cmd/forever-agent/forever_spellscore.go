@@ -41,38 +41,10 @@ func foreverSpellScoreCmd(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, spellScoreUsage)
 		return exitUsage
 	}
-	var table *foreverspells.Table
-	if *spellsDir != "" {
-		t, err := foreverspells.Load(os.DirFS(*spellsDir))
-		if err != nil {
-			fmt.Fprintf(stderr, "%s: %v\n", *spellsDir, err)
-			return exitUsage
-		}
-		table = t
-	} else {
-		table = foreverspells.Default()
-		if !table.Loaded() {
-			fmt.Fprintln(stderr, "no Forever spell table in this build; pass --spells")
-			return exitUsage
-		}
+	table, oracle, code := spellJudgeSources(*spellsDir, *oracleDir, stderr)
+	if code != exitOK {
+		return code
 	}
-	var oracle *kbspells.Oracle
-	if *oracleDir != "" {
-		o, err := kbspells.LoadWith(os.DirFS(*oracleDir), table)
-		if err != nil {
-			fmt.Fprintf(stderr, "%s: %v\n", *oracleDir, err)
-			return exitUsage
-		}
-		oracle = o
-	} else {
-		o, err := kbspells.ForeverDefault()
-		if err != nil {
-			fmt.Fprintln(stderr, err)
-			return exitUsage
-		}
-		oracle = o
-	}
-	code := exitOK
 	for _, path := range fs.Args() {
 		r, err := bughunt.LoadWatch(path, "")
 		if err != nil {
@@ -99,4 +71,41 @@ func foreverSpellScoreCmd(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return code
+}
+
+// spellJudgeSources loads the spell table and the oracle the spell commands judge with: the given
+// directories, else the data embedded in this build. It returns the exit code for a load failure.
+func spellJudgeSources(spellsDir, oracleDir string, stderr io.Writer) (*foreverspells.Table, *kbspells.Oracle, int) {
+	var table *foreverspells.Table
+	if spellsDir != "" {
+		t, err := foreverspells.Load(os.DirFS(spellsDir))
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", spellsDir, err)
+			return nil, nil, exitUsage
+		}
+		table = t
+	} else {
+		table = foreverspells.Default()
+		if !table.Loaded() {
+			fmt.Fprintln(stderr, "no Forever spell table in this build; pass --spells")
+			return nil, nil, exitUsage
+		}
+	}
+	var oracle *kbspells.Oracle
+	if oracleDir != "" {
+		o, err := kbspells.LoadWith(os.DirFS(oracleDir), table)
+		if err != nil {
+			fmt.Fprintf(stderr, "%s: %v\n", oracleDir, err)
+			return nil, nil, exitUsage
+		}
+		oracle = o
+	} else {
+		o, err := kbspells.ForeverDefault()
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return nil, nil, exitUsage
+		}
+		oracle = o
+	}
+	return table, oracle, exitOK
 }

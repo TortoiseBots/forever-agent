@@ -34,26 +34,39 @@ import (
 // and spell power — stamina names no family, so it reads as a caster, which is what its own players
 // wear in mail.
 func gearRow(rec Record, in Inputs) Row {
+	if rec.Level != GearLevel {
+		return Row{ID: RuleGear, Verdict: VerdictInconclusive,
+			Reason: fmt.Sprintf("player gear data is level %d only (bot level %d)", GearLevel, rec.Level)}
+	}
+	if !rec.EquippedKnown {
+		return Row{ID: RuleGear, Verdict: VerdictInconclusive,
+			Reason: "no equipped items in the record (the serve has no equipment read and the ledger has no equip rows)"}
+	}
+	if len(rec.Equipped) == 0 {
+		return Row{ID: RuleGear, Verdict: VerdictInconclusive,
+			Reason: "the record proves no equipped items (nothing equipped or nothing read back)"}
+	}
+	return JudgeGear(rec.Class, rec.Spec, rec.Equipped, in)
+}
+
+// JudgeGear judges one character's worn items against what its spec's players wear at 60 (rule
+// AOTC-GEAR-FITS-SPEC), for a record and for any other list of items (the realism report reads a
+// snapshot's). class and spec are the raw words; the judgment normalises them. The caller has
+// already established that the character is level 60 when it reads a record; a snapshot caller
+// checks the level itself, because the tables cover that level only.
+func JudgeGear(class, spec string, items []Item, in Inputs) Row {
 	row := Row{ID: RuleGear, Verdict: VerdictInconclusive}
-	class, spec := strings.ToLower(strings.TrimSpace(rec.Class)), SpecName(rec.Spec)
+	class, spec = strings.ToLower(strings.TrimSpace(class)), SpecName(spec)
 	if in.Tables == nil {
 		row.Reason = "no player data tables"
 		return row
 	}
 	if !in.Tables.SpecKnown(class, spec) {
-		row.Reason = fmt.Sprintf("no player data for %s/%s (spec-population.csv)", class, rec.Spec)
+		row.Reason = fmt.Sprintf("no player data for %s/%s (spec-population.csv)", class, spec)
 		return row
 	}
-	if rec.Level != GearLevel {
-		row.Reason = fmt.Sprintf("player gear data is level %d only (bot level %d)", GearLevel, rec.Level)
-		return row
-	}
-	if !rec.EquippedKnown {
-		row.Reason = "no equipped items in the record (the serve has no equipment read and the ledger has no equip rows)"
-		return row
-	}
-	if len(rec.Equipped) == 0 {
-		row.Reason = "the record proves no equipped items (nothing equipped or nothing read back)"
+	if len(items) == 0 {
+		row.Reason = "no equipped items to judge"
 		return row
 	}
 	// The priority is the explanation's tie-breaker only: the verdict's family set comes from the
@@ -64,7 +77,7 @@ func gearRow(rec Record, in Inputs) Row {
 
 	var evidence []string
 	var fine, unproven, mismatched int
-	for _, raw := range rec.Equipped {
+	for _, raw := range items {
 		item, hasSlot := resolve(raw, in.Tables)
 		if !hasSlot {
 			unproven++
@@ -104,21 +117,28 @@ func gearRow(rec Record, in Inputs) Row {
 			item.Slot, itemLabel(item), class, spec, why, familyLabel(families), item.Slot,
 			familyLabel(acceptable), priorityLabel(top)))
 	}
-	row.N = int64(len(rec.Equipped))
+	row.N = int64(len(items))
 	row.K = int64(fine)
 	row.Evidence = sortedEvidence(evidence)
 	switch {
 	case mismatched > 0:
 		row.Verdict = VerdictFail
-		row.Reason = fmt.Sprintf("%d of %d equipped items are a clear mismatch", mismatched, len(rec.Equipped))
+		row.Reason = fmt.Sprintf("%d of %d equipped items are a clear mismatch", mismatched, len(items))
 	case unproven > 0:
 		row.Verdict = VerdictInconclusive
-		row.Reason = fmt.Sprintf("%d of %d equipped items could not be judged (no item data)", unproven, len(rec.Equipped))
+		row.Reason = fmt.Sprintf("%d of %d equipped items could not be judged (no item data)", unproven, len(items))
 	default:
 		row.Verdict = VerdictPass
-		row.Reason = fmt.Sprintf("all %d equipped items fit %s/%s", len(rec.Equipped), class, spec)
+		row.Reason = fmt.Sprintf("all %d equipped items fit %s/%s", len(items), class, spec)
 	}
 	return row
+}
+
+// PriorityFamilies is the set of stat families among the spec's top PriorityStats priority rows: the
+// reading the gear rule's explanations quote, exported so another judge (the realism report's stat
+// check) reads the priority through the one implementation.
+func PriorityFamilies(t Tables, class, spec string) map[string]bool {
+	return priorityFamilies(t.StatPriorityFor(class, SpecName(spec)))
 }
 
 // itemLabel is how a rule line names an item: its name and (when known) its id.
@@ -205,6 +225,11 @@ func intersects(a, b map[string]bool) bool {
 // be acceptable: 20%. Below the floor a family names too little of what the spec's players (or the
 // item's wearers) want to excuse an item; the single largest family is accepted regardless.
 const familyShareFloor = 0.20
+
+// FamiliesIntersect reports whether two family sets share a family: the gear rule's own test,
+// exported so another reading of one outfit (the realism report's stat check) answers alike instead
+// of restating it.
+func FamiliesIntersect(a, b map[string]bool) bool { return intersects(a, b) }
 
 // familyShare is one weighted contribution to a family set: a row's share, or a wearer spec's
 // share, and the families it names. label is the wearer's evidence text (empty for a gear row).

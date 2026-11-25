@@ -769,6 +769,24 @@ func (d *Data) CommonTalents(class, spec, levels string, minShare float64) []Tal
 	return out
 }
 
+// SplitsFor returns the spec's most common level 60 point splits, most common first. A spec the file
+// does not name is empty, never a guess.
+func (d *Data) SplitsFor(class, spec string) []TalentSplit {
+	var out []TalentSplit
+	for _, s := range d.Splits {
+		if s.Class == class && s.Spec == spec {
+			out = append(out, s)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Pct != out[j].Pct {
+			return out[i].Pct > out[j].Pct
+		}
+		return out[i].Split < out[j].Split
+	})
+	return out
+}
+
 // StatPriorityFor returns the spec's stat priority at 60, highest first (equal orders keep the file's
 // order).
 func (d *Data) StatPriorityFor(class, spec string) []StatWeight {
