@@ -5,6 +5,7 @@ package world
 // CMSG_MOVE_FALL_LAND at the floor. The packets are built by hand from the core's writers, never from captures.
 
 import (
+	"context"
 	"errors"
 	"math"
 	"strings"
@@ -81,6 +82,8 @@ func TestFallFlightTimeInvertsTheCoreModel(t *testing.T) {
 func TestTeleportAboveTheGroundFalls(t *testing.T) {
 	fl := &fakeFloors{floors: []navmesh.Floor{{Z: 50, Flags: 1}}}
 	s, rec, t0 := newFallSession(fl)
+	// The session's clock is the recorder's, the way a live session's is its transport's.
+	s.nowFn = func() time.Time { return rec.now }
 	mustFeed(t, s, sideInstance, wire.SMSGMoveTeleport, teleportPacket(s.self, 3, 1020, 2010, 80))
 	if !s.fallActive() || !s.mover.Airborne() {
 		t.Fatal("the teleport above the floor did not start a fall")
@@ -151,7 +154,7 @@ func TestTeleportAboveTheGroundFalls(t *testing.T) {
 		t.Fatalf("mover at %.2f %.2f %.2f", x, y, z)
 	}
 	// And nothing more is sent afterwards.
-	rec.now = t0.Add(5 * time.Second)
+	rec.now = t0.Add(2 * time.Second) // the 30 yd fall lands at 1.76 s; the wait allows fallLandWait past it
 	n := len(rec.cores())
 	if err := s.flightTick(rec.now); err != nil || len(rec.cores()) != n {
 		t.Fatalf("a landed fall kept sending (%v)", err)
@@ -253,13 +256,15 @@ func TestTeleportAboveWaterSendsNoFallLand(t *testing.T) {
 func TestSecondTeleportEndsTheFall(t *testing.T) {
 	fl := &fakeFloors{floors: []navmesh.Floor{{Z: 50, Flags: 1}}}
 	s, rec, t0 := newFallSession(fl)
+	// The session's clock is the recorder's, the way a live session's is its transport's.
+	s.nowFn = func() time.Time { return rec.now }
 	mustFeed(t, s, sideInstance, wire.SMSGMoveTeleport, teleportPacket(s.self, 3, 1020, 2010, 80))
 	rec.now = t0.Add(300 * time.Millisecond)
 	mustFeed(t, s, sideInstance, wire.SMSGMoveTeleport, teleportPacket(s.self, 4, 1100, 2100, 50))
 	if s.fallActive() || s.mover.Airborne() {
 		t.Fatal("the fall outlived the teleport that moved the character")
 	}
-	rec.now = t0.Add(5 * time.Second)
+	rec.now = t0.Add(2 * time.Second) // the 30 yd fall lands at 1.76 s; the wait allows fallLandWait past it
 	beats := rec.count(wire.CMSGMoveHeartbeat)
 	if err := s.flightTick(rec.now); err != nil {
 		t.Fatal(err)
@@ -296,6 +301,8 @@ func TestAnotherUnitsTeleportDoesNotFallThisCharacter(t *testing.T) {
 func TestFallIsNotAKnockback(t *testing.T) {
 	fl := &fakeFloors{floors: []navmesh.Floor{{Z: 50, Flags: 1}}}
 	s, rec, t0 := newFallSession(fl)
+	// The session's clock is the recorder's, the way a live session's is its transport's.
+	s.nowFn = func() time.Time { return rec.now }
 	mustFeed(t, s, sideInstance, wire.SMSGMoveTeleport, teleportPacket(s.self, 3, 1020, 2010, 80))
 	rec.now = t0.Add(3 * time.Second)
 	if err := s.flightTick(rec.now); err != nil {
@@ -311,6 +318,8 @@ func TestFallIsNotAKnockback(t *testing.T) {
 func TestFallWalksAreRefusedUntilTheLanding(t *testing.T) {
 	fl := &fakeFloors{floors: []navmesh.Floor{{Z: 50, Flags: 1}}}
 	s, rec, t0 := newFallSession(fl)
+	// The session's clock is the recorder's, the way a live session's is its transport's.
+	s.nowFn = func() time.Time { return rec.now }
 	mustFeed(t, s, sideInstance, wire.SMSGMoveTeleport, teleportPacket(s.self, 3, 1020, 2010, 80))
 	if err := s.mover.Face(1.5); !errors.Is(err, objects.ErrAirborne) {
 		t.Fatalf("facing in the air answered %v", err)
@@ -337,5 +346,36 @@ func TestTeleportDuringAKnockbackFlightStartsNoFall(t *testing.T) {
 	}
 	if s.ground.state != "unknown" {
 		t.Fatalf("ground %+v", s.ground)
+	}
+}
+
+// TestWalkWaitsForTheLandingAfterATeleport: teleport answers at the fall's start, so a walk sent right after meets
+// the mover in the air (objects.ErrAirborne). walk_to and walk_path wait for the landing first, which is what this
+// pins: during the fall the mover refuses a walk, and once the wait returns the same walk goes on.
+//
+// Mutation these tests catch: the wait removed from the walk handlers (the walk answers "the character is in the
+// air" after an ordinary teleport above the ground).
+func TestWalkWaitsForTheLandingAfterATeleport(t *testing.T) {
+	fl := &fakeFloors{floors: []navmesh.Floor{{Z: 50, Flags: 1}}}
+	s, rec, t0 := newFallSession(fl)
+	// The session's clock is the recorder's, the way a live session's is its transport's.
+	s.nowFn = func() time.Time { return rec.now }
+	mustFeed(t, s, sideInstance, wire.SMSGMoveTeleport, teleportPacket(s.self, 3, 1020, 2010, 80))
+	if !s.fallActive() {
+		t.Fatal("the teleport above the floor did not start a fall")
+	}
+	if err := s.mover.WalkPath(context.Background(), [][3]float32{{1020, 2020, 50}}); !errors.Is(err, objects.ErrAirborne) {
+		t.Fatalf("a walk during the fall answered %v, want ErrAirborne", err)
+	}
+	// The clock the flight flies on passes the computed landing, and the wait's own collect flies it down.
+	rec.now = t0.Add(2 * time.Second) // the 30 yd fall lands at 1.76 s; the wait allows fallLandWait past it
+	if err := s.waitFallLanded(context.Background()); err != nil {
+		t.Fatalf("waiting for the landing: %v", err)
+	}
+	if s.fallActive() || s.mover.Airborne() {
+		t.Fatal("the wait returned with the fall still in the air")
+	}
+	if rec.count(wire.CMSGMoveFallLand) != 1 {
+		t.Fatalf("%d fall-land packets, want one", rec.count(wire.CMSGMoveFallLand))
 	}
 }

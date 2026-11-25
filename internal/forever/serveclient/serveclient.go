@@ -31,6 +31,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -859,7 +860,8 @@ type rpcWireError struct {
 
 // post sends one JSON-RPC 2.0 request and decodes the result of its reply into out (nil: only the envelope is
 // checked). Anything that is not a valid 2.0 envelope for our id is a transport error, so the caller can tell a bad
-// reply from a dead daemon. The reply body is never held whole: decodeReply streams it into the JSON decoder.
+// reply from a dead daemon. The body is never copied into a byte slice of the caller's: decodeReply passes it
+// through one JSON value at a time.
 func (c *Client) post(ctx context.Context, method string, params json.RawMessage, out any, timeout time.Duration) (*rpcWireError, error) {
 	reqBody := map[string]any{"jsonrpc": "2.0", "id": requestID, "method": method}
 	if params != nil {
@@ -947,12 +949,38 @@ func skipValue(dec *json.Decoder) error {
 	return err
 }
 
-// decodeReply reads one JSON-RPC 2.0 reply from r, decodes its result straight into out (nil: the result is only
-// checked for presence), and refuses a body over maxReplyBytes by name. The body is streamed: the result is decoded
-// once, into out, as the decoder passes the body, so a large map_snapshot is not held as a body buffer and a copy of
-// its result beside the decoded value. A reply whose result field does not fit out fails the call; out may hold a
-// partly decoded result then, which the caller ignores with the error.
+// decodeReply reads one JSON-RPC 2.0 reply from r, decodes its result into out (nil: the result is only checked for
+// presence), and refuses a body over maxReplyBytes by name. The body is not held whole by this file: the decoder
+// walks it value by value, and the result is unmarshalled from the value the decoder buffered for it. That buffered
+// value is one copy of the result, held by the decoder for the length of its decode (encoding/json's Decoder reads
+// a complete value before unmarshalling it); a large map_snapshot therefore costs the decoded value and, while it is
+// being decoded, that one buffer, never the whole reply body beside them.
+//
+// out is left zero on every rejected reply and reset before each attempt: a call that retries (a reconnecting daemon)
+// must not answer with a mixture of two replies, and a caller reading out after an error finds nothing half written.
 func decodeReply(r io.Reader, out any) (*rpcWireError, error) {
+	clearValue(out) // a retried call starts each reply from the zero value
+	rpcErr, err := decodeReplyInto(r, out)
+	if err != nil {
+		clearValue(out) // a rejected reply leaves the caller's value empty, never half decoded
+	}
+	return rpcErr, err
+}
+
+// clearValue sets a decode target back to its zero value when it is a settable pointer; anything else is left alone
+// (json.Decode refuses it itself).
+func clearValue(out any) {
+	if out == nil {
+		return
+	}
+	v := reflect.ValueOf(out)
+	if v.Kind() == reflect.Pointer && !v.IsNil() && v.Elem().CanSet() {
+		v.Elem().Set(reflect.Zero(v.Elem().Type()))
+	}
+}
+
+// decodeReplyInto is decodeReply's body: one pass over the reply, the result decoded into out as the decoder meets it.
+func decodeReplyInto(r io.Reader, out any) (*rpcWireError, error) {
 	cr := &countingReader{r: r}
 	dec := json.NewDecoder(io.LimitReader(cr, maxReplyBytes+1))
 	bad := func(format string, args ...any) (*rpcWireError, error) {

@@ -74,8 +74,10 @@ and is refused with `objects: the character is between maps: the walk did not st
 an instance-portal volume the plans name arms that volume for the walk's own duration and removes it when the walk
 ends ([travel](travel.md#area_trigger_watch) says which volumes).
 
-Refusals: no mover (the character's create block never arrived), the character is airborne or falling, or a
-map change is in progress. No navmesh is needed.
+Refusals: no mover (the character's create block never arrived), the character is airborne (a knockback), or a map
+change is in progress. A fall the character is in (a teleport above the ground answers at the fall's start) is
+waited out first: `walk_to` and `walk_path` land the character before they walk, so a walk sent right after a
+teleport does not answer `the character is in the air`. No navmesh is needed.
 
 ```json
 {"jsonrpc":"2.0","id":1,"method":"walk_to","params":{"x":-8949.0,"y":-118.0,"z":83.5}}

@@ -52,7 +52,7 @@ The core's `.go xyz` line, through the GM command channel.
 The call waits for the server to move the character. A point above ground the navmesh knows starts a fall, and the
 answer comes when the server's own move is confirmed, at the fall's start (`ground: "falling"`, the flight still
 left in `fall_ms`): the fall goes on flying on every later wait, so a `status` call during it shows the character in
-the air.
+the air, and the next `walk_to`/`walk_path` waits for the landing before it walks.
 
 | Field | Meaning |
 |---|---|
