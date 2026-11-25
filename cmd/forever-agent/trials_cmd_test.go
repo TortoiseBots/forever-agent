@@ -262,3 +262,49 @@ func TestTrialsScorePlayerDataFlag(t *testing.T) {
 		t.Fatalf("flag-first score stdout = %q", out.String())
 	}
 }
+
+// TestTrialsScoreClassRulesFlag: --class-rules adds the healer-assignment reading to the score and
+// the card's own section; the default score keeps the card and the count line unchanged.
+func TestTrialsScoreClassRulesFlag(t *testing.T) {
+	runDir := trialsRunDir(t)
+	var out, errOut bytes.Buffer
+	if code := run(context.Background(), []string{"trials", "score", runDir}, &out, &errOut); code != exitOK {
+		t.Fatalf("score exit %d, stderr %q", code, errOut.String())
+	}
+	if strings.Contains(out.String(), "class rules") {
+		t.Fatalf("the default score counted class rules: %q", out.String())
+	}
+	card, err := os.ReadFile(filepath.Join(runDir, "card.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(card), "Class rules") {
+		t.Fatalf("the default card carries a class-rules section:\n%s", card)
+	}
+
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"trials", "score", runDir, "--class-rules"}, &out, &errOut); code != exitOK {
+		t.Fatalf("score --class-rules exit %d, stderr %q", code, errOut.String())
+	}
+	if !strings.Contains(out.String(), "class rules: 0 PASS, 0 FAIL, 1 INCONCLUSIVE") {
+		t.Fatalf("score --class-rules stdout = %q", out.String())
+	}
+	card, err = os.ReadFile(filepath.Join(runDir, "card.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(card), "## Class rules") {
+		t.Fatalf("the card has no class-rules section:\n%s", card)
+	}
+
+	// The flag before the run dir is still a flag, not the run dir's value.
+	out.Reset()
+	errOut.Reset()
+	if code := run(context.Background(), []string{"trials", "score", "--class-rules", runDir}, &out, &errOut); code != exitOK {
+		t.Fatalf("score --class-rules <run> exit %d, stdout %q, stderr %q", code, out.String(), errOut.String())
+	}
+	if !strings.Contains(out.String(), "class rules:") {
+		t.Fatalf("flag-first score stdout = %q", out.String())
+	}
+}

@@ -827,6 +827,26 @@ func Matches(row Row, where Row, byGUID map[string][]TimedSample, ctx *Ctx, tria
 			return false
 		}
 	}
+	// dst_power_lt is src_power_lt on the other side: the target's mana (or energy, rage)
+	// percent at the event's time, read from the freshest sample at or before it. A target
+	// with no power of its own, or no sample to prove one, does not match: an unknown bar is
+	// never "below the limit".
+	if where["dst_power_lt"] != nil {
+		sample := At(byGUID, row["dst_guid"], rowNum(row, "t"))
+		if sample == nil {
+			return false
+		}
+		power, okP := pyjson.Float(sample["power"])
+		maxPower, okM := pyjson.Float(sample["max_power"])
+		if !okP || !okM || maxPower == 0 {
+			return false
+		}
+		pct := 100.0 * power / maxPower
+		limit := Num(where["dst_power_lt"], ctx, nil)
+		if limit == nil || !(pct < *limit) {
+			return false
+		}
+	}
 	for _, key := range []string{"src_target_of", "dst_target_of"} {
 		if where[key] == nil {
 			continue
@@ -950,7 +970,7 @@ func isWhereKey(key string) bool {
 	case "kind", "src", "dst", "spell", "spell_id",
 		"dst_hp_gt", "dst_hp_lt", "dst_hp_le", "in_combat",
 		"t_from", "t_to", "dst_has_aura", "dst_lacks_aura",
-		"src_power_lt", "response_dst", "same_dst",
+		"src_power_lt", "dst_power_lt", "response_dst", "same_dst",
 		"trigger_debounce_s", "src_target_of", "dst_target_of",
 		"src_within_of_marked", "marked_has_cc",
 		"spell_interruptible", "src_hp_le", "not_within_s_after_mark",
@@ -2525,18 +2545,40 @@ func OpportunitySeconds(trial map[string]any, samples []Row, excluded [][2]float
 				v := 100.0 * hp / maxHP
 				pct = &v
 			}
+			var powerPct *float64
+			power, okP := pyjson.Float(sample["power"])
+			maxPower, okMP := pyjson.Float(sample["max_power"])
+			if okP && okMP && maxPower > 0 {
+				v := 100.0 * power / maxPower
+				powerPct = &v
+			}
 			ok2 := true
-			if opp["hp_lt"] != nil {
-				negInf := math.Inf(-1)
-				limit := Num(opp["hp_lt"], ctx, &negInf)
-				if !(pct != nil && limit != nil && *pct < *limit) {
+			// power_lt/power_gt read the sample's own bar (mana on a caster, energy on a
+			// rogue): a unit with no readable bar never holds the opportunity, the same
+			// way a missing hp never satisfies hp_lt.
+			for _, bound := range []struct {
+				key  string
+				lt   bool
+				pct  *float64
+				zero float64
+			}{
+				{"hp_lt", true, pct, math.Inf(-1)},
+				{"hp_gt", false, pct, 0},
+				{"power_lt", true, powerPct, math.Inf(-1)},
+				{"power_gt", false, powerPct, 0},
+			} {
+				if opp[bound.key] == nil {
+					continue
+				}
+				limit := Num(opp[bound.key], ctx, &bound.zero)
+				if ok := bound.pct != nil && limit != nil; !ok {
+					ok2 = false
+					continue
+				}
+				if bound.lt && !(*bound.pct < *limit) {
 					ok2 = false
 				}
-			}
-			if opp["hp_gt"] != nil {
-				zero := 0.0
-				limit := Num(opp["hp_gt"], ctx, &zero)
-				if !(pct != nil && limit != nil && *pct > *limit) {
+				if !bound.lt && !(*bound.pct > *limit) {
 					ok2 = false
 				}
 			}

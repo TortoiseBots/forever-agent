@@ -58,24 +58,36 @@ serve has no equipment read and this repository carries no item stats). Per item
 
 Stamina, crit and hit have no stat family: every priority lists stamina for survivability, so it
 cannot make an item contrary (a feral's Agility is second, an enhancement shaman's Intellect
-second). A spec's family set is every family among its top `PriorityStats` stats, not only the
-first one, so a mixed spec is never reduced to a pure caster or a pure physical spec. The stat
-priority remains in the evidence line as the tie-break; the verdict's families come from the data.
+second). A spec's family set is every family among its top `PriorityStats` priority rows, so a spec
+whose rows name a caster and a physical family keeps both: protection and retribution paladins read
+as hybrids (intellect and strength in their three rows). A spec whose rows name one family reads as
+that family alone, and that is the data's answer, not a defect: an enhancement shaman's three rows
+are stamina, intellect and spell power (strength is about equal to spell power at the third rank,
+outside the three rows the set reads), so it reads as a caster — which is the mail its players
+actually wear, and what keeps a shaman in warrior plate contrary. The stat priority remains in the
+evidence line as the tie-break; the verdict's families come from the data.
 
 Known limits (the tables carry no item stats or armour type, only wearer choices):
 
 - a feral druid in plate is FINE: the feral's own data names agility and strength, so a strength
   plate piece shares a family with the feral's own leather. An outfit in the wrong armour class but
   the right stat family passes.
-- an enhancement shaman in hunter-only agility mail FAILs in Wrist, Hands, Waist and Feet, where
-  the shaman's own slot data names a caster family above the floor; the same mail is FINE in the
-  other four armour slots (Shoulders, Chest, Legs and the ones without such an item; measured on
-  the shipped tables, 2026-11-25), and the agility mail its own players wear is FINE by the
-  own-data rule. The largest-family clause adds no family on the shipped data at all: every
-  acceptable set and every item reading is the 20% floor's alone (the outfit and data-sweep tests
-  say so).
+- an enhancement shaman in hunter-worn agility mail FAILs in Wrist, Hands, Waist and Feet, where
+  the shaman's own slot data names a caster family above the floor: 4 of the 8 armour slots, 4 of
+  the 7 that have such an item at all (the Head pieces hunters wear are also in the shaman's own
+  tables, so the own-data rule settles them). The same mail is FINE in the other four armour slots
+  (Shoulders, Chest, Legs and the ones without such an item; measured on the shipped tables,
+  2026-11-25), and the agility mail its own players wear is FINE by the own-data rule. The
+  largest-family clause adds no family on the shipped data at all: every acceptable set and every
+  item reading is the 20% floor's alone (the outfit and data-sweep tests say so).
 
 Both need the item read-out of #20 (item stats), not a threshold change.
+
+The largest-family clause ("or when it is the single largest family") stays as a guard for a
+family set that grows past five entries. The reason it changes no verdict today is arithmetic — a
+contribution's share is counted once per family it names and a family set holds at most three
+families, so the largest family always holds at least a third of the summed share, above the 0.20
+floor. `TestGearLargestFamilyClauseOnShippedTables` fails the day one does.
 
 Item level is never a reason. A record with no item data, a bot below level 60 (the gear data is
 level 60 only) or an unknown spec is INCONCLUSIVE with the reason.

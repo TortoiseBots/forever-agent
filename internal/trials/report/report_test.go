@@ -94,3 +94,70 @@ func TestCardWithoutPlayerDataHasNoSection(t *testing.T) {
 		t.Fatalf("card.json carries player_data without the rules: %v", doc["player_data"])
 	}
 }
+
+// TestCardClassRulesSection pins the card's own heading for the class rules: the section, its rows
+// and card.json's class_rules. Without the rows the default card carries neither.
+func TestCardClassRulesSection(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "RUN.json"), []byte(`{"label":"x","server":"s"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runTrials := []map[string]any{{
+		"trial":    "t",
+		"verdicts": []any{},
+		"class_rules": []any{
+			map[string]any{"rep": "rep1", "id": "HEAL-ASSIGNMENT", "verdict": "FAIL",
+				"k": int64(4), "n": int64(10),
+				"evidence": []any{"main healer $bot (Bheal) healer: 10 heal(s), 1000 healing, 40% to the tanks"},
+				"reason":   "the main healer sends 40% of its healing to the tanks, under the 60% the rule needs"},
+		},
+	}}
+	if _, err := WriteCard(dir, runTrials); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "card.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		"## Class rules",
+		"| t | rep1 | HEAL-ASSIGNMENT | FAIL | 4/10 | the main healer sends 40% of its healing to the tanks, under the 60% the rule needs |",
+		"- t rep1 HEAL-ASSIGNMENT: main healer $bot (Bheal) healer: 10 heal(s), 1000 healing, 40% to the tanks",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("card does not contain %q:\n%s", want, text)
+		}
+	}
+	card := CardJSON(dir)
+	rows, _ := card["class_rules"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("card.json class_rules: %v", card["class_rules"])
+	}
+	first, _ := rows[0].(map[string]any)
+	if first["trial"] != "t" || first["rep"] != "rep1" {
+		t.Fatalf("card.json row: %v", first)
+	}
+}
+
+// TestCardWithoutClassRulesHasNoSection keeps the default card unchanged.
+func TestCardWithoutClassRulesHasNoSection(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "RUN.json"), []byte(`{"label":"x","server":"s"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteCard(dir, []map[string]any{{"trial": "t", "verdicts": []any{}}}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "card.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "Class rules") {
+		t.Fatalf("a section appeared without class rules:\n%s", data)
+	}
+	card := CardJSON(dir)
+	if _, found := card["class_rules"]; found {
+		t.Fatalf("card.json carries class_rules without the rules: %v", card["class_rules"])
+	}
+}

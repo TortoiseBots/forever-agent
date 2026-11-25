@@ -406,7 +406,7 @@ func Validate(trialVal any) []string {
 					errAdd(&errs, fmt.Sprintf("%s: bad opportunity unit %s", tid, pythonRepr(unit)))
 				}
 			}
-			for _, key := range []string{"hp_lt", "hp_gt"} {
+			for _, key := range []string{"hp_lt", "hp_gt", "power_lt", "power_gt"} {
 				if opp[key] != nil && !numOrThreshold(opp[key]) {
 					errAdd(&errs, fmt.Sprintf("%s: bad opportunity %s %s", tid, key, pythonRepr(opp[key])))
 				}

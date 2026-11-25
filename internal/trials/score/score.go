@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/pjerra/forever-agent/internal/trials/classrules"
 	"github.com/pjerra/forever-agent/internal/trials/events"
 	"github.com/pjerra/forever-agent/internal/trials/playdata"
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
@@ -761,6 +762,11 @@ type Options struct {
 	// imply spells) to each trial's rows under trial.json's `player_data`, which the report card
 	// prints under its own heading. Off unless asked (trials score --player-data).
 	PlayerData bool
+	// ClassRules adds the class rules (internal/trials/classrules: healer assignment) to each
+	// trial's rows under trial.json's `class_rules`, which the report card prints under its own
+	// heading. Off unless asked (trials score --class-rules): they read the party's roles and the
+	// recording's heal rows, which most runs do not stage.
+	ClassRules bool
 }
 
 // ScoreTrialWith is ScoreTrialE with the extra readings Options names.
@@ -1018,6 +1024,11 @@ func scoreTrialWithOpts(trialDir string, trial Trial, opts Options, scoreRep rep
 	// when asked, so a default score is byte for byte the bench's.
 	if opts.PlayerData {
 		out["player_data"] = playdata.TrialRows(trialDir, trial, playdata.DefaultInputs())
+	}
+	// The class rules read the recording and the trial's party roles: added only when asked, so a
+	// default score stays byte for byte the bench's.
+	if opts.ClassRules {
+		out["class_rules"] = classrules.TrialRows(trialDir, trial)
 	}
 	if err := pyjson.Dump(filepath.Join(trialDir, "trial.json"), out); err != nil {
 		return nil, fmt.Errorf("write %s: %w", filepath.Join(trialDir, "trial.json"), err)

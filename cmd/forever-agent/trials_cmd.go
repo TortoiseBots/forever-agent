@@ -15,7 +15,8 @@ import (
 )
 
 const trialsUsage = "usage: forever-agent trials <command> [args]\n" +
-	"  score <run dir> [--player-data]    score a finished run: verdicts.json, trial.json, card.md, card.json\n" +
+	"  score <run dir> [--player-data] [--class-rules]\n" +
+	"                                     score a finished run: verdicts.json, trial.json, card.md, card.json\n" +
 	"  report <run dir>                   re-render card.md/card.json from the run's trial.json and print the card\n" +
 	"  compare <run dir> --baseline <dir> before/after table with Fisher's exact p (reads both card.json)\n" +
 	"  validate [files...]                validate trial files (default: the embedded set)\n" +
@@ -26,7 +27,8 @@ const trialsUsage = "usage: forever-agent trials <command> [args]\n" +
 	"  forever-data-check --slots F --server S [--scratch NAME] [--out FILE] [--dir RUNDIR] [--allow-unknown]\n" +
 	"                                     ask the live server every spell, item and mob entry the trials name\n" +
 	"\n" +
-	"score's --player-data also judges the bots against the aotc.gg player data (gear fits the spec, talents imply spells)"
+	"score's --player-data also judges the bots against the aotc.gg player data (gear fits the spec, talents imply spells);\n" +
+	"score's --class-rules also judges the party's healer assignment from the recording"
 
 // trialsCmd dispatches the scoring half of the Python trials bench, ported into
 // internal/trials. It reads a run folder as the Python tool writes it and never runs a trial.
@@ -68,11 +70,14 @@ func trialsScore(args []string, stdout, stderr io.Writer) int {
 	// does not take the run dir for the flag's value.
 	pre := flag.NewFlagSet("trials score", flag.ContinueOnError)
 	pre.Bool("player-data", false, "")
+	pre.Bool("class-rules", false, "")
 	pos, rest := splitPositionals(pre, args, 1)
 	fs := flag.NewFlagSet("trials score", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	playerData := fs.Bool("player-data", false,
 		"also score the bots against the aotc.gg player data (gear fits the spec, talents imply spells)")
+	classRules := fs.Bool("class-rules", false,
+		"also judge the party's healer assignment from the recording")
 	if err := fs.Parse(rest); err != nil {
 		fmt.Fprintln(stderr, trialsUsage)
 		return exitUsage
@@ -86,7 +91,7 @@ func trialsScore(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "trials score: %v\n", err)
 		return exitUsage
 	}
-	runTrials, err := score.ScoreRunWith(runDir, score.Options{PlayerData: *playerData})
+	runTrials, err := score.ScoreRunWith(runDir, score.Options{PlayerData: *playerData, ClassRules: *classRules})
 	if err != nil {
 		// The Python bench lets the exception escape: exit 1, no verdict.
 		fmt.Fprintf(stderr, "trials score: %v\n", err)
@@ -131,6 +136,28 @@ func trialsScore(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 		fmt.Fprintf(stdout, "player data (aotc.gg): %d PASS, %d FAIL, %d INCONCLUSIVE\n", pPass, pFail, pInconclusive)
+	}
+	if *classRules {
+		// The class rules are bench readings too: counted apart, never changing the exit code.
+		cFail, cInconclusive, cPass := 0, 0, 0
+		for _, trial := range runTrials {
+			rows, _ := pyjson.List(trial["class_rules"])
+			for _, rowVal := range rows {
+				row, ok := pyjson.Object(rowVal)
+				if !ok {
+					continue
+				}
+				switch pyjson.Str(row["verdict"]) {
+				case "FAIL":
+					cFail++
+				case "INCONCLUSIVE":
+					cInconclusive++
+				case "PASS":
+					cPass++
+				}
+			}
+		}
+		fmt.Fprintf(stdout, "class rules: %d PASS, %d FAIL, %d INCONCLUSIVE\n", cPass, cFail, cInconclusive)
 	}
 	if nFail > 0 {
 		return 1

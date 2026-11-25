@@ -70,7 +70,7 @@ var metrics = map[string]bool{"count": true, "ratio": true, "latency": true, "up
 var whereKeys = map[string]bool{
 	"kind": true, "src": true, "dst": true, "spell": true, "spell_id": true, "dst_hp_gt": true, "dst_hp_lt": true,
 	"dst_hp_le": true, "in_combat": true, "t_from": true, "t_to": true, "dst_has_aura": true,
-	"dst_lacks_aura": true, "src_power_lt": true, "response_dst": true, "same_dst": true,
+	"dst_lacks_aura": true, "src_power_lt": true, "dst_power_lt": true, "response_dst": true, "same_dst": true,
 	"trigger_debounce_s": true, "src_target_of": true, "dst_target_of": true,
 	"src_within_of_marked": true, "marked_has_cc": true, "spell_interruptible": true,
 	"src_hp_le": true, "not_within_s_after_mark": true, "party_under_attack": true,
@@ -121,7 +121,7 @@ var sitFields = stringSet("kind", "mobs", "hp_band", "floor_pct", "victim", "pul
 
 var talentsFields = stringSet("tree", "spells")
 
-var opportunityFields = stringSet("unit", "hp_lt", "hp_gt", "in_combat", "has_aura")
+var opportunityFields = stringSet("unit", "hp_lt", "hp_gt", "power_lt", "power_gt", "in_combat", "has_aura")
 
 var mobsFields = stringSet("role", "count", "level_delta", "refill", "refill_every_s")
 
@@ -137,7 +137,7 @@ var checkFields = stringSet("metric", "where", "num", "den", "trigger", "respons
 
 var triggerFields = stringSet("kind", "src", "dst", "spell", "spell_id", "dst_hp_gt", "dst_hp_lt",
 	"dst_hp_le", "in_combat", "t_from", "t_to", "dst_has_aura", "dst_lacks_aura",
-	"src_power_lt", "src_target_of", "dst_target_of", "src_within_of_marked", "marked_has_cc",
+	"src_power_lt", "dst_power_lt", "src_target_of", "dst_target_of", "src_within_of_marked", "marked_has_cc",
 	"spell_interruptible", "src_hp_le", "not_within_s_after_mark", "party_under_attack",
 	"unit", "below", "mark")
 
@@ -410,7 +410,7 @@ func checkFilter(doc any, label, trialID, rid string, errs *[]string, needKind b
 			}
 		}
 	}
-	for _, key := range []string{"dst_hp_gt", "dst_hp_lt", "dst_hp_le", "src_hp_le", "src_power_lt"} {
+	for _, key := range []string{"dst_hp_gt", "dst_hp_lt", "dst_hp_le", "src_hp_le", "src_power_lt", "dst_power_lt"} {
 		if val := obj[key]; val != nil && !numOrThreshold(val) {
 			errAdd(errs, fmt.Sprintf("%s: bad %s %s", where, key, pythonRepr(val)))
 		}
