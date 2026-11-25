@@ -362,6 +362,9 @@ type playRun struct {
 	pack     int
 	bossRun  bool
 	bossGUID wire.GUID
+	// raidBossFought says a raid's fight has run into a leg's boss (one that aggroed by itself, or the joined fight's
+	// set): the fight's end stops the run raid-boss-reached.
+	raidBossFought bool
 	// pullWalk says the walk in progress is a pull's own approach (to the plan's stand, or a retry's step): the walk
 	// skips a pack in the way and the patrol hold, so a pull never starts a nested one.
 	pullWalk bool
@@ -475,6 +478,11 @@ func Play(ctx context.Context, route *Route, ports PlayPorts, cfg PlayConfig) *R
 		}
 	}
 	p.notes = append(p.notes, route.Notes...)
+	// A player-led raid's split is the owner's, never the plan's placeholder: a group that differs is one note (a
+	// trace event, and a line in the summary), not a refusal.
+	if note := raidSplitNote(cfg.Raid, route.Raid); note != "" {
+		p.notes = append(p.notes, note)
+	}
 	p.rec = p.openRecorder()
 	for _, note := range p.notes {
 		p.rec.Event(p.start, "note", map[string]any{"text": note})
@@ -611,6 +619,7 @@ func (p *playRun) finish() {
 	p.rec.sum.Bosses = p.bosses
 	p.rec.sum.Wipes = p.wipes
 	p.rec.sum.Deaths = p.deaths
+	p.rec.sum.Notes = append([]string(nil), p.notes...)
 	p.drainCombat()
 	p.rec.PullAbort(p.now(), "stop") // a stop inside a pull leaves no pull_start without its pull_end
 	p.rec.sum.Play = p.playRecord(p.now())

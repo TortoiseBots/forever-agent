@@ -110,6 +110,11 @@ type PlayFake struct {
 	ConvertErr   error
 	MoveErr      error
 	RaidMoves    []RaidSlot
+	// Subgroups is each party member's raid subgroup (1-8) by lowercased name, filled when the group converts and as
+	// later bots join; RaidSwaps is every swap the layout asked for. The fake enforces the core's five-per-subgroup
+	// rule, so a layout the run cannot satisfy stops where the real core would.
+	Subgroups map[string]int
+	RaidSwaps []RaidSwap
 	// frozen is the roster served while it is set: what the party said when FreezeRoster took it. A stats request
 	// clears it, the way the server's SMSG_PARTY_MEMBER_FULL_STATE answers would.
 	frozen []PartyMember
@@ -582,6 +587,13 @@ type PlayModule struct {
 	f *PlayFake
 }
 
+// RaidSwap is one subgroup swap the fake applied: the member, its new subgroup and the member that traded with it.
+type RaidSwap struct {
+	Name     string
+	Subgroup int
+	SwapWith string
+}
+
 // Add is `.bot add`. The core refuses a sixth member of a party: until the group is converted to a raid, an add that
 // would make it larger than party.MaxPartyMembers is refused with `party-full`.
 func (m *PlayModule) Add(ctx context.Context, name string) (botcmd.Reply, error) {
@@ -594,6 +606,9 @@ func (m *PlayModule) Add(ctx context.Context, name string) (botcmd.Reply, error)
 		// The bot logs in at its owner's side.
 		if b := m.GoldenOwner.bot(name); b != nil {
 			b.Map = m.GoldenOwner.SelfMap
+		}
+		if m.f.RaidGroup && !m.f.placeRaidMember(name) {
+			return m.GoldenOwner.refuse(botcmd.VerbAdd, name, "raid-full", "the raid holds forty members")
 		}
 	}
 	return rep, err
@@ -746,6 +761,7 @@ func (f *PlayFake) rosterLive() []PartyMember {
 	out := []PartyMember{{
 		Name: f.SelfName, GUID: f.selfGUID, Online: true, Dead: f.SelfPhase != PhaseAlive,
 		Ghost: f.SelfPhase == PhaseGhost, HP: f.selfHP[0], MaxHP: f.selfHP[1], Pos: f.SelfPos, Map: f.SelfMap,
+		Subgroup: f.raidSubgroupOf(f.SelfName),
 	}}
 	for _, b := range f.GoldenOwner.Bots {
 		key := strings.ToLower(b.Name)
@@ -772,7 +788,7 @@ func (f *PlayFake) rosterLive() []PartyMember {
 		out = append(out, PartyMember{
 			Name: b.Name, GUID: f.botGUID(b.Name), Online: b.Online && !off, Dead: b.Dead, Ghost: b.Ghost,
 			HP: hp, MaxHP: maxHP, PowerType: p[0], Power: p[1], MaxPower: p[2],
-			Pos: f.botPos(b), Map: b.Map,
+			Pos: f.botPos(b), Map: b.Map, Subgroup: f.raidSubgroupOf(b.Name),
 		})
 	}
 	f.MaxRoster = max(f.MaxRoster, len(out))
@@ -862,7 +878,8 @@ func (f *PlayFake) Mark(target wire.GUID, mark party.Mark) error {
 }
 
 // ConvertRaid is the group layer's convert_raid (SPEC #108 R4b): the party becomes a raid, and `.bot add` then takes
-// more than five members (before it, a sixth add is refused the way the core refuses it).
+// more than five members (before it, a sixth add is refused the way the core refuses it). The members the group holds
+// fill the subgroups in order, five to a subgroup, as the core does; later adds take the first subgroup with room.
 func (f *PlayFake) ConvertRaid(ctx context.Context) error {
 	f.ConvertCalls++
 	f.act("convert-raid")
@@ -870,16 +887,96 @@ func (f *PlayFake) ConvertRaid(ctx context.Context) error {
 		return f.ConvertErr
 	}
 	f.RaidGroup = true
+	f.Subgroups = map[string]int{}
+	f.placeRaidMember(f.SelfName)
+	for _, b := range f.GoldenOwner.Bots {
+		if b.InParty {
+			f.placeRaidMember(b.Name)
+		}
+	}
 	return nil
 }
 
-// RaidMove is the group layer's raid_move: the member goes to its subgroup, or MoveErr answers.
+// placeRaidMember puts a member in the first subgroup with room, five members each: false when the raid is full.
+func (f *PlayFake) placeRaidMember(name string) bool {
+	key := strings.ToLower(strings.TrimSpace(name))
+	if f.Subgroups == nil {
+		f.Subgroups = map[string]int{}
+	}
+	if sub, ok := f.Subgroups[key]; ok && sub >= 1 {
+		return true
+	}
+	for sub := 1; sub <= party.MaxSubgroups; sub++ {
+		if f.subgroupCount(sub) < party.MaxPartyMembers {
+			f.Subgroups[key] = sub
+			return true
+		}
+	}
+	return false
+}
+
+// subgroupCount is how many members a subgroup holds.
+func (f *PlayFake) subgroupCount(subgroup int) int {
+	n := 0
+	for _, sub := range f.Subgroups {
+		if sub == subgroup {
+			n++
+		}
+	}
+	return n
+}
+
+// raidSubgroupOf is a member's subgroup (0 when the fake has none for it).
+func (f *PlayFake) raidSubgroupOf(name string) int {
+	return f.Subgroups[strings.ToLower(strings.TrimSpace(name))]
+}
+
+// RaidMove is the group layer's raid_move: the member goes to its subgroup, or MoveErr answers. A subgroup that
+// already holds five refuses a plain move, as the core drops it (Group.cpp:1735-1738).
 func (f *PlayFake) RaidMove(ctx context.Context, name string, subgroup int) error {
 	f.act("raid-move " + name + " " + strconv.Itoa(subgroup))
 	if f.MoveErr != nil {
 		return f.MoveErr
 	}
+	key := strings.ToLower(strings.TrimSpace(name))
+	cur, ok := f.Subgroups[key]
+	if !ok || cur < 1 {
+		return fmt.Errorf("raid_move: %q is not in the party", name)
+	}
+	if cur != subgroup && f.subgroupCount(subgroup) >= party.MaxPartyMembers {
+		return fmt.Errorf("raid_move: subgroup %d is full: pass swap_with", subgroup)
+	}
+	f.Subgroups[key] = subgroup
 	f.RaidMoves = append(f.RaidMoves, RaidSlot{Name: name, Subgroup: subgroup})
+	return nil
+}
+
+// RaidSwap is CMSG_SWAP_SUB_GROUPS: name and swapWith trade subgroups. swapWith must hold the target subgroup, as the
+// core's swap does.
+func (f *PlayFake) RaidSwap(ctx context.Context, name string, subgroup int, swapWith string) error {
+	f.act("raid-swap " + name + " " + strconv.Itoa(subgroup) + " " + swapWith)
+	if f.MoveErr != nil {
+		return f.MoveErr
+	}
+	key := strings.ToLower(strings.TrimSpace(name))
+	other := strings.ToLower(strings.TrimSpace(swapWith))
+	cur, ok := f.Subgroups[key]
+	if !ok || cur < 1 {
+		return fmt.Errorf("raid_move: %q is not in the party", name)
+	}
+	partner, ok := f.Subgroups[other]
+	if !ok || partner < 1 {
+		return fmt.Errorf("raid_move: %q is not in the party", swapWith)
+	}
+	if cur == subgroup {
+		return nil
+	}
+	if partner != subgroup || cur == partner {
+		return fmt.Errorf("raid_move: %s is in subgroup %d: swap_with must name a member of subgroup %d in another subgroup",
+			swapWith, partner, subgroup)
+	}
+	f.Subgroups[key], f.Subgroups[other] = subgroup, cur
+	f.RaidSwaps = append(f.RaidSwaps, RaidSwap{Name: name, Subgroup: subgroup, SwapWith: swapWith})
 	return nil
 }
 

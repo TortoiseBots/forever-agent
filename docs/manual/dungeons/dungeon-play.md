@@ -112,13 +112,15 @@ the five-member path is unchanged.
 | `--tanks` | required for a raid | The bots that tank, comma separated. The **first** one is the pull tank: every order that names the party's tank goes to it, and the off-tanks fight with the damage dealers. |
 | `--healers` | required for a raid | The bots that heal. Any living one may raise a dead member; the first one is the rest gate's healer (it must use mana). |
 | `--dps` | required for a raid | The damage dealers, at least 2. Every one of them (and every off-tank) is ordered onto the skull. |
-| `--layout` | none | A layout file: one bot per line, its name and the subgroup 1-8 it is moved to with a raid move ([raid-suite](../turtle/raids/raid-suite-reference.md) reads the same format). A failed move stops the run `raid-move`. |
+| `--layout` | none | A layout file: one bot per line, its name and the subgroup 1-8 it is moved to with a raid move ([raid-suite](../turtle/raids/raid-suite-reference.md) reads the same format). A move into a subgroup that already holds five trades places with a member it holds (the first in roster order the layout does not place there); a failed or unsatisfiable layout stops the run `raid-move`. |
 
 A group is refused before anything is sent when it has no tank, no healer, fewer than 2 damage dealers, the same name
 twice, or a size outside **5** to **39** bots (`PlayRaidMinBots`, `PlayRaidMaxBots` = the core's raid of 40 less this
 character); a plan whose `raid.size` is known caps it there (`size - 1`). It is refused with a usage error. The plan's
 own `raid` role split (`tanks`, `healers`, `dps`) is a placeholder for the raid it was written for, so a split that
-differs from it is not refused.
+differs from it is not refused: it is recorded once as a note (a `note` event in the trace and a line in the summary's
+`notes`). A layout is refused before anything is sent when it names a bot the group does not hold, names one member for
+two subgroups, or names more than five members into one subgroup.
 
 `FORM` for a raid converts the group first and adds after:
 
@@ -127,16 +129,21 @@ differs from it is not refused.
    comes before the second add; a failed convert stops the run `raid-convert`, and a group port with no raid support
    stops it `raid-group-unsupported`.
 3. The rest of the raid is added, in role order: the tanks, then the healers, then the damage dealers.
-4. Every `--layout` entry is applied with a raid move, in file order (`raid_move` with the member's slot and its
-   subgroup).
+4. The `--layout` is applied (a `raid_move` event per move, with the member's slot and its subgroup). A move into a
+   subgroup with room is sent first, so a member leaving a full subgroup frees its slot; a move whose target subgroup
+   already holds five is a swap with a member of it that the layout does not place there (`CMSG_SWAP_SUB_GROUPS`, the
+   event carries `swap_with`). A layout the roster cannot satisfy — six members in one subgroup, a member that is not
+   in the party — sends nothing and stops the run `raid-move`, with the reason in a `raid_layout_refused` event.
 
 Everything else is the player run it already was, over the raid's roster: the party gate reads every member, the
 straggler ladder and regroups follow one bot at a time, rest reads the whole group's bars, and the trace names each
 member by its role and number instead of a character (`tank1`, `tank2`, `heal1`, `dps12`).
 
 The run stops **at a boss**: the boss fight belongs to the module's raid walk, not to the player's group, so reaching a
-leg's living boss records `raid_boss_reached` and stops the run `raid-boss-reached`. A run whose last leg has no boss
-(Onyxia's tunnel) ends at `DONE` as a clear. A player-led raid's verdict is PASS when the run stopped at a boss
+leg's living boss records `raid_boss_reached` and stops the run `raid-boss-reached`. A boss that aggroes on the party by
+itself is fought through the joined fight like any hostile on it, and the run stops `raid-boss-reached` as soon as that
+fight ends (its `raid_boss_reached` event carries `after_fight: true`); it never walks on to the boss's own pull. A
+run whose last leg has no boss (Onyxia's tunnel) ends at `DONE` as a clear. A player-led raid's verdict is PASS when the run stopped at a boss
 (`raid-boss-reached`) or cleared, made at most **2** wipes, and left no GM line. The spell judge still prints its
 findings, but a raid's verdict does not read them (its size is not the judge's four slots).
 
@@ -302,7 +309,8 @@ With `--out` the run writes `<run_id>.jsonl` (the trace), `<run_id>.forever-run.
 not pull the module's rows; [dungeon-watch](dungeon-watch.md) does, while its run lives. The summary's `play` block
 holds the run's minutes, its budgets,
 `gm_lines`, the lines by prefix, the frame count and the combat-log counters (`combat_rows`, `combat_dropped`,
-`combat_truncated`, `combat_error`).
+`combat_truncated`, `combat_error`). Its `notes` array holds the run's notes — the plan fields it does not act on and a
+raid group's split when it differs from the plan's — the same lines the trace writes as `note` events.
 
 The verdict is PASS only when all of these hold (a player-led raid's verdict is its own rule, three bullets, written
 in [a player-led raid](#a-player-led-raid)):
@@ -342,9 +350,11 @@ Every reason a FAIL needs is printed after `verdict: FAIL:` separated by `;`.
   follow and a summon. The reason names every bot still behind and how far (`straggler:tank@97yd,dps2@103yd`); the
   trace's `regroup_hold`, `regroup_back` and `order` events say what was tried.
 - `wipe-unrecovered` — a wipe was not recovered within 10 minutes; the party did not come back to a standing state.
-- `raid-boss-reached` — a player-led raid walked to a leg's living boss and stopped there; the boss is the module's
-  raid walk's (this is a PASS with the raid's verdict, and `clear` stays false).
-- `raid-convert` / `raid-move` — the group would not become a raid, or a layout move failed; nothing is walked.
+- `raid-boss-reached` — a player-led raid reached a leg's living boss and stopped there (this is a PASS with the
+  raid's verdict, and `clear` stays false). A boss that aggroed by itself stops the run the same way when its joined
+  fight ends. The boss is the module's raid walk's.
+- `raid-convert` / `raid-move` — the group would not become a raid, or the layout could not be applied (a failed move,
+  six members into one subgroup, a name the party does not hold); nothing is walked.
 - `raid-group-unsupported` — the session's group layer cannot convert or move a raid member (a build without the raid
   calls); the run stops before the sixth add.
 - `judge: <bot> failed` — the spell judge saw casts its class and role should not make (or too few of the right

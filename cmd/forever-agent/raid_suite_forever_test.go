@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -329,12 +330,19 @@ func TestRaidSuiteForeverRenewalLostCancelsTheWatch(t *testing.T) {
 		}
 		return exitRaidWalkFailed
 	}
-	_, rep, stderr := raidForeverRun(t, slotsPath, raidForeverEntry())
+	code, rep, stderr := raidForeverRun(t, slotsPath, raidForeverEntry())
+	if code == exitOK {
+		t.Fatalf("exit %d; a lost lease is a failure (stderr %q)", code, stderr)
+	}
 	if len(rep.Raids) != 1 || rep.Raids[0].Verdict != suiteFailed {
 		t.Fatalf("report = %+v; want one failed raid (stderr %q)", rep.Raids, stderr)
 	}
 	if !strings.Contains(rep.Raids[0].Reason, "renew") {
 		t.Fatalf("reason = %q; want the renewal's error", rep.Raids[0].Reason)
+	}
+	// The report says the raid failed: its exit code is not the watch's 0 (a watch that ran to a cancellation).
+	if rep.Raids[0].ExitCode == nil || *rep.Raids[0].ExitCode == 0 {
+		t.Fatalf("exit code = %v; want a non-zero code on the lease-loss path", rep.Raids[0].ExitCode)
 	}
 	l, err := store.Get("fv1", "2")
 	if err != nil {
@@ -342,5 +350,64 @@ func TestRaidSuiteForeverRenewalLostCancelsTheWatch(t *testing.T) {
 	}
 	if l == nil || l.Holder != "raid-suite-other" {
 		t.Fatalf("the lease after the run = %+v; want the other holder's own", l)
+	}
+}
+
+// TestRaidSuiteForeverTransientRenewFailureKeepsTheWatch: one renewal error that passes is not a lost lease. The watch
+// keeps running, the next renewal succeeds, and the raid is judged as the good walk it was.
+func TestRaidSuiteForeverTransientRenewFailureKeepsTheWatch(t *testing.T) {
+	raidForeverLeaseRenew(t, 15*time.Millisecond)
+	rig := newRaidForeverRig(t)
+	slotsPath := raidForeverSlots(t)
+	prev := raidSuiteRenewHeld
+	t.Cleanup(func() { raidSuiteRenewHeld = prev })
+	calls := 0
+	raidSuiteRenewHeld = func(w *autoForeverWorld, f autoForeverSlot) error {
+		calls++
+		if calls == 1 {
+			return errors.New("the store is busy")
+		}
+		return w.renewHeld(f)
+	}
+	rig.watch = func(ctx context.Context, args []string, out string) int {
+		time.Sleep(60 * time.Millisecond) // several renewal ticks: the first fails, the rest pass
+		if ctx.Err() != nil {
+			return exitRaidWalkFailed
+		}
+		writeSuiteSummary(t, out, suiteSummary(raidSuiteForeverUntil, time.Now(), 300))
+		return exitOK
+	}
+	code, rep, stderr := raidForeverRun(t, slotsPath, raidForeverEntry())
+	if code != exitOK {
+		t.Fatalf("exit %d stderr %q; want the watch to survive one renewal error", code, stderr)
+	}
+	if len(rep.Raids) != 1 || rep.Raids[0].Verdict == suiteFailed {
+		t.Fatalf("report = %+v; want the walk judged, not failed (stderr %q)", rep.Raids, stderr)
+	}
+	if calls < 2 {
+		t.Fatalf("renewal calls = %d; want the retry after the error", calls)
+	}
+}
+
+// TestRaidSuiteForeverWatchPanicReleasesTheLease: a panic in the watch's goroutine is recovered, the lease is
+// released on the way out, and the panic is raised again rather than hidden.
+func TestRaidSuiteForeverWatchPanicReleasesTheLease(t *testing.T) {
+	rig := newRaidForeverRig(t)
+	slotsPath := raidForeverSlots(t)
+	rig.watch = func(ctx context.Context, args []string, out string) int { panic("the watch exploded") }
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		raidForeverRun(t, slotsPath, raidForeverEntry())
+	}()
+	if recovered == nil {
+		t.Fatal("the watch's panic was swallowed")
+	}
+	store := raidForeverStore(t, slotsPath)
+	if l, err := store.Get("fv1", "2"); err != nil || l != nil {
+		t.Fatalf("the lease after the panic = %+v, %v; want released", l, err)
+	}
+	if _, err := store.Acquire("fv1", "2", false, "raid-suite-next", autoForeverLeaseTTL); err != nil {
+		t.Fatalf("the slot is not free after the panic: %v", err)
 	}
 }

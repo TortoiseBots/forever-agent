@@ -583,6 +583,14 @@ var raidSuiteForeverWatch = foreverRaidWatchCmd
 // while the first still sits at its account. A test shortens it.
 var raidSuiteLeaseRenew = autoForeverLeaseRenew
 
+// raidSuiteLeaseRenewTries is how many consecutive renewal failures a watch survives before its lease counts as lost.
+// At the default five-minute interval three failures span fifteen minutes of the lease's thirty-minute TTL, so one
+// store or lock error that passes is retried and a lease another run really took ends the watch inside its TTL.
+const raidSuiteLeaseRenewTries = 3
+
+// raidSuiteRenewHeld renews the lease this suite holds for one raid; a test replaces it to fail once and pass.
+var raidSuiteRenewHeld = func(w *autoForeverWorld, f autoForeverSlot) error { return w.renewHeld(f) }
+
 // raidSuiteSlotSetup builds one `--forever` raid's slot dir: the autopilot's own prepareForeverAttempt, which takes
 // the entry's lease and runs `slot setup --forever` into <out>/slot. A test replaces it.
 var raidSuiteSlotSetup = func(w *autoForeverWorld, binary string, f autoForeverSlot, out string) error {
@@ -624,13 +632,28 @@ func (s *raidSuite) walkForever(ctx context.Context, e raidSuiteEntry, prep raid
 	}
 	watchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	done := make(chan int, 1)
+	done := make(chan raidSuiteWatchResult, 1)
 	go func() {
-		done <- raidSuiteForeverWatch(watchCtx, autoForeverCommandArgs(target, f, filepath.Join(out, "slot"), out)[2:], s.stdout, s.stderr)
+		// A panic in the watch still releases the lease: it is caught here and raised again on the run's own
+		// goroutine, so walkForever's deferred release runs on the way out.
+		defer func() {
+			if r := recover(); r != nil {
+				done <- raidSuiteWatchResult{panicValue: r}
+			}
+		}()
+		done <- raidSuiteWatchResult{exit: raidSuiteForeverWatch(watchCtx, autoForeverCommandArgs(target, f, filepath.Join(out, "slot"), out)[2:], s.stdout, s.stderr)}
 	}()
-	exit, renewErr := s.superviseForeverWatch(cancel, f, done)
+	watched, renewErr := s.superviseForeverWatch(cancel, f, done)
+	if watched.panicValue != nil {
+		panic(watched.panicValue)
+	}
+	exit := watched.exit
 	rep.ExitCode = &exit
 	if renewErr != nil {
+		// The watch was taken off a lease it no longer holds: the raid failed, and its report's exit carries a
+		// non-zero code (the suite's regression code) even though the watch itself never answered.
+		failed := exitRaidSuiteRegression
+		rep.ExitCode = &failed
 		rep.Verdict, rep.Reason = suiteFailed, renewErr.Error()
 		return true
 	}
@@ -653,22 +676,39 @@ func (s *raidSuite) walkForever(ctx context.Context, e raidSuiteEntry, prep raid
 	return true
 }
 
+// raidSuiteWatchResult is one `--forever` watch's answer: its exit code, or the panic it died with (raised again on
+// the run's goroutine after the lease is released).
+type raidSuiteWatchResult struct {
+	exit       int
+	panicValue any
+}
+
 // superviseForeverWatch waits for one `--forever` watch and keeps its lease alive: every raidSuiteLeaseRenew the lease
-// is renewed, and a renewal that fails (the lease is gone, or another holder has it) cancels the watch, because a run
-// may not keep a slot it no longer holds. It returns the watch's exit code, or the renewal's error.
-func (s *raidSuite) superviseForeverWatch(cancel context.CancelFunc, f autoForeverSlot, done <-chan int) (int, error) {
+// is renewed. A renewal error that passes is retried, up to raidSuiteLeaseRenewTries consecutive failures: only then
+// is the lease counted lost, and the watch cancelled, because a run may not keep a slot it no longer holds. It
+// returns the watch's own answer and, when the lease was lost, the last renewal's error.
+func (s *raidSuite) superviseForeverWatch(cancel context.CancelFunc, f autoForeverSlot, done <-chan raidSuiteWatchResult) (raidSuiteWatchResult, error) {
 	tick := time.NewTicker(raidSuiteLeaseRenew)
 	defer tick.Stop()
+	failures := 0
 	for {
 		select {
-		case exit := <-done:
-			return exit, nil
+		case res := <-done:
+			return res, nil
 		case <-tick.C:
-			if err := s.fworld.renewHeld(f); err != nil {
-				cancel()
-				<-done
-				return 0, fmt.Errorf("renew %s/%s: %v", f.server, f.slot, err)
+			err := raidSuiteRenewHeld(s.fworld, f)
+			if err == nil {
+				failures = 0
+				continue
 			}
+			failures++
+			fmt.Fprintf(s.stderr, "raid-suite: renew %s/%s (%d/%d): %v\n", f.server, f.slot, failures, raidSuiteLeaseRenewTries, err)
+			if failures < raidSuiteLeaseRenewTries {
+				continue
+			}
+			cancel()
+			res := <-done
+			return res, fmt.Errorf("renew %s/%s: %v (after %d consecutive failures)", f.server, f.slot, err, failures)
 		}
 	}
 }

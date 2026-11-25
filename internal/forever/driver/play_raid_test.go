@@ -6,6 +6,7 @@ package driver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -205,10 +206,11 @@ func TestPlayRaidFormConverts(t *testing.T) {
 	}
 }
 
-// TestPlayRaidLayoutMoves: every layout entry is moved after the last add and recorded in file order.
+// TestPlayRaidLayoutMoves: every layout entry is moved after the last add into a subgroup that has room, and is
+// recorded in file order. (A full subgroup's line is a swap: TestPlayRaidLayoutSwapsIntoFullSubgroup.)
 func TestPlayRaidLayoutMoves(t *testing.T) {
 	group := raidGroup(15)
-	group.Layout = []RaidSlot{{Name: group.Tanks[1], Subgroup: 2}, {Name: group.DPS[0], Subgroup: 3}}
+	group.Layout = []RaidSlot{{Name: group.Tanks[1], Subgroup: 5}, {Name: group.DPS[0], Subgroup: 6}}
 	rig := newRaidRig(t, group, true, nil)
 	Play(context.Background(), rig.route, rig.ports, rig.cfg)
 	if len(rig.fake.RaidMoves) != 2 || rig.fake.RaidMoves[0] != group.Layout[0] || rig.fake.RaidMoves[1] != group.Layout[1] {
@@ -377,5 +379,221 @@ func TestPlayRaidTraceSlots(t *testing.T) {
 		if !slots[want] {
 			t.Fatalf("the trace has no %q slot (slots %v)", want, slots)
 		}
+	}
+}
+
+// TestPlayRaidLayoutSwapsIntoFullSubgroup: the core drops a plain move into a subgroup that already holds five, so a
+// layout line into a full subgroup trades places with a member it holds — the first in roster order that the layout
+// does not place there — and the layout lands.
+func TestPlayRaidLayoutSwapsIntoFullSubgroup(t *testing.T) {
+	group := raidGroup(15)
+	mover := group.Tanks[0] // subgroup 1, which holds five with this character
+	group.Layout = []RaidSlot{{Name: mover, Subgroup: 4}}
+	rig := newRaidRig(t, group, true, nil)
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop == "raid-move" {
+		t.Fatalf("the move into a full subgroup stopped the run raid-move (states %v)", res.States)
+	}
+	if len(rig.fake.RaidMoves) != 0 {
+		t.Fatalf("plain moves = %+v; want none (subgroup 4 was full)", rig.fake.RaidMoves)
+	}
+	if len(rig.fake.RaidSwaps) != 1 {
+		t.Fatalf("swaps = %+v; want one", rig.fake.RaidSwaps)
+	}
+	sw := rig.fake.RaidSwaps[0]
+	// Raiddpsj is the first member of subgroup 4 in roster order and the layout does not place it there.
+	if sw.Name != mover || sw.Subgroup != 4 || sw.SwapWith != "Raiddpsj" {
+		t.Fatalf("swap = %+v; want %s with Raiddpsj into subgroup 4", sw, mover)
+	}
+	if got := rig.fake.Subgroups[strings.ToLower(mover)]; got != 4 {
+		t.Fatalf("%s is in subgroup %d; want 4", mover, got)
+	}
+	if got := rig.fake.Subgroups["raiddpsj"]; got != 1 {
+		t.Fatalf("the swapped member is in subgroup %d; want %d", got, 1)
+	}
+	events := playTraceEvents(t, res, "raid_move")
+	if len(events) != 1 || events[0].D["swap_with"] != "dps10" {
+		t.Fatalf("raid_move events = %+v; want one naming the swap partner dps10", events)
+	}
+}
+
+// TestPlayRaidLayoutRefusedWhenItCannotFit: a layout no move can satisfy — six members named into one subgroup, or a
+// name the party does not hold — stops raid-move before any packet, and the trace says why.
+func TestPlayRaidLayoutRefusedWhenItCannotFit(t *testing.T) {
+	group := raidGroup(15)
+	six := []RaidSlot{
+		{Name: group.Tanks[0], Subgroup: 1}, {Name: group.Tanks[1], Subgroup: 1},
+		{Name: group.Healers[0], Subgroup: 1}, {Name: group.Healers[1], Subgroup: 1},
+		{Name: group.Healers[2], Subgroup: 1}, {Name: group.DPS[0], Subgroup: 1},
+	}
+	for _, c := range []struct {
+		name   string
+		layout []RaidSlot
+		want   string
+	}{
+		{"six members", six, "a raid subgroup holds"},
+		{"an unknown name", []RaidSlot{{Name: "Nobody", Subgroup: 2}}, "is not in the party"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			group := raidGroup(15)
+			group.Layout = c.layout
+			rig := newRaidRig(t, group, true, nil)
+			res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+			if res.Stop != "raid-move" {
+				t.Fatalf("stop = %q; want raid-move", res.Stop)
+			}
+			if len(rig.fake.RaidMoves) != 0 || len(rig.fake.RaidSwaps) != 0 {
+				t.Fatalf("the refusal sent moves %+v / swaps %+v", rig.fake.RaidMoves, rig.fake.RaidSwaps)
+			}
+			events := playTraceEvents(t, res, "raid_layout_refused")
+			if len(events) != 1 {
+				t.Fatalf("raid_layout_refused events = %d; want one", len(events))
+			}
+			if msg, _ := events[0].D["error"].(string); !strings.Contains(msg, c.want) {
+				t.Fatalf("refusal = %q; want %q", msg, c.want)
+			}
+		})
+	}
+}
+
+// TestPlayRaidSplitNote: a group whose split differs from the plan's raid block is one note — a trace event and a
+// line in the summary — never a refusal.
+func TestPlayRaidSplitNote(t *testing.T) {
+	group := raidGroup(10) // the plan's block plans fifteen damage dealers
+	rig := newRaidRig(t, group, true, nil)
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	want := "the raid group's split is 2 tank(s), 3 healer(s) and 10 damage dealer(s); the plan plans 2, 3 and 15"
+	switch res.Stop {
+	case "raid-convert", "raid-move", "raid-group-unsupported":
+		t.Fatalf("stop = %q; the split must not refuse the run", res.Stop)
+	}
+	found := false
+	for _, note := range res.Notes {
+		if strings.Contains(note, want) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("notes = %v; want the split note %q", res.Notes, want)
+	}
+	events := playTraceEvents(t, res, "note")
+	if len(events) == 0 {
+		t.Fatal("the trace has no note event")
+	}
+	found = false
+	for _, ev := range events {
+		if text, _ := ev.D["text"].(string); strings.Contains(text, want) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("note events = %+v; want the split note", events)
+	}
+	raw, err := os.ReadFile(res.SummaryFile)
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	var sum RunSummary
+	if err := json.Unmarshal(raw, &sum); err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	found = false
+	for _, note := range sum.Notes {
+		if strings.Contains(note, want) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("summary notes = %v; want the split note", sum.Notes)
+	}
+}
+
+// TestPlayRaidRegroupsForABotBeyondTheFirstFour: a raid bot down in the fight that is not one of the four slots the
+// config's Bots names is still a member down: the run regroups for it and names its slot.
+func TestPlayRaidRegroupsForABotBeyondTheFirstFour(t *testing.T) {
+	group := raidGroup(12)
+	downed := group.DPS[len(group.DPS)-1] // dps12, past the config's four slots
+	var once bool
+	rig := newRaidRig(t, group, false, func(f *PlayFake) {
+		f.SpawnPacks()
+		f.OnFightTick = func(f *PlayFake) {
+			if once {
+				return
+			}
+			once = true
+			for _, b := range f.GoldenOwner.Bots {
+				if strings.EqualFold(b.Name, downed) {
+					b.Dead = true
+					f.Clock.After(30*time.Second, func() { b.Dead = false })
+				}
+			}
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "raid-boss-reached" {
+		t.Fatalf("stop = %q; want the run to regroup and walk on to the boss (states %v)", res.Stop, res.States)
+	}
+	groups := playTraceEvents(t, res, "regroup")
+	if len(groups) == 0 {
+		t.Fatal("the run never regrouped for the downed bot")
+	}
+	named := false
+	for _, ev := range groups {
+		if strings.Contains(fmt.Sprint(ev.D["down"]), "dps12") {
+			named = true
+		}
+	}
+	if !named {
+		t.Fatalf("regroup events = %+v; want one naming dps12", groups)
+	}
+}
+
+// TestPlayRaidJoinedBossEndsTheRunAfterTheFight: a boss that aggroes on the party by itself is fought through the
+// joined fight, and the raid stops raid-boss-reached as soon as that fight ends — the boss's own pull is never walked
+// to. The stop's event is marked after_fight, which the boss state's own stop is not.
+func TestPlayRaidJoinedBossEndsTheRunAfterTheFight(t *testing.T) {
+	stand := Vec3{40, 0, 0}
+	group := raidGroup(12)
+	rig := newRaidRig(t, group, false, func(f *PlayFake) {
+		f.SpawnPacks()
+		f.SpawnBosses()
+		boss, ok := f.UnitOf(200)
+		if !ok {
+			t.Fatal("the plan's boss has no unit in the view")
+		}
+		jumped := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if jumped || f.SelfMap != f.Route.Map || dist3(to, stand) > 0.01 {
+				return
+			}
+			jumped = true
+			back := Vec3{stand[0] - 100, stand[1], stand[2]}
+			for _, name := range append(append(append([]string{}, group.Tanks...), group.Healers...), group.DPS...) {
+				key := strings.ToLower(name)
+				delete(f.Moved, key)
+				f.BotPos[key] = back
+			}
+			f.AggroUnit(boss.GUID)
+		}
+	})
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "raid-boss-reached" {
+		t.Fatalf("stop = %q; want raid-boss-reached (states %v)", res.Stop, res.States)
+	}
+	if len(playTraceEvents(t, res, "fight_join")) == 0 {
+		t.Fatal("the boss was not fought through the joined fight")
+	}
+	events := playTraceEvents(t, res, "raid_boss_reached")
+	afterFight := false
+	for _, ev := range events {
+		if ev.D["after_fight"] == true {
+			afterFight = true
+		}
+	}
+	if !afterFight {
+		t.Fatalf("raid_boss_reached events = %+v; want the fight's own (after_fight)", events)
 	}
 }

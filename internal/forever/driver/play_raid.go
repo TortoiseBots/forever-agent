@@ -23,8 +23,9 @@ type PlayRaid struct {
 	Tanks   []string
 	Healers []string
 	DPS     []string
-	// Layout is the subgroup every named member is moved to with RaidMove, in file order. Optional: a group already
-	// laid out is moved by nobody.
+	// Layout is the subgroup every named member is moved to with RaidMove. Moves into a subgroup with room go first;
+	// a line into a full subgroup is a swap with a member it holds. Optional: a group already laid out is moved by
+	// nobody.
 	Layout []RaidSlot
 }
 
@@ -154,6 +155,9 @@ func (p *playRun) slotOf(name string) (slot, role string) {
 type RaidGroupPort interface {
 	ConvertRaid(ctx context.Context) error
 	RaidMove(ctx context.Context, name string, subgroup int) error
+	// RaidSwap trades a member's subgroup with swapWith's (CMSG_SWAP_SUB_GROUPS): the move a full target subgroup
+	// needs, since the core drops a plain move into a subgroup that already holds five.
+	RaidSwap(ctx context.Context, name string, subgroup int, swapWith string) error
 }
 
 // raidPort is the group port as a RaidGroupPort, nil when the port has no raid of its own.
@@ -185,8 +189,177 @@ func (p *playRun) convertRaid(ctx context.Context) bool {
 	return true
 }
 
-// applyRaidLayout moves every layout entry to its subgroup, in file order, and records each move. A failed move stops
-// raid-move: a raid laid out halfway would fight with its groups split across the wrong subgroups.
+// ValidateRaidLayout checks a layout file against the group it names, before anything is sent: every name is one of
+// the group's bots (or the character), no member is named for two subgroups, and no subgroup is named more than five
+// times. character is the agent's own, which a layout may move too. A layout that passes here can still fail the
+// roster's own fit (applyRaidLayout stops raid-move then), but a typo never costs a raid's FORM.
+func ValidateRaidLayout(layout []RaidSlot, r *PlayRaid, character string) error {
+	if len(layout) == 0 {
+		return nil
+	}
+	names := map[string]bool{strings.ToLower(strings.TrimSpace(character)): true}
+	if r != nil {
+		for _, name := range append(append(append([]string{}, r.Tanks...), r.Healers...), r.DPS...) {
+			names[strings.ToLower(strings.TrimSpace(name))] = true
+		}
+	}
+	var errs []error
+	count := map[int]int{}
+	placed := map[string]int{}
+	for _, slot := range layout {
+		if slot.Subgroup < 1 || slot.Subgroup > party.MaxSubgroups {
+			errs = append(errs, fmt.Errorf("%q: subgroup %d: use 1 to %d", slot.Name, slot.Subgroup, party.MaxSubgroups))
+			continue
+		}
+		key := strings.ToLower(strings.TrimSpace(slot.Name))
+		if !names[key] {
+			errs = append(errs, fmt.Errorf("%q is not in the raid group", slot.Name))
+			continue
+		}
+		if prev, ok := placed[key]; ok {
+			if prev != slot.Subgroup {
+				errs = append(errs, fmt.Errorf("%q is named for subgroup %d and %d: one member sits in one subgroup", slot.Name, prev, slot.Subgroup))
+			}
+			continue
+		}
+		placed[key] = slot.Subgroup
+		count[slot.Subgroup]++
+		if count[slot.Subgroup] == party.MaxPartyMembers+1 {
+			errs = append(errs, fmt.Errorf("subgroup %d is named %d times: a raid subgroup holds %d", slot.Subgroup, count[slot.Subgroup], party.MaxPartyMembers))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// raidLayoutMove is one layout entry the run sends: a plain move, or a swap with a member of the target subgroup.
+type raidLayoutMove struct {
+	slot     RaidSlot
+	swapWith string
+}
+
+// raidLayoutPlan turns the layout into the moves that satisfy it from the roster's current subgroups. The core drops a
+// plain move into a subgroup that already holds five, so a move whose target is full trades places with a member of it
+// that the layout does not place there (the first such member in roster order). Moves into a subgroup with room are
+// taken first, so a member moving out of a full subgroup frees its slot before a swap is needed; a layout that cannot
+// be satisfied (an unknown name, six members in one subgroup, no eligible swap partner) is an error and sends nothing.
+func raidLayoutPlan(layout []RaidSlot, roster []PartyMember) ([]raidLayoutMove, error) {
+	if len(roster) == 0 {
+		return nil, errors.New("the party roster is empty")
+	}
+	current := make(map[string]int, len(roster))
+	byName := make(map[string]PartyMember, len(roster))
+	for _, m := range roster {
+		key := strings.ToLower(strings.TrimSpace(m.Name))
+		if key == "" {
+			return nil, errors.New("the party roster holds an unnamed member")
+		}
+		if m.Subgroup < 1 {
+			return nil, fmt.Errorf("%s has no subgroup: the roster is not a raid's", m.Name)
+		}
+		current[key] = m.Subgroup
+		byName[key] = m
+	}
+	target := make(map[string]int, len(layout))
+	var pending []RaidSlot
+	for _, slot := range layout {
+		if slot.Subgroup < 1 || slot.Subgroup > party.MaxSubgroups {
+			return nil, fmt.Errorf("%q: subgroup %d: use 1 to %d", slot.Name, slot.Subgroup, party.MaxSubgroups)
+		}
+		key := strings.ToLower(strings.TrimSpace(slot.Name))
+		if _, ok := byName[key]; !ok {
+			return nil, fmt.Errorf("%q is not in the party", slot.Name)
+		}
+		if prev, ok := target[key]; ok {
+			if prev != slot.Subgroup {
+				return nil, fmt.Errorf("%q is named for subgroup %d and %d", slot.Name, prev, slot.Subgroup)
+			}
+			continue
+		}
+		target[key] = slot.Subgroup
+		pending = append(pending, slot)
+	}
+	// The final placement: a member the layout does not name stays where it is. A subgroup that would hold more
+	// than five can never be satisfied, by a move or by a swap.
+	final := map[int]int{}
+	for key, sub := range current {
+		if t, ok := target[key]; ok {
+			sub = t
+		}
+		final[sub]++
+	}
+	for sub := 1; sub <= party.MaxSubgroups; sub++ {
+		if final[sub] > party.MaxPartyMembers {
+			return nil, fmt.Errorf("subgroup %d would hold %d members: a raid subgroup holds %d", sub, final[sub], party.MaxPartyMembers)
+		}
+	}
+	occ := map[int]int{}
+	for _, sub := range current {
+		occ[sub]++
+	}
+	var moves []raidLayoutMove
+	for len(pending) > 0 {
+		// A member already in its subgroup is done; the layout's line sends nothing for it.
+		done := -1
+		for i, slot := range pending {
+			if current[strings.ToLower(slot.Name)] == slot.Subgroup {
+				done = i
+				break
+			}
+		}
+		if done >= 0 {
+			pending = append(pending[:done], pending[done+1:]...)
+			continue
+		}
+		// A move into a subgroup with room first: it takes a member out of wherever it stands and frees that slot
+		// for a later swap.
+		idx := 0
+		free := false
+		for i, slot := range pending {
+			if occ[slot.Subgroup] < party.MaxPartyMembers {
+				idx, free = i, true
+				break
+			}
+		}
+		slot := pending[idx]
+		key := strings.ToLower(slot.Name)
+		from := current[key]
+		if free {
+			occ[from]--
+			occ[slot.Subgroup]++
+			current[key] = slot.Subgroup
+			moves = append(moves, raidLayoutMove{slot: slot})
+			pending = append(pending[:idx], pending[idx+1:]...)
+			continue
+		}
+		// The target is full: trade places with the first member of it, in roster order, that the layout does not
+		// place there. The final count above guarantees one exists.
+		partner := ""
+		for _, m := range roster {
+			pk := strings.ToLower(strings.TrimSpace(m.Name))
+			if pk == key || current[pk] != slot.Subgroup {
+				continue
+			}
+			if t, ok := target[pk]; ok && t == slot.Subgroup {
+				continue // the layout keeps it there
+			}
+			partner = m.Name
+			break
+		}
+		if partner == "" {
+			return nil, fmt.Errorf("subgroup %d is full and no member of it is free to swap with %s", slot.Subgroup, slot.Name)
+		}
+		// The swap exchanges the two subgroups, so both occupancies stay as they are.
+		current[key] = slot.Subgroup
+		current[strings.ToLower(strings.TrimSpace(partner))] = from
+		moves = append(moves, raidLayoutMove{slot: slot, swapWith: partner})
+		pending = append(pending[:idx], pending[idx+1:]...)
+	}
+	return moves, nil
+}
+
+// applyRaidLayout moves every layout entry to its subgroup and records each move. A target subgroup that is full is a
+// swap with a member it holds, never a plain move the core drops. A failed or unsatisfiable layout stops raid-move: a
+// raid laid out halfway would fight with its groups split across the wrong subgroups.
 func (p *playRun) applyRaidLayout(ctx context.Context) bool {
 	if p.cfg.Raid == nil || len(p.cfg.Raid.Layout) == 0 {
 		return true
@@ -196,8 +369,22 @@ func (p *playRun) applyRaidLayout(ctx context.Context) bool {
 		p.stop("raid-group-unsupported")
 		return false
 	}
-	for _, slot := range p.cfg.Raid.Layout {
-		if err := g.RaidMove(ctx, slot.Name, slot.Subgroup); err != nil {
+	moves, err := raidLayoutPlan(p.cfg.Raid.Layout, p.ports.Group.Roster())
+	if err != nil {
+		p.rec.Event(p.now(), "raid_layout_refused", map[string]any{"error": err.Error()})
+		p.stop("raid-move")
+		return false
+	}
+	for _, mv := range moves {
+		var err error
+		rec := map[string]any{"bot": p.slot(mv.slot.Name), "subgroup": mv.slot.Subgroup}
+		if mv.swapWith != "" {
+			rec["swap_with"] = p.slot(mv.swapWith)
+			err = g.RaidSwap(ctx, mv.slot.Name, mv.slot.Subgroup, mv.swapWith)
+		} else {
+			err = g.RaidMove(ctx, mv.slot.Name, mv.slot.Subgroup)
+		}
+		if err != nil {
 			if errors.Is(err, ErrLinkLost) {
 				p.linkLost()
 			} else {
@@ -205,7 +392,22 @@ func (p *playRun) applyRaidLayout(ctx context.Context) bool {
 			}
 			return false
 		}
-		p.rec.Event(p.now(), "raid_move", map[string]any{"bot": p.slot(slot.Name), "subgroup": slot.Subgroup})
+		p.rec.Event(p.now(), "raid_move", rec)
 	}
 	return true
+}
+
+// raidSplitNote is the plan's role split against the group's own: a raid plan names the split it was written for, not
+// the owner's roster, so a group that differs is noted once and never refused. Empty for a split that matches.
+func raidSplitNote(r *PlayRaid, spec *dungeon.RaidSpec) string {
+	if r == nil || spec == nil {
+		return ""
+	}
+	got := [3]int{len(r.Tanks), len(r.Healers), len(r.DPS)}
+	want := [3]int{spec.Tanks, spec.Healers, spec.DPS}
+	if got == want {
+		return ""
+	}
+	return fmt.Sprintf("the raid group's split is %d tank(s), %d healer(s) and %d damage dealer(s); the plan plans %d, %d and %d: the group's split stands",
+		got[0], got[1], got[2], want[0], want[1], want[2])
 }

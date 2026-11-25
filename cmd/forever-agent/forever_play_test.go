@@ -344,13 +344,22 @@ func TestDungeonPlayRaidFlags(t *testing.T) {
 			}
 		})
 	}
+	// A layout that names a bot the group does not hold is a usage error before any session.
+	layout := filepath.Join(t.TempDir(), "layout.txt")
+	if err := os.WriteFile(layout, []byte("Notabot 2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	args := append([]string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--layout", layout}, raidFlags()...)
+	if code, _, stderr := runPlayCmd(t, args...); code != exitUsage || !strings.Contains(stderr, "is not in the raid group") {
+		t.Fatalf("an unknown layout name: exit %d stderr %q; want a usage error naming it", code, stderr)
+	}
 	// A raid plan through --bots is the five-bot route's refusal, before anything is sent.
 	if code, _, stderr := runPlayCmd(t, "--dry", "--plan", raidSuitePlan(), "--bots", playBotsArg, "--character", "Hero"); code != driver.ExitPlanRefused {
 		t.Fatalf("exit %d stderr %q; want the plan refused", code, stderr)
 	}
 	// The dry raid: the whole machine over the scripted world, stopping where the raid's own watch takes over. --out
 	// writes the run's record, and the raid's verdict reads it.
-	args := append([]string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--out", t.TempDir()}, raidFlags()...)
+	args = append([]string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--out", t.TempDir()}, raidFlags()...)
 	code, stdout, stderr := runPlayCmd(t, args...)
 	if code != 0 {
 		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)

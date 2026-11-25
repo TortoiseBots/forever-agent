@@ -288,6 +288,9 @@ func (g *playGroup) Roster() []driver.PartyMember {
 			Pos:       driver.Vec3{float32(m.X), float32(m.Y), float32(m.Z)},
 			Map:       unknownMap,
 		}
+		if s.party.Raid {
+			pm.Subgroup = raidSubgroup(m)
+		}
 		o, inView := s.world.Object(m.GUID)
 		self := m.GUID == s.party.SelfGUID
 		if inView || self {
@@ -452,6 +455,12 @@ func (g *playGroup) ConvertRaid(ctx context.Context) error {
 
 func (g *playGroup) RaidMove(ctx context.Context, name string, subgroup int) error {
 	return dungeonPortErr(g.s.raidMove(g.ctx, wire.EmptyGUID, name, subgroup, ""))
+}
+
+// RaidSwap is the move a full subgroup needs: the member trades subgroups with swapWith (CMSG_SWAP_SUB_GROUPS),
+// gated and read back by the same raidMove.
+func (g *playGroup) RaidSwap(ctx context.Context, name string, subgroup int, swapWith string) error {
+	return dungeonPortErr(g.s.raidMove(g.ctx, wire.EmptyGUID, name, subgroup, swapWith))
 }
 
 // --- Player: the agent's own character ---

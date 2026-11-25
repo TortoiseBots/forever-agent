@@ -124,6 +124,12 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 			fmt.Fprintf(stderr, "forever dungeon-play: the raid group is refused: %v\n", err)
 			return exitUsage
 		}
+		// The layout is checked against the group before a session is spent: a name the group does not hold, a member
+		// named for two subgroups or a subgroup named more than five times cannot be satisfied by any move.
+		if err := driver.ValidateRaidLayout(raid.Layout, raid, common.character); err != nil {
+			fmt.Fprintf(stderr, "forever dungeon-play: --layout is refused: %v\n", err)
+			return exitUsage
+		}
 		// Every order that names a Bots slot reads the first tank, the first healer and the first two damage dealers.
 		names = [4]string{raid.Tanks[0], raid.Healers[0], raid.DPS[0], raid.DPS[1]}
 	}

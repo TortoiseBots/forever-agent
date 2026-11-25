@@ -1860,6 +1860,7 @@ func (p *playRun) orderDamage(ctx context.Context, target wire.GUID) bool {
 func (p *playRun) fight(ctx context.Context) string {
 	p.refreshSelf()
 	p.inFight = true
+	p.raidBossFought = false
 	defer func() { p.inFight = false }()
 	start := p.now()
 	deadline := start.Add(p.lim.Fight)
@@ -1896,6 +1897,7 @@ func (p *playRun) fight(ctx context.Context) string {
 		units := p.ports.World.Units()
 		p.sample(units)
 		p.noteDeaths()
+		p.noteRaidBoss(units)
 		p.latchDeadBosses(units)
 		if p.wiped() {
 			return p.endFight(ctx, adds, units)
@@ -1999,8 +2001,17 @@ func (p *playRun) endFight(ctx context.Context, adds int, units []Unit) string {
 	p.noteDeaths()
 	boss := p.bossRun
 	down := p.pullDown(units)
+	// A raid never walks past a boss, and a boss that aggroed by itself is fought through the joined fight like any
+	// hostile on the party: the run stops as soon as that fight ends, not after the walk to the boss's own pull.
+	raidBoss := p.cfg.Raid != nil && p.raidBossFought
 	p.bossRun = false
+	p.raidBossFought = false
 	p.skull, p.pullSet, p.pullGone = wire.GUID{}, p.pullSet[:0], p.pullGone[:0]
+	if raidBoss {
+		p.rec.Event(p.now(), "raid_boss_reached", map[string]any{"leg": p.legName(), "after_fight": true})
+		p.stop("raid-boss-reached")
+		return ""
+	}
 	// Nobody walks on while a member is down (§3.10): the whole party is the budget's wipe, the character's own death
 	// takes the resurrect wait, and a bot's corpse alone is a regroup that costs no wipe.
 	switch {
@@ -2639,6 +2650,38 @@ func (p *playRun) nextSkull(units []Unit) (Unit, Unit) {
 func (p *playRun) skullGone(units []Unit) bool {
 	u, ok := unitByGUID(units, p.skull)
 	return !ok || u.Dead
+}
+
+// noteRaidBoss records a leg's boss among the fight's units: one that targets a party member, or one this fight
+// killed. A raid run stops when the fight ends (endFight), so a boss that aggroed by itself never leaves the party
+// fighting alone past it.
+func (p *playRun) noteRaidBoss(units []Unit) {
+	if p.cfg.Raid == nil || p.raidBossFought {
+		return
+	}
+	for _, leg := range p.route.Legs {
+		if leg.Boss == nil {
+			continue
+		}
+		for _, u := range units {
+			if u.Entry != leg.Boss.Entry {
+				continue
+			}
+			// A corpse counts only when the fight itself pulled it (the joined fight's set, or the boss's own pull):
+			// a boss that was dead before this fight is ground the run already passed.
+			if u.Dead {
+				if slices.Contains(p.pullSet, u.GUID) {
+					p.raidBossFought = true
+					return
+				}
+				continue
+			}
+			if p.partyMember(u.Target) {
+				p.raidBossFought = true
+				return
+			}
+		}
+	}
 }
 
 // engaged counts the fight's living units that target a party member, and how many of them the pull did not bring (the

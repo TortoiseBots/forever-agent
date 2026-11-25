@@ -4,7 +4,7 @@ title: raid-suite --forever
 description: Walk a suite of Forever raid plans with forever raid-watch, each on its own leased slot, and judge each walk against its history.
 tags: [bots-and-raids, raid, suite, slots, forever]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T18:00:00Z }
+generated: { by: forever-agent docs, at: 2026-11-25T10:00:00Z }
 sources:
   - id: suite-cmd
     resource: cmd/forever-agent/raid_suite_cmd.go
@@ -41,9 +41,12 @@ the same suite command and the same verdict rules as the Turtle form (see the
    places nothing. Slot 3 is refused (owner rule), as everywhere.
 2. Resolves the entry's server and slot against the slots file (the server needs its `forever` block: `rest`, `rpc`,
    `ca`) and takes the slot's lease for 30 minutes. A slot held by someone else refuses that raid; nothing is launched.
-   The lease is renewed every 5 minutes while the watch runs (a watch's budget is two hours by default), and a renewal
-   that fails — the lease is gone, or another holder has it — ends the watch at once: a run never keeps a slot it no
-   longer holds.
+   The lease is renewed every 5 minutes while the watch runs (a watch's budget is two hours by default). One renewal
+   that errors and then passes is retried: only **3** consecutive failures (`raidSuiteLeaseRenewTries`, 15 minutes at
+   the default interval, inside the lease's own 30 minutes) count as a lost lease, and then the watch is cancelled —
+   a run never keeps a slot it no longer holds. That raid is reported `failed` with the renewal's error, and its
+   record's `exit_code` is non-zero (the error is never the watch's own `0`). The lease is released however the watch
+   ends, a panic in the watch included.
 3. Builds the attempt's slot dir with `slot setup --forever` (the same call the autopilot's attempt makes), then runs
    `forever raid-watch` in this process: the plan file, `--leader`, the slots file's connection flags, the slot's
    account and character, the slot dir and the attempt's folder. No `--until`, `--from`, `--place` or

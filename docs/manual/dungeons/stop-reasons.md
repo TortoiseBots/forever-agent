@@ -155,6 +155,10 @@ Deaths, wipes and the end:
 | `step:<kind>` | A plan step could not be done; the trace records its leg, index, kind and the reason. | Read the trace's `step_failed` event. |
 | `whisper`, `send` | A line could not be sent (a bad whisper word, or a send error). | Check the module's chat grammar and the link. |
 | `recover`, `recover:path` | The ghost run or the raise failed; `recover:path` means the ghost could not get closer to the portal on a walk. | Check the plan's portal and `entrance_trigger`. |
+| `raid-convert` | A player-led raid's party would not become a raid: the convert before the second add was refused or never read back. Nothing is walked. | The character must lead the group it owns; check the module and the connection. |
+| `raid-move` | A player-led raid's `--layout` could not be applied: a move was refused, or the roster cannot satisfy the layout (six members named into one subgroup, a name the party does not hold, no member free to swap with). Nothing is walked. | Fix the layout; the trace's `raid_layout_refused` names the reason, and a move's `raid_move` event names the member and subgroup. |
+| `raid-group-unsupported` | The session's group layer cannot convert a party to a raid or move a raid member (a build without the raid group calls). The run stops before the sixth add. | Use a build that has the raid group calls. |
+| `raid-boss-reached` | A player-led raid reached a leg's living boss and stopped there — or a boss that aggroed on the party by itself ended its joined fight, in which case the `raid_boss_reached` event carries `after_fight: true`. The boss fight is the module's raid watch, not the player's group. | Start the module's run (or `raid-watch`) from the boss. |
 
 A player run's pre-boss gate also writes its two readings on every one of its events: `boss_rest`, `boss_rest_again`,
 `boss_rest_end`, `boss_rest_timeout`, `boss_not_ready` and `boss_pull_min_bars` carry `tank_hp` and `healer_mana` —
