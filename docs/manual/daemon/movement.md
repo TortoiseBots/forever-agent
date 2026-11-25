@@ -180,7 +180,9 @@ answer a caller below GameMaster gets for another player's character and for a n
 with only the words it typed and no `map`/`same_map`/`in_world`, so the method is no presence or map oracle. The
 query costs one of the server's five per second per caller; a refused query costs one too, so wait out a `rate`
 refusal instead of asking again at once. A server whose module build does not answer the query refuses the call
-with `-32003` and `los: not supported by this module build`; that is not a parse error and not a timeout.
+with `-32003` and `los: not supported by this module build`; that is not a parse error and not a timeout. An answer
+that is not the module's record — a missing or unknown key, a value its key does not take, a second line, an answer
+for another pair — is refused `-32003` `los: the module's answer is not a los record: ...`, never read as a zero.
 
 The plan scout's Forever live pass asks it from each pull row's stand to the units of its target pack and records
 the server's answer beside the navmesh ray (see [plan tools](../dungeons/plan-tools.md#plan-scout)).
