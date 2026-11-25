@@ -156,6 +156,20 @@ func HandlerFull(p *Poller, testsDir string, allowHosts, embedFrom []string, ed 
 	mux.HandleFunc("/files/", func(w http.ResponseWriter, r *http.Request) {
 		serveTestFile(w, r, testsDir)
 	})
+	// The 3D view (#250): the scene around a focus, a live frame from the poller's own answers, and the
+	// recorded runs the replay reads. The page never makes the dashboard call an agent on its behalf.
+	mux.HandleFunc("/api/view3d/scene", func(w http.ResponseWriter, r *http.Request) {
+		serveView3DScene(w, r, p)
+	})
+	mux.HandleFunc("/api/view3d/live", func(w http.ResponseWriter, r *http.Request) {
+		serveView3DLive(w, r, p)
+	})
+	mux.HandleFunc("/api/view3d/records", func(w http.ResponseWriter, r *http.Request) {
+		serveView3DRecords(w, r, p)
+	})
+	mux.HandleFunc("/api/view3d/replay/", func(w http.ResponseWriter, r *http.Request) {
+		serveView3DReplay(w, r, p)
+	})
 	if ed != nil {
 		ed.routes(mux)
 	}

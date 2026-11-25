@@ -20,6 +20,7 @@ type Options struct {
 	TracesDir   string        // where the agents write run traces (read, never served)
 	PlansDirs   []string      // folders with dungeon plan files
 	MinimapDir  string        // images from `forever-agent minimap-extract` (<map>.png + <map>.json), drawn under the plan; "" for none
+	RecordsDir  string        // run record folders the 3D view replays (--records-dir); every read stays inside it
 	Interval    time.Duration // poll period
 	CallTimeout time.Duration // bound on one agent's polls
 	// LiveMapEvery is how often a Forever slot is asked for its map_snapshot drawing (default 5 s, never under
@@ -38,7 +39,8 @@ type Poller struct {
 	tailer *Tailer
 	live   *Live
 	hist   *History
-	route  *routeService // the real route (route.go); nil without --mmaps-dir
+	route  *routeService       // the real route (route.go); nil without --mmaps-dir
+	scene  *view3DSceneService // the 3D view's scene cache (view3d.go); nil without --mmaps-dir
 
 	mu       sync.RWMutex
 	state    []byte
@@ -58,6 +60,9 @@ type Poller struct {
 
 	liveMaps  map[string]*liveMapEntry // agent id -> the Forever slot's last map_snapshot answer (live_map.go)
 	liveAsked sync.WaitGroup           // the map asks in flight (see live_map.go's waitLiveMaps)
+
+	liveFrames map[string]*liveFrameCache // agent id -> a Forever slot's last units answer (view3d.go)
+	replays    *view3DReplayService       // the 3D view's replay read limit and cache (view3d.go)
 }
 
 // NewPoller applies the defaults.
@@ -77,7 +82,7 @@ func NewPoller(o Options) *Poller {
 	if o.Agents == "" {
 		o.Agents = "auto"
 	}
-	p := &Poller{opt: o, plans: newPlanCache(o.PlansDirs), tailer: NewTailer(), live: NewLive(), hist: NewHistory(o.Now, o.TestsDir, o.TracesDir), livePath: map[string]string{}, raw: map[string][]byte{}, clients: map[string]*Client{}, alive: map[string]bool{}, trails: map[string]*Trail{}, events: map[string]*EventLog{}, foreverProg: map[string]foreverProgress{}, foreverFeed: map[string]*foreverFeed{}, liveMaps: map[string]*liveMapEntry{}}
+	p := &Poller{opt: o, plans: newPlanCache(o.PlansDirs), tailer: NewTailer(), live: NewLive(), hist: NewHistory(o.Now, o.TestsDir, o.TracesDir), livePath: map[string]string{}, raw: map[string][]byte{}, clients: map[string]*Client{}, alive: map[string]bool{}, trails: map[string]*Trail{}, events: map[string]*EventLog{}, foreverProg: map[string]foreverProgress{}, foreverFeed: map[string]*foreverFeed{}, liveMaps: map[string]*liveMapEntry{}, liveFrames: map[string]*liveFrameCache{}}
 	p.state = []byte(`{"agents":[],"offline":[]}`)
 	return p
 }

@@ -38,6 +38,73 @@ func runCheck(t *testing.T, check, script string) {
 // TestViewMath: bounds union, fit and aspect ratio, the transform, zoom, pan, pinch and follow.
 func TestViewMath(t *testing.T) { runCheck(t, "view_check.js", "view.js") }
 
+// TestView3DCore: the 3D view's tile budget, the frame interpolation, the timeline and the text rules.
+func TestView3DCore(t *testing.T) { runCheck(t, "view3d_core_check.js", "view3d/core.js") }
+
+// TestView3DOverlay: the overlay's model and DOM; a name with markup lands in textContent, never in innerHTML.
+func TestView3DOverlay(t *testing.T) { runCheck(t, "view3d_overlay_check.js", "view3d/overlay.js") }
+
+// TestView3DFakeServe: the page's data path against a fake serve: the scene's triangles and the markers at their game
+// coordinates.
+func TestView3DFakeServe(t *testing.T) {
+	node := nodeOrSkip(t)
+	corePath, err := filepath.Abs(filepath.Join("static", "view3d", "core.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(node, filepath.Join("testdata", "view3d_fake_check.js"), corePath).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), "ok") {
+		t.Fatalf("view3d_fake_check.js: %v\n%s", err, out)
+	}
+}
+
+// TestView3DScriptsParse: the module and its two classic scripts are valid JavaScript.
+func TestView3DScriptsParse(t *testing.T) {
+	node := nodeOrSkip(t)
+	dir := filepath.Join("static", "view3d")
+	if _, err := os.Stat(filepath.Join(dir, "three.module.min.js")); err != nil {
+		t.Fatalf("the vendored three.js is missing: %v", err)
+	}
+	tmp := filepath.Join(t.TempDir(), "view3d.mjs")
+	src, err := os.ReadFile(filepath.Join(dir, "view3d.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(tmp, src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(node, "--check", tmp).CombinedOutput(); err != nil {
+		t.Errorf("view3d.js: %v\n%s", err, out)
+	}
+	for _, f := range []string{"core.js", "overlay.js"} {
+		b, err := os.ReadFile(filepath.Join(dir, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(node, "--check", "-")
+		cmd.Stdin = strings.NewReader(string(b))
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("%s: %v\n%s", f, err, out)
+		}
+	}
+}
+
+// TestView3DPageFitsTheCSP: the page uses no inline script and no inline event handler (the dashboard's policy has no
+// 'unsafe-inline' for scripts), and every script it loads is its own file.
+func TestView3DPageFitsTheCSP(t *testing.T) {
+	html, err := os.ReadFile(filepath.Join("static", "view3d", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(html)
+	if strings.Contains(strings.ToLower(s), "<script>") || regexp.MustCompile(`(?i)\son[a-z]+\s*=`).MatchString(s) {
+		t.Fatal("the page has an inline script or an inline handler: the dashboard's CSP blocks both")
+	}
+	if !strings.Contains(s, `type="module" src="view3d.js"`) || !strings.Contains(s, `src="core.js"`) {
+		t.Fatal("the page does not load the viewer's scripts")
+	}
+}
+
 // TestPlainText: the player-language formatting of states, counters, orders and party rows.
 func TestPlainText(t *testing.T) { runCheck(t, "text_check.js", "text.js") }
 

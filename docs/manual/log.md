@@ -20,6 +20,8 @@
 * **Creation**: Added [DOCS-SYNC.md](../../DOCS-SYNC.md), the rule that every change a user can see updates this manual in the same pull request, and wired it into `AGENTS.md`, `CLAUDE.md`, the pull request template, the contributing page and the README.
 * **Update**: Documented the commands this manual left out: `stage-check` (plan tools), `forever char-create` and `forever char-delete` (first login), `forever death-check` and `forever deathrecap` (death and the corpse run), `forever fb-check` and `forever fb-dungeon` (bot control), `forever gm-walk` and `forever gm-convert` (route tools), `forever loot-check` and `forever object-use` (quests and loot), `forever map-check` (travel), `forever party-check` (groups) and `forever walk-check` (movement).
 * **Update**: The checker now fails on a registered command that no page mentions and on a daemon method missing from the method index, and on a command or method the pages name that the code no longer registers; deliberate omissions go in `.undocumented-commands` or `.undocumented-methods` with a reason.
+* **Creation**: The dashboard's 3D view (stage 1): the new [3D view page](bots-and-raids/3d-view.md), the [data format](developers/view3d-data-format.md) another dashboard can feed, and the dashboard's `--records-dir` flag for the run records a replay reads.
+* **Update**: The 3D view draws map 0 (a real map) and treats only a missing map as unset, its facing wedge points where the unit faces (west is scene `-z`), the record list is sorted before the 400 cut so the newest are listed, and a parsed replay is cached with at most two reads at once; the [data format](developers/view3d-data-format.md) states each limit.
 
 ## 2026-11-24
 

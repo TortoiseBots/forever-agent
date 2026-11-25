@@ -51,8 +51,10 @@ func (p *Poller) pollForeverOne(ctx context.Context, a Agent, cl *serveclient.Cl
 	if err != nil {
 		// The token never reaches the card (its error is served on /api/state) nor the live map's reason.
 		in.StatusErr = scrubText(cl.Token(), err.Error())
-		// The serve answers nothing at all: the card's live map says so, with the serve's own words.
+		// The serve answers nothing at all: the card's live map says so, with the serve's own words, and the 3D
+		// view drops its last frame instead of pinning a stale scene under a live run.
 		p.markLiveMapGone(a.ID, in.StatusErr)
+		p.dropLiveFrame(a.ID)
 		in.LiveMap = p.liveMapInfo(a.ID, now)
 		return BuildForeverCard(in), nil
 	}
@@ -104,6 +106,9 @@ func (p *Poller) pollForeverOne(ctx context.Context, a Agent, cl *serveclient.Cl
 	}
 	if unitsOK {
 		in.Units, _ = json.Marshal(units)
+		p.setLiveFrame(a.ID, newLiveFrameCache(now, st.Map, units, party, partyOK, cmd, cmdOK))
+	} else {
+		p.dropLiveFrame(a.ID)
 	}
 	in.ProgressSince = p.markForeverProgress(a.ID, foreverProgressKey(st, cmd, cmdOK), now)
 	in.LiveMap = p.liveMapInfo(a.ID, now)

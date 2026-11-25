@@ -107,7 +107,7 @@ roster: 12 bot(s), 2 human(s); states idle 8, moving 3, combat 1
 ```
 forever-agent dashboard [--listen 127.0.0.1:8790] [--allow-host HOST[,HOST]]
     [--agents auto|<rpc,...>] [--tests-dir DIR] [--traces-dir DIR]
-    [--plans-dir DIR[,DIR]] [--minimap-dir DIR] [--config-dir DIR]
+    [--plans-dir DIR[,DIR]] [--minimap-dir DIR] [--records-dir DIR] [--config-dir DIR]
     [--mmaps-dir DIR [--mmaps-format turtle|forever]] [--control [--control-tokens FILE]
     [--control-log FILE] [--control-trust-local [--control-trust-label LABEL]]]
     [--edit ...]
@@ -132,6 +132,13 @@ The card carries the facts (map, floor, members, hostiles, the picture's time); 
 `GET /api/map/<id>` as `image/svg+xml`, and the Positions panel draws it. A serve that does not answer shows
 `No live map: <reason>` (the route answers HTTP 503) instead of a stale picture, and the next good answer draws
 again. The plan view and the trace digest of a replay are unchanged: they keep drawing the recorded frames.
+
+The page's header links to the **3D view** at `/view3d/`: the walkable mesh around the agent as a shaded surface,
+with the party and the creatures as markers, live from a serve slot or as a replay of a recorded run, with a timeline.
+It reads the navmesh in `--mmaps-dir` (so a scene needs that flag) and the run record folders in `--records-dir`
+(default `~/forever-agent/tests`); it adds no call to an agent, because its live frame comes from the poller's own
+`units` answers. [The 3D view page](3d-view.md) has its controls and the limits of stage 1, and
+[the data format](../developers/view3d-data-format.md) the routes another dashboard feeds it with.
 
 `--control` adds the run actions: pause, resume, skip and stop a run, a set of
 order buttons and the Positions panel. Its rules:

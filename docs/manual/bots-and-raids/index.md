@@ -16,5 +16,6 @@
 
 # Dashboards
 
+* [Watch the agent in 3D](3d-view.md) - Open the dashboard's 3D view, follow a running serve or replay a recorded run, understand the markers and the camera, and know what stage 1 does not draw yet.
 * [Watching bots on a dashboard](dashboard.md) - Read a server's bot roster dashboard, use the agent's live page with its Positions panel, and see why replaying a recording is Turtle-only.
 * [Editing a route on the dashboard](dashboard-route-editing.md) - Turn on the dashboard's route editor, save a navmesh-checked version of a plan's route, and move that version into the repository.
