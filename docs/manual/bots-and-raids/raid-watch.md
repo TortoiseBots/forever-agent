@@ -68,6 +68,15 @@ forever-agent forever raid-watch --leader NAME --plan FILE [--layout FILE]
    wipe. The stop reasons are the dungeon watch's, plus the raid ones below.
 6. Writes the run's files and a report card, and prints the end line.
 
+# The Forever raid walk
+
+`forever raid-watch` **is** the Forever raid walk: there is no separate command for it. It walks the raid plan with a
+raid party the way `raid-walk` walks a Turtle one, and at its end it writes `summary.json` in the `tb-raid-walk`
+version 1 shape the raid tools read, so a walk here can be compared with a Turtle walk's and judged against a history
+by [`raid-suite --forever`](raid-suite.md). A Forever walk has no placement and no `--from`: the module's own run
+decides where the raid ends, so a supervisor that restarts a Turtle walk by rebuilding its `--from` has nothing to
+rebuild here (see [raid-autopilot](raid-autopilot.md)).
+
 # Flags
 
 | Flag | Default | Meaning |

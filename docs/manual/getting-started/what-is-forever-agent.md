@@ -98,7 +98,9 @@ The Turtle packages and the old documentation are under `docs/turtle/`.
 | `capture-stats` | `forever capture-stats` |
 | `map` | `forever run-map` |
 | `path-check` | `forever path-check` |
-| `raid-walk`, `raid-suite`, `walk-preflight` | none yet: `forever raid-watch` and `raid-autopilot --forever` are the Forever path |
+| `raid-walk` | `forever raid-watch` ([the watch](../bots-and-raids/raid-watch.md)) |
+| `raid-suite` | `raid-suite --forever` ([the suite](../bots-and-raids/raid-suite.md)) |
+| `walk-preflight` | none yet: [raid-autopilot](../bots-and-raids/raid-autopilot.md) `--forever` is the Forever path |
 | `trace-score` | none: it reads a 1.12 run trace |
 | `pulltest`, `tune-diff` | none: Turtle test and tuning tools |
 | `rotation` | none: the Turtle brain |

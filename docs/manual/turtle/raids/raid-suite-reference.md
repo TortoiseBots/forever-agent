@@ -16,8 +16,10 @@ This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore s
 
 # `raid-suite` reference
 
-> **Turtle only.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`, `walk-preflight`) run
-> against the Turtle stack. Against a Forever server, these commands refuse to run; `forever raid-watch` and `raid-autopilot --forever` are the Forever path.
+> **Turtle, except `raid-suite --forever`.** The raid walk commands (`raid-walk`, `raid-autopilot`, `raid-suite`,
+> `walk-preflight`) run against the Turtle stack. Against a Forever server, these commands refuse to run; `forever
+> raid-watch` and `raid-autopilot --forever` are the Forever path, and `raid-suite --forever` walks a suite of Forever
+> raid plans with the watch (see [raid-suite --forever](../../bots-and-raids/raid-suite.md)).
 
 Usage: `turtle-agent raid-suite (--suite FILE | --dir DIR) --history DIR [--server <server>] [--slot N] [--only p1,p2] [--speed X] [--gap 60s] [--out DIR] [--dash-url URL] [--dash-user U] [--dash-pass-file PATH] [--mmaps DIR] [--slots FILE] [--binary PATH] [--compare-only] [--dry-run] [--json]`. No subcommands.[^suite-cmd]
 

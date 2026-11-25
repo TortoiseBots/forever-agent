@@ -30,12 +30,21 @@ forever-agent forever dungeon-play --plan FILE --bots TANK,HEALER,DPS,DPS \
     [--max-minutes N] [--max-wipes N] [--last-leg NAME] [--disband] [--out DIR] [--map] \
     [--min-active SEC] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] \
     [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]
+
+forever-agent forever dungeon-play --plan FILE --tanks NAMES --healers NAMES --dps NAMES \
+    [--layout FILE] [--rest host:port --rpc host:port --ca FILE --account EMAIL] --character NAME \
+    [--max-minutes N] [--max-wipes N] [--last-leg NAME] [--disband] [--out DIR] [--map] \
+    [--min-active SEC] [--navmesh DIR] [--dry] [--no-preflight | --preflight-only] \
+    [--serve-dir DIR] [--export FILE] [--soap-user NAME --soap-password-file FILE]
 ```
 
 `dungeon-play` is the player mode: the agent's own character is party leader and fights as one of the group, and
 the owner's four bots follow it (tank, healer and two damage dealers, in that order). Every line it sends is a bot
 module line or one of the two whisper words; it never travels by GM, and the run's record proves that (a line
 starting with `.` that is not a `.bot` line fails the milestone).
+
+With `--tanks`, `--healers` and `--dps` (and optionally `--layout`) the same run leads a **raid** instead of a
+five-member party, from a raid plan; see [a player-led raid](#a-player-led-raid).
 
 The run is also judged: a spell judge reads the run's recording and checks that each bot cast what its class and
 role should, and the milestone's rule turns the run and the judge's findings into a single PASS or FAIL.
@@ -45,14 +54,14 @@ role should, and the milestone's rule turns the run and the judge's findings int
 | State | Work |
 |---|---|
 | `PREPARE` | Reads its own character: alive, on the outer map and within 300 yd of the plan's portal, not already inside the instance. If a group is already formed, this character must lead it and be its only member that is not one of the named bots. |
-| `FORM` | Adds the four bots in order and waits for each to come online, then sets the loot method (group loot, uncommon threshold) and reads the tank's max health. A module refusal stops the run by its code. |
+| `FORM` | Adds the four bots in order and waits for each to come online, then sets the loot method (group loot, uncommon threshold) and reads the tank's max health. A module refusal stops the run by its code. A raid group is converted after its first bot is online and laid out after its last add ([below](#a-player-led-raid)). |
 | `TRAVEL` | Walks to the plan's portal and waits until every bot stands within 30 yd (a straggler gets a follow order at 20 s; the run stops at 60 s). |
 | `ENTER` | Takes the entrance trigger, waits for the group on the plan's map, and summons any bot still outside (a summon on cooldown is waited out once). |
 | `LEG_WALK` | Walks each leg in segments of at most 15 yd, staying out of the plan's avoid boxes, holding for a live patrol on the way (20 yd, 120 s, with a stillness test so a static hostile is not waited for forever). Before it leaves the stand a fight ended on, and between every segment, it checks the party ([below](#the-party-gate)). |
 | `PULL` / `FIGHT` | Marks the skull, orders the attack, attacks itself 1.5 s after the tank has the skull, re-orders the tank if the skull breaks to a non-tank, and ends the fight when no living unit on a party member remains. |
 | `REST` / `LOOT` / `STEPS` | Rests between packs, loots the kills, and runs the plan's steps between the packs and the leg's boss. |
 | `DEAD_WAIT` / `WIPE` | A dead character waits for a resurrect offer or a healer's raise; a wipe is recovered (release, ghost run to the portal, the entrance's raise) within 10 minutes. |
-| `BOSS` | Gathers the party within the pull distance, rests to the bars, marks the boss, kills its `first` entries and then the boss. |
+| `BOSS` | Gathers the party within the pull distance, rests to the bars, marks the boss, kills its `first` entries and then the boss. A player-led raid stops here instead (`raid-boss-reached`). |
 | `DONE` / `LEAVE` | Checks that every boss up to `--last-leg` is dead, disbands if asked, logs the bots out. |
 
 The plan's crowd-control lists (`cc_priority`, `cc_always`, `no_cc`) and boss `tactics` are **not** run by player
@@ -90,6 +99,54 @@ afterwards. A bot's `cb` in a frame is the run's own fight **or** a living hosti
 target — a party left behind and fighting reads as in combat — so a bug-hunt's "idle in combat" rule may see a
 regroup's or a wait's idling bots as fighting; read those hits beside the `regroup_*` events.
 
+
+# A player-led raid
+
+`--tanks`, `--healers` and `--dps` name a raid group (comma lists) and make the same player run lead a raid instead of
+the four bots; `--layout FILE` puts the members in their subgroups before the run starts. They exclude `--bots`, and a
+plan loaded this way must be a raid plan (kind `raid` with its `raid` block): `--bots` keeps refusing a raid plan, so
+the five-member path is unchanged.
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--tanks` | required for a raid | The bots that tank, comma separated. The **first** one is the pull tank: every order that names the party's tank goes to it, and the off-tanks fight with the damage dealers. |
+| `--healers` | required for a raid | The bots that heal. Any living one may raise a dead member; the first one is the rest gate's healer (it must use mana). |
+| `--dps` | required for a raid | The damage dealers, at least 2. Every one of them (and every off-tank) is ordered onto the skull. |
+| `--layout` | none | A layout file: one bot per line, its name and the subgroup 1-8 it is moved to with a raid move ([raid-suite](../turtle/raids/raid-suite-reference.md) reads the same format). A failed move stops the run `raid-move`. |
+
+A group is refused before anything is sent when it has no tank, no healer, fewer than 2 damage dealers, the same name
+twice, or a size outside **5** to **39** bots (`PlayRaidMinBots`, `PlayRaidMaxBots` = the core's raid of 40 less this
+character); a plan whose `raid.size` is known caps it there (`size - 1`). It is refused with a usage error. The plan's
+own `raid` role split (`tanks`, `healers`, `dps`) is a placeholder for the raid it was written for, so a split that
+differs from it is not refused.
+
+`FORM` for a raid converts the group first and adds after:
+
+1. The first bot (the first tank) is added and comes online.
+2. The group is converted to a raid (`raid_convert` in the trace). The core refuses a sixth member of a party, so this
+   comes before the second add; a failed convert stops the run `raid-convert`, and a group port with no raid support
+   stops it `raid-group-unsupported`.
+3. The rest of the raid is added, in role order: the tanks, then the healers, then the damage dealers.
+4. Every `--layout` entry is applied with a raid move, in file order (`raid_move` with the member's slot and its
+   subgroup).
+
+Everything else is the player run it already was, over the raid's roster: the party gate reads every member, the
+straggler ladder and regroups follow one bot at a time, rest reads the whole group's bars, and the trace names each
+member by its role and number instead of a character (`tank1`, `tank2`, `heal1`, `dps12`).
+
+The run stops **at a boss**: the boss fight belongs to the module's raid walk, not to the player's group, so reaching a
+leg's living boss records `raid_boss_reached` and stops the run `raid-boss-reached`. A run whose last leg has no boss
+(Onyxia's tunnel) ends at `DONE` as a clear. A player-led raid's verdict is PASS when the run stopped at a boss
+(`raid-boss-reached`) or cleared, made at most **2** wipes, and left no GM line. The spell judge still prints its
+findings, but a raid's verdict does not read them (its size is not the judge's four slots).
+
+The dry run needs no network and no server:
+
+```bash
+forever-agent forever dungeon-play --plan dungeons/onyxias_lair.json \
+    --tanks TANK1,TANK2,TANK3,TANK4 --healers HEAL1,HEAL2 --dps DPS1,DPS2,DPS3 \
+    --character PLAYER --dry --out ./runs/raid-dry
+```
 
 # The leading player's own pull
 
@@ -191,7 +248,11 @@ walks on.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--plan` | required | The plan file. Its name picks the time budget: Ragefire Chasm 90 minutes, Wailing Caverns 150, anything else 120. |
-| `--bots` | required | The four bots: tank, healer and two damage dealers, in that order, no repeats. The healer must use mana: the pre-boss rest gate reads its mana pool, and a healer whose power is not mana stops the run `boss-not-ready`. |
+| `--bots` | required without the raid flags | The four bots: tank, healer and two damage dealers, in that order, no repeats. The healer must use mana: the pre-boss rest gate reads its mana pool, and a healer whose power is not mana stops the run `boss-not-ready`. |
+| `--tanks` | required for a raid | A raid's tanks, comma separated; the first is the pull tank (see [a player-led raid](#a-player-led-raid)). Excludes `--bots`. |
+| `--healers` | required for a raid | A raid's healers, comma separated; any living one may raise. Excludes `--bots`. |
+| `--dps` | required for a raid | A raid's damage dealers, at least 2. Excludes `--bots`. |
+| `--layout` | none | A raid layout file (one bot and its subgroup 1-8 per line), applied before the run starts. Excludes `--bots`. |
 | `--character` | required | The player's character: the agent's own, the party leader. |
 | `--max-minutes` | 0 | The run's budget; `0` takes the plan's, 0-1440 otherwise. |
 | `--max-wipes` | 2 | The run's wipe budget: the (n+1)th wipe ends it; `-1` is no budget, 1-20 otherwise. |
@@ -243,7 +304,8 @@ holds the run's minutes, its budgets,
 `gm_lines`, the lines by prefix, the frame count and the combat-log counters (`combat_rows`, `combat_dropped`,
 `combat_truncated`, `combat_error`).
 
-The verdict is PASS only when all of these hold:
+The verdict is PASS only when all of these hold (a player-led raid's verdict is its own rule, three bullets, written
+in [a player-led raid](#a-player-led-raid)):
 
 - the run cleared (its stop reason is `clear`);
 - it made at most **2** wipes, whatever `--max-wipes` allowed;
@@ -280,5 +342,10 @@ Every reason a FAIL needs is printed after `verdict: FAIL:` separated by `;`.
   follow and a summon. The reason names every bot still behind and how far (`straggler:tank@97yd,dps2@103yd`); the
   trace's `regroup_hold`, `regroup_back` and `order` events say what was tried.
 - `wipe-unrecovered` — a wipe was not recovered within 10 minutes; the party did not come back to a standing state.
+- `raid-boss-reached` — a player-led raid walked to a leg's living boss and stopped there; the boss is the module's
+  raid walk's (this is a PASS with the raid's verdict, and `clear` stays false).
+- `raid-convert` / `raid-move` — the group would not become a raid, or a layout move failed; nothing is walked.
+- `raid-group-unsupported` — the session's group layer cannot convert or move a raid member (a build without the raid
+  calls); the run stops before the sixth add.
 - `judge: <bot> failed` — the spell judge saw casts its class and role should not make (or too few of the right
   ones); the judge's lines name what it saw.

@@ -8,6 +8,7 @@
 
 * [forever raid-watch](raid-watch.md) - Watch a raid the server's own bot module leads, from outside, with budgets and a raid summary at the end.
 * [forever raid-autopilot](raid-autopilot.md) - Keep the Forever raids of a walk folder running and restarting without a person watching each one.
+* [raid-suite --forever](raid-suite.md) - Walk a suite of Forever raid plans with forever raid-watch, each on its own leased slot, and judge each walk against its history.
 
 # Battlegrounds and fleets
 

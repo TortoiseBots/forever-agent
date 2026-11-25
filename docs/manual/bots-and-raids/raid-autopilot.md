@@ -29,6 +29,10 @@ Use it when you want a raid farmed or re-run unattended: a target restarts until
 its goal (the whole plan, a leg, or one boss) is met, and a target that needs a
 person is escalated and left alone instead of looping.
 
+It is the **only** supervisor a Forever walk has. The Turtle restarter
+(`scripts/walk-super.sh`) rebuilds a restart from the walk's own placement flags, and a Forever watch has none, so it
+refuses a command that starts with `forever` (exit 2, `use raid-autopilot --forever`) instead of restarting it.
+
 
 
 # Synopsis
