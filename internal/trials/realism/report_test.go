@@ -13,9 +13,9 @@ func goodSixty() Bot {
 	b.Spec = "balance"
 	b.Talents = balance60()
 	b.Items = []Item{
-		{Slot: "head", ItemID: 22267, ItemLevel: 62, RequiredLevel: 58, Source: "dungeon", EnchantID: new(int64(0))},
-		{Slot: "chest", ItemID: 22409, ItemLevel: 62, RequiredLevel: 58, Source: "dungeon", EnchantID: new(int64(0))},
-		{Slot: "main_hand", ItemID: 13964, ItemLevel: 58, RequiredLevel: 55, Source: "dungeon", EnchantID: new(int64(273629))},
+		{Slot: "head", ItemID: 22267, ItemLevel: 62, RequiredLevel: 58, StatsKnown: true, Source: "dungeon", EnchantID: new(int64(0))},
+		{Slot: "chest", ItemID: 22409, ItemLevel: 62, RequiredLevel: 58, StatsKnown: true, Source: "dungeon", EnchantID: new(int64(0))},
+		{Slot: "main_hand", ItemID: 13964, ItemLevel: 58, RequiredLevel: 55, StatsKnown: true, Source: "dungeon", EnchantID: new(int64(273629))},
 	}
 	return b
 }

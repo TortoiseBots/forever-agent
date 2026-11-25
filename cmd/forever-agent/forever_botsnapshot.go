@@ -112,6 +112,7 @@ var (
 		"spec: no read-out names this character's spec (the module's state answer carries no spec)",
 		"talents: the module proves learned spells only for ids it is asked to learn, never the whole build",
 		"enchant_id: the equipment read names no enchant",
+		"stats_known: the equipment read names no item stats",
 		"item source: no read-out says where a worn item comes from",
 	}
 	groupedSnapshotNotes = []string{

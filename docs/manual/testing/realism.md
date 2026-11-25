@@ -48,7 +48,7 @@ The snapshot format is ready for that read-out. For every bot the module read-ou
 | `items_known`, `items` | the whole worn outfit for party bots too, not only the serve's own character |
 | `items[].enchant_id` | the applied enchant id, 0 for read-and-unenchanted |
 | `items[].source` | one of `quest`, `dungeon`, `raid`, `pvp`, `reputation`, `world`, `crafted`, `vendor` |
-| `items[].stats` | the item's primary stats as names (`Intellect`, `Spirit`, …) |
+| `items[].stats_known`, `items[].stats` | whether the item's primary stats were read, and the names (`Intellect`, `Spirit`, …) |
 | `items[].item_level`, `items[].required_level` | from the server's item record |
 
 Until then a snapshot is a class-and-level file plus one character's outfit: useful as a format check, not as a realism verdict.
@@ -80,7 +80,7 @@ Bots are named `bot1`, `bot2`, … in the file, never by character name: `bot1` 
 | `spec` | not read: no module read-out names a bot's spec |
 | `talents` | not read: the module proves learned spells only for the ids it is asked to learn, never the whole build |
 | `enchant_id` | not read: `equipment` names no enchant |
-| `stats` | not read: `equipment` names no stats |
+| `stats` | not read: `equipment` names no stats, so `stats_known` is false on every item |
 | item `source` | not read: nothing says where a worn item comes from |
 
 A grouped bot's worn items are not read either: `equipment` answers only for the character the serve runs, and the `unit` and `bot_view` rows carry no worn items. Each bot's `notes` in the file state those missing read-outs, so the report says what it could not judge instead of guessing.
@@ -103,7 +103,8 @@ A grouped bot's worn items are not read either: `equipment` answers only for the
       "items_known": true,
       "items": [
         {"slot": "head", "item_id": 22267, "name": "Spellweaver's Turban", "item_level": 62,
-         "required_level": 58, "quality": 3, "stats": ["Intellect"], "enchant_id": 0, "source": "dungeon"}
+         "required_level": 58, "quality": 3, "stats_known": true, "stats": ["Intellect"],
+         "enchant_id": 0, "source": "dungeon"}
       ],
       "talents_known": false,
       "talents_complete": false,
@@ -118,7 +119,7 @@ A grouped bot's worn items are not read either: `equipment` answers only for the
 |---|---|
 | `slot` | one of the core's 19 equipment slots: `head`, `neck`, `shoulders`, `body`, `chest`, `waist`, `legs`, `feet`, `wrists`, `hands`, `finger1`, `finger2`, `trinket1`, `trinket2`, `back`, `main_hand`, `off_hand`, `ranged`, `tabard` |
 | `item_level`, `required_level`, `quality`, `enchant_id`, `source` | left out when not read; `enchant_id` `0` means read and unenchanted, and `source` is one of `quest`, `dungeon`, `raid`, `pvp`, `reputation`, `world`, `crafted`, `vendor` |
-| `stats` | the item's primary stats as names (`Intellect`, `Spirit`, …), when known |
+| `stats_known`, `stats` | whether the item's primary stats were read, and their names (`Intellect`, `Spirit`, …); `stats` without `stats_known` is refused |
 | `talents` | `spell_id` (**the talent's rank-1 spell id**, the id the player tables key it by), `rank` 1-5 and optionally `tab` 0-2 |
 | `items_known`, `talents_known` | whether the taker read them at all: false is "not read", never "nothing worn" |
 | `talents_complete` | true when the list is the whole build; a partial list is `INCONCLUSIVE`, never a `FAIL` on the points that are there |
@@ -183,7 +184,7 @@ Level 60 only (`stat-priority-60.csv`). **One judgement**, not two that can disa
 
 The spec's stat priority is reported **without a verdict**: the report's evidence says how many stat-reading items carry one of the spec's priority families (a healer's strength piece is named there). It never turns into a second verdict, because a second, stricter rule could fail an outfit the gear rule passes.
 
-INCONCLUSIVE: a level other than 60, no items read, no spec, an item the tables cannot place.
+INCONCLUSIVE: a level other than 60, no items read (or a bot that wears nothing), no spec, any worn item with no stat reading (`stats_known` false: the stat priority cannot be judged), and an item the tables cannot place.
 
 ## Enchants (`REALISM-ENCHANTS`)
 

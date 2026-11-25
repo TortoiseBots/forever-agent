@@ -43,9 +43,9 @@ func passingSnapshot() realism.Snapshot {
 			balanceTalent(17063, 5, 2), balanceTalent(17069, 5, 2), balanceTalent(17106, 3, 2),
 		},
 		Items: []realism.Item{
-			{Slot: "head", ItemID: 22267, ItemLevel: 62, RequiredLevel: 58, Quality: new(3), Source: "dungeon", EnchantID: new(int64(0))},
-			{Slot: "chest", ItemID: 22409, ItemLevel: 62, RequiredLevel: 58, Quality: new(4), Source: "dungeon", EnchantID: new(int64(0))},
-			{Slot: "main_hand", ItemID: 13964, ItemLevel: 58, RequiredLevel: 55, Quality: new(4), Source: "dungeon", EnchantID: new(int64(273629))},
+			{Slot: "head", ItemID: 22267, ItemLevel: 62, RequiredLevel: 58, StatsKnown: true, Quality: new(3), Source: "dungeon", EnchantID: new(int64(0))},
+			{Slot: "chest", ItemID: 22409, ItemLevel: 62, RequiredLevel: 58, StatsKnown: true, Quality: new(4), Source: "dungeon", EnchantID: new(int64(0))},
+			{Slot: "main_hand", ItemID: 13964, ItemLevel: 58, RequiredLevel: 55, StatsKnown: true, Quality: new(4), Source: "dungeon", EnchantID: new(int64(273629))},
 		},
 	}}}
 }

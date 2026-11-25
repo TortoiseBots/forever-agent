@@ -34,7 +34,7 @@ func roundTrip(t *testing.T, s Snapshot) Snapshot {
 func TestSnapshotRoundTrip(t *testing.T) {
 	in := snapshotOf(bot("bot1", 60))
 	in.Bots[0].Items = []Item{{Slot: "head", ItemID: 22267, Name: "Spellweaver's Turban", ItemLevel: 62,
-		RequiredLevel: 58, Quality: new(3), Stats: []string{"Intellect"}, EnchantID: new(int64(0)), Source: "dungeon"}}
+		RequiredLevel: 58, Quality: new(3), StatsKnown: true, Stats: []string{"Intellect"}, EnchantID: new(int64(0)), Source: "dungeon"}}
 	in.Bots[0].Talents = []Talent{{SpellID: 16814, Rank: 5, Tab: new(0)}}
 	out := roundTrip(t, in)
 	if len(out.Bots) != 1 || out.Bots[0].Items[0].ItemLevel != 62 || *out.Bots[0].Items[0].Quality != 3 {
@@ -50,7 +50,7 @@ func TestSnapshotRoundTrip(t *testing.T) {
 func TestSnapshotLoaderRefuses(t *testing.T) {
 	valid := func() Snapshot {
 		s := snapshotOf(bot("bot1", 60))
-		s.Bots[0].Items = []Item{{Slot: "head", ItemID: 22267, ItemLevel: 62, Quality: new(3), EnchantID: new(int64(0)), Source: "dungeon"}}
+		s.Bots[0].Items = []Item{{Slot: "head", ItemID: 22267, ItemLevel: 62, Quality: new(3), StatsKnown: true, EnchantID: new(int64(0)), Source: "dungeon"}}
 		s.Bots[0].Talents = []Talent{{SpellID: 16814, Rank: 5, Tab: new(0)}}
 		return s
 	}
@@ -85,6 +85,10 @@ func TestSnapshotLoaderRefuses(t *testing.T) {
 		{"enchant", func(s *Snapshot) { s.Bots[0].Items[0].EnchantID = new(int64(-1)) }, "enchant_id"},
 		{"source", func(s *Snapshot) { s.Bots[0].Items[0].Source = "heroic" }, "source"},
 		{"empty stat", func(s *Snapshot) { s.Bots[0].Items[0].Stats = []string{" "} }, "stats"},
+		{"stats not known", func(s *Snapshot) {
+			s.Bots[0].Items[0].StatsKnown = false
+			s.Bots[0].Items[0].Stats = []string{"Intellect"}
+		}, "stats without stats_known"},
 		{"talents not known", func(s *Snapshot) { s.Bots[0].TalentsKnown = false }, "talents without talents_known"},
 		{"complete not known", func(s *Snapshot) {
 			s.Bots[0].TalentsKnown = false

@@ -124,13 +124,17 @@ type Bot struct {
 // Item is one worn item. A field the taker could not read is left out: ItemLevel 0, Quality nil,
 // EnchantID nil and Source "" all mean "not read", never "zero".
 type Item struct {
-	Slot          string   `json:"slot"`
-	ItemID        int64    `json:"item_id"`
-	Name          string   `json:"name,omitempty"`
-	ItemLevel     int      `json:"item_level,omitempty"`
-	RequiredLevel int      `json:"required_level,omitempty"`
-	Quality       *int     `json:"quality,omitempty"`
-	Stats         []string `json:"stats,omitempty"`
+	Slot          string `json:"slot"`
+	ItemID        int64  `json:"item_id"`
+	Name          string `json:"name,omitempty"`
+	ItemLevel     int    `json:"item_level,omitempty"`
+	RequiredLevel int    `json:"required_level,omitempty"`
+	Quality       *int   `json:"quality,omitempty"`
+	// StatsKnown says the taker read the item's primary stats. Stats may be empty on a known read
+	// (an item that carries none); without the flag an empty list is "not read", and the stat check
+	// answers INCONCLUSIVE rather than passing over an unread outfit.
+	StatsKnown bool     `json:"stats_known,omitempty"`
+	Stats      []string `json:"stats,omitempty"`
 	// EnchantID is the item's enchant as the server reports it: nil when not read, 0 when read and
 	// unenchanted.
 	EnchantID *int64 `json:"enchant_id,omitempty"`
@@ -347,6 +351,9 @@ func (it *Item) validate() error {
 	}
 	if it.Source != "" && !slices.Contains(itemSources, it.Source) {
 		return fmt.Errorf("item_id %d: source %q is not one of %s", it.ItemID, it.Source, strings.Join(itemSources, " "))
+	}
+	if len(it.Stats) > 0 && !it.StatsKnown {
+		return fmt.Errorf("item_id %d: stats without stats_known", it.ItemID)
 	}
 	for i, stat := range it.Stats {
 		if strings.TrimSpace(stat) == "" {

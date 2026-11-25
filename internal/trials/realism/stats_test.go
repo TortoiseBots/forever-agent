@@ -8,8 +8,8 @@ import (
 func TestStatsCheckPassesTheSpecsOwnGear(t *testing.T) {
 	b := bot("bot1", 60)
 	b.Items = []Item{
-		{Slot: "head", ItemID: 22267, ItemLevel: 62, RequiredLevel: 58},
-		{Slot: "chest", ItemID: 22409, ItemLevel: 62, RequiredLevel: 58},
+		{Slot: "head", ItemID: 22267, ItemLevel: 62, RequiredLevel: 58, StatsKnown: true},
+		{Slot: "chest", ItemID: 22409, ItemLevel: 62, RequiredLevel: 58, StatsKnown: true},
 	}
 	c := checkOfID(t, Judge(b, Default()), RuleStats)
 	if c.Verdict != VerdictPass {
@@ -28,7 +28,7 @@ func TestStatsCheckPassesTheSpecsOwnGear(t *testing.T) {
 
 func TestStatsCheckFailsStrengthOnACaster(t *testing.T) {
 	b := bot("bot1", 60)
-	b.Items = []Item{{Slot: "chest", ItemID: 6502, Name: "Haunted Memento", Stats: []string{"Strength"}}}
+	b.Items = []Item{{Slot: "chest", ItemID: 6502, Name: "Haunted Memento", StatsKnown: true, Stats: []string{"Strength"}}}
 	c := checkOfID(t, Judge(b, Default()), RuleStats)
 	if c.Verdict != VerdictFail {
 		t.Fatalf("verdict %s (%s)", c.Verdict, c.Reason)
@@ -45,7 +45,7 @@ func TestStatsCheckFailsStrengthOnACaster(t *testing.T) {
 // the gear rule, and its own (wrong) stats are reported without a second verdict that could disagree.
 func TestStatsPriorityIsReportOnly(t *testing.T) {
 	b := bot("bot1", 60)
-	b.Items = []Item{{Slot: "chest", ItemID: 22409, Stats: []string{"Strength"}}}
+	b.Items = []Item{{Slot: "chest", ItemID: 22409, StatsKnown: true, Stats: []string{"Strength"}}}
 	c := checkOfID(t, Judge(b, Default()), RuleStats)
 	if fits := partOf(t, c, "fits"); fits.Verdict != VerdictPass {
 		t.Fatalf("an item in the spec's own table must fit: %+v", fits)
@@ -69,7 +69,8 @@ func TestStatsCheckInconclusiveCases(t *testing.T) {
 		{"no items", func(b *Bot) { b.ItemsKnown, b.Items = false, nil }, "no worn items"},
 		{"naked bot", func(b *Bot) { b.Items = nil }, "wears nothing"},
 		{"no spec", func(b *Bot) { b.Spec = "" }, "no spec"},
-		{"unproven item", func(b *Bot) { b.Items = []Item{{Slot: "chest", ItemID: 6502}} }, "could not be judged"},
+		{"unproven item", func(b *Bot) { b.Items = []Item{{Slot: "chest", ItemID: 6502, StatsKnown: true}} }, "could not be judged"},
+		{"stats not read", func(b *Bot) { b.Items = []Item{{Slot: "chest", ItemID: 22409}} }, "no stat reading"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

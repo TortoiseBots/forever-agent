@@ -4,7 +4,9 @@ package realism
 // 60.csv)? A healer in strength plate, a rogue in intellect cloth.
 //
 // It is ONE judgement: the part `fits` is the player-data gear rule itself (playdata.JudgeGear over
-// the snapshot's items, its stats included), not a second, stricter rule beside it. The spec's
+// the snapshot's items, its stats included), not a second, stricter rule beside it. It needs every
+// worn item's stat reading (`stats_known`): an unread one could be the wrong-family piece, so the part
+// is INCONCLUSIVE rather than a PASS over the items that were read. The spec's
 // stat-priority reading is reported as evidence (how many items carry one of the spec's priority
 // families) and never judged: a second verdict could disagree with the gear rule, and the gear rule
 // is the one the bench's other rows read.
@@ -35,6 +37,19 @@ func statsCheck(b Bot, t Tables) Check {
 	if len(b.Items) == 0 {
 		return checkOf(RuleStats, []Part{{Name: "fits", Verdict: VerdictInconclusive, Decisive: true,
 			Reason: "the bot wears nothing (items_known true, no items): there is no outfit to judge"}}, nil)
+	}
+	// The check is the stat reading: an item whose stats were not read could be the strength plate on
+	// a healer, so one unread item leaves the decisive part INCONCLUSIVE rather than a PASS.
+	unread := 0
+	for _, item := range b.Items {
+		if !item.StatsKnown {
+			unread++
+		}
+	}
+	if unread > 0 {
+		return checkOf(RuleStats, []Part{{Name: "fits", Verdict: VerdictInconclusive, Decisive: true,
+			Reason: fmt.Sprintf("%d of %d worn item(s) carry no stat reading (stats_known false): the stat priority cannot be judged",
+				unread, len(b.Items))}}, nil)
 	}
 	items := playdataItems(b.Items)
 	row := playdata.JudgeGear(class, spec, items, playdata.Inputs{Tables: t})
