@@ -237,6 +237,9 @@ type actState struct {
 	// handler lines of everything else the session does, and those never belong in an act answer.
 	lines   []string
 	dropped int
+	// failed is the step number of the last fail line actFail printed, so actStep adds a line only for a verb that
+	// returned its refusal without one.
+	failed int
 }
 
 // The bounds of one act answer: how many lines it keeps and how long one line may be (a menu option's text is the
@@ -261,9 +264,24 @@ func (s *session) actLine(a *actState, format string, args ...any) {
 	a.lines = append(a.lines, line)
 }
 
-// actStep runs one step of the act script and prints its line.
+// actStep runs one step of the act script and prints its line. A verb that returns its refusal without a line gets
+// one here: every ok:false answer carries its reason (#236 point 4: split, destroy and the other item verbs returned
+// their refusals to a run that then answered with no lines at all).
 func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error {
 	a.steps++
+	err := s.actVerb(ctx, a, step)
+	if err == nil {
+		return nil
+	}
+	if a.failed == a.steps {
+		return err // the verb printed its own fail line
+	}
+	return s.actFail(a, step, err)
+}
+
+// actVerb runs one step's verb. The older verbs print their own failure line with actFail (which marks it for
+// actStep); a newer one may simply return the error.
+func (s *session) actVerb(ctx context.Context, a *actState, step ActStep) error {
 	switch step.Verb {
 	case actVerbWait:
 		return s.actWait(ctx, a, step)
@@ -352,13 +370,15 @@ func (s *session) actStep(ctx context.Context, a *actState, step ActStep) error 
 	case actVerbSendMail:
 		return s.actSendMail(ctx, a, step)
 	default:
-		return s.actFail(a, step, fmt.Errorf("unknown verb %q", step.Verb))
+		return fmt.Errorf("unknown verb %q", step.Verb)
 	}
 }
 
-// actFail prints the step's failure line and returns the error.
+// actFail prints the step's failure line and returns the error. It marks the line on a (failed) so actStep does not
+// add a second one for a verb that already reported.
 func (s *session) actFail(a *actState, step ActStep, err error) error {
 	s.actLine(a, "step %d %s fail %v", a.steps, step.Verb, err)
+	a.failed = a.steps
 	return err
 }
 

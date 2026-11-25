@@ -179,3 +179,31 @@ func TestRejectionCarriesTheGUID(t *testing.T) {
 		t.Fatalf("rejection = %+v, want name Cinder and guid 2", r.Rejected[0])
 	}
 }
+
+// TestMacroStatesAreKept is #236 point 2: the port's own states (busy, stalled, resting) are a bot's state like any
+// other, so a record in one is in the roster and not a rejection; the watch rules still read only moving, combat and
+// dead, so a busy bot is not a stuck flag.
+func TestMacroStatesAreKept(t *testing.T) {
+	for _, state := range []string{StateBusy, StateStalled, StateResting} {
+		t.Run(state, func(t *testing.T) {
+			r := decodeOne(t, botRecord(map[string]any{"state": state}))
+			if len(r.Rejected) != 0 || len(r.Bots) != 1 {
+				t.Fatalf("bots %+v, rejections %+v, want the record kept", r.Bots, r.Rejected)
+			}
+			if got := string(r.Bots[0].State); got != state {
+				t.Fatalf("state %q, want %q", got, state)
+			}
+		})
+	}
+
+	// A busy bot stands still for longer than the stuck threshold and is still not stuck: the rule is about a bot
+	// whose state says moving.
+	tr := NewTracker(Config{StuckAfter: time.Second})
+	at := time.Unix(0, 0)
+	tr.Observe(at, sample(testBot("Ember", "1", "", StateBusy, 0, 0, 0)))
+	for i := 1; i <= 3; i++ {
+		if ev := tr.Observe(at.Add(time.Duration(i)*time.Second), sample(testBot("Ember", "1", "", StateBusy, 0, 0, 0))); len(ev) != 0 {
+			t.Fatalf("a busy bot fired %+v, want no event", ev)
+		}
+	}
+}

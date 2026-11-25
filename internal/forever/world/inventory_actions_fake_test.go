@@ -695,3 +695,59 @@ func purchaseUpdate(slots map[int]wire.GUID, coinage uint64) []byte {
 	out.WriteBytes(blk.Bytes())
 	return out.Bytes()
 }
+
+// TestActRefusalsCarryTheirReasonLine is #236 point 4: a refused step answered ok:false with no line at all, because
+// the item verbs returned their refusal and only the old verbs printed one. Every refusal now prints its line, and
+// the run's answer carries it.
+func TestActRefusalsCarryTheirReasonLine(t *testing.T) {
+	cases := []struct {
+		step string
+		want string
+	}{
+		{"destroy slot=40", "nothing at slot 255/40"},
+		{"split slot=40 n=1", "nothing at slot 255/40"},
+		{"destroy entry=999", "no item 999 in the inventory"},
+		{"use entry=999", "no item 999 in the inventory"},
+		{"equip entry=999", "no item 999 in the inventory"},
+		{"split n=0", "split needs from=<position>"},
+		{"destroy", "destroy needs entry=<item id> or slot=<position>"},
+	}
+	for _, c := range cases {
+		t.Run(c.step, func(t *testing.T) {
+			f := newItemWorld(t)
+			a := &actState{}
+			err := f.s.actStep(context.Background(), a, mustItemStep(t, c.step))
+			if err == nil {
+				t.Fatalf("%q passed:\n%s", c.step, joinLines(f.lines))
+			}
+			want := "step 1 " + strings.Fields(c.step)[0] + " fail "
+			if len(a.lines) != 1 || !strings.HasPrefix(a.lines[0], want) || !strings.Contains(a.lines[0], c.want) {
+				t.Fatalf("the answer's lines are %q, want one %q line naming %q", a.lines, want+"<reason>", c.want)
+			}
+		})
+	}
+
+	// The run's answer carries the line: this was the live symptom, {"lines":null,"ok":false}.
+	f := newItemWorld(t)
+	lines, err := f.s.RunActSteps(context.Background(), []ActStep{mustItemStep(t, "destroy slot=40")})
+	if err == nil {
+		t.Fatalf("the refused destroy passed:\n%s", joinLines(lines))
+	}
+	if len(lines) != 1 || !strings.Contains(lines[0], "destroy fail") || !strings.Contains(lines[0], "nothing at slot") {
+		t.Fatalf("RunActSteps answered %q, want the refusal line", lines)
+	}
+}
+
+// TestActVerbReportingItsOwnFailurePrintsOneLine: a verb that prints its fail line itself (wait, gm, goto) keeps one
+// line, not a second one from actStep.
+func TestActVerbReportingItsOwnFailurePrintsOneLine(t *testing.T) {
+	f := newItemWorld(t)
+	a := &actState{}
+	err := f.s.actStep(context.Background(), a, mustItemStep(t, "wait dur=bogus"))
+	if err == nil {
+		t.Fatalf("wait dur=bogus passed:\n%s", joinLines(a.lines))
+	}
+	if len(a.lines) != 1 || !strings.Contains(a.lines[0], "wait fail") {
+		t.Fatalf("lines %q, want one wait fail line", a.lines)
+	}
+}
