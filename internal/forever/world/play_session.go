@@ -25,6 +25,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/botcmd"
+	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/forever/driver"
 	"github.com/pjerra/forever-agent/internal/forever/loot"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
@@ -127,10 +128,15 @@ func (w playSight) InSight(from, to driver.Vec3) (in, known bool) {
 }
 
 // playServerSight is the ServerSight port over the module's read-only sight query: one `.tb los` line on the command
-// channel and the one line the module answers it with (sightcmd holds that line strictly). A reply the module did not
-// give — no line in the quiet window, a say echo (the account may not ask), a rate refusal, a module without the
-// command — is unknown, and the pull keeps its older flow. The module allows five queries a second per caller, so two
-// queries are never sent closer than playLosQueryEvery.
+// channel and the one line the module answers it with. The line is built and read by the typed `.tb` client
+// (tbcmd.LOS), so the sides, the map rule, the per-call token and the tie between the answer and the call are the
+// shared reader's, the same ones the daemon's los method uses.
+//
+// A reply the module did not give — no line in the quiet window, a say echo (the account may not ask), a module
+// without the command — is unknown, and the pull keeps its older flow. A module that cannot find the unit (it left
+// the view) answered the question: that is a NO, so the pull's pick skips that member and asks about the next one
+// instead of turning the server's sight off. The module allows five queries a second and one more every 200 ms per
+// caller, so two queries are never sent closer than PlayLosQueryEvery, and a rate refusal is retried once.
 type playServerSight struct {
 	s       *session
 	last    time.Time
@@ -139,53 +145,67 @@ type playServerSight struct {
 
 var _ driver.ServerSight = (*playServerSight)(nil)
 
-// playLosQueryEvery is the least time between two sight queries (250 ms: the module's own budget is five a second, and
+// PlayLosQueryEvery is the least time between two sight queries (250 ms: the module's own budget is five a second, and
 // the pull asks in bursts). A variable so a test shortens it.
-var playLosQueryEvery = 250 * time.Millisecond
+var PlayLosQueryEvery = 250 * time.Millisecond
 
 func newPlayServerSight(s *session) *playServerSight {
-	return &playServerSight{s: s, spacing: playLosQueryEvery}
+	return &playServerSight{s: s, spacing: PlayLosQueryEvery}
 }
 
 func (w *playServerSight) TankSees(bot string, target wire.GUID) (in bool, dist float64, known bool) {
-	line, err := sightcmd.TankLine(bot, target)
-	if err != nil {
-		return false, 0, false
-	}
-	return w.ask(line)
+	return w.ask(w.s.ctx, bot, target.String())
 }
 
 func (w *playServerSight) PointSees(at driver.Vec3, target wire.GUID) (in bool, dist float64, known bool) {
-	line, err := sightcmd.PointLine([3]float32{at[0], at[1], at[2]}, target)
-	if err != nil {
-		return false, 0, false
-	}
-	return w.ask(line)
+	return w.ask(w.s.ctx, spotText(at), target.String())
 }
 
-// ask sends one sight line and reads its answer: the first collected line that is the module's answer to THIS question,
-// both sides echoing what was asked. A reply of a later or earlier query about the same unit (a tank answer for a spot
-// query, the spot the search just left) is another question's answer and is skipped. Anything else is unknown.
-func (w *playServerSight) ask(line string) (bool, float64, bool) {
-	q, ok := sightcmd.QueryOf(line)
-	if !ok {
-		return false, 0, false
-	}
-	ctx := w.s.ctx
-	if err := w.rate(ctx); err != nil {
-		return false, 0, false
-	}
-	cs := command.NewSession(&playLink{cmdLink: cmdLink{s: w.s}})
-	rep, err := cs.Run(ctx, line, w.s.commandOptions(command.Options{Quiet: playReplyQuiet, Deadline: playReplyDeadline}))
-	if err != nil || rep == nil || rep.Echoed {
-		return false, 0, false
-	}
-	for _, ln := range rep.Lines {
-		a, ok := sightcmd.Parse(strings.TrimSpace(ln.Raw))
-		if !ok || !strings.EqualFold(a.A, q.A) || !strings.EqualFold(a.B, q.B) {
-			continue
+// spotText writes a spot the way sightcmd's side grammar takes one: the plan positions are float32, so the text is the
+// value the plan holds, never an exponent.
+func spotText(at driver.Vec3) string {
+	return strconv.FormatFloat(float64(at[0]), 'f', -1, 32) + "," +
+		strconv.FormatFloat(float64(at[1]), 'f', -1, 32) + "," +
+		strconv.FormatFloat(float64(at[2]), 'f', -1, 32)
+}
+
+// ask sends one sight query and reads its answer. A rate refusal is waited out once and that one query is retried;
+// a second rate refusal, an error and an older module's missing command are unknown.
+func (w *playServerSight) ask(ctx context.Context, a, b string) (in bool, dist float64, known bool) {
+	for attempt := 0; ; attempt++ {
+		if err := w.rate(ctx); err != nil {
+			return false, 0, false
 		}
-		return a.Verdict()
+		rep, err := w.los(ctx, a, b)
+		if err != nil {
+			return false, 0, false
+		}
+		if rep.Reason != sightcmd.Rate {
+			return serverSightVerdict(rep)
+		}
+		if attempt > 0 {
+			return false, 0, false
+		}
+	}
+}
+
+// los is one `.tb los` call over the player run's channel.
+func (w *playServerSight) los(ctx context.Context, a, b string) (tbcmd.LOSReport, error) {
+	c := tbcmd.NewClient(command.NewSession(&playLink{cmdLink: cmdLink{s: w.s}}))
+	c.Base = w.s.commandOptions(command.Options{Quiet: playReplyQuiet, Deadline: playReplyDeadline})
+	return c.LOS(ctx, a, b, nil)
+}
+
+// serverSightVerdict reads the module's answer the way the pull needs it: the server's own line and how far apart the
+// two sides stand. A refusal about the world (another map, not in the world) is a NO those units cannot see each
+// other; a unit the module cannot find is a NO too (it is gone, and the pick skips it). An access, rate or argument
+// refusal is unknown: the module did not judge that line, so the run keeps its own flow.
+func serverSightVerdict(rep tbcmd.LOSReport) (in bool, dist float64, known bool) {
+	switch rep.Reason {
+	case "":
+		return rep.Clear && rep.SameMap && rep.InWorld, rep.DistYD, true
+	case sightcmd.DifferentMaps, sightcmd.NotInWorld, sightcmd.UnknownUnit:
+		return false, 0, true
 	}
 	return false, 0, false
 }
@@ -215,16 +235,39 @@ type playLink struct {
 	cmdLink
 }
 
+// playSightQuery admits a `.tb los` line only as the one shape the pull builds: a bot's name or a spot on the
+// ground, then the target's guid as sightcmd's own builder writes it. A second builder would drift from the reader.
+func playSightQuery(text string) bool {
+	rest, ok := strings.CutPrefix(text, ".tb los ")
+	if !ok {
+		return false
+	}
+	parts := strings.Split(rest, " ")
+	if len(parts) != 2 {
+		return false
+	}
+	a, err := sightcmd.ParseSide("a", parts[0])
+	if err != nil || (a.Kind != sightcmd.Name && a.Kind != sightcmd.Position) {
+		return false
+	}
+	b, err := sightcmd.ParseSide("b", parts[1])
+	if err != nil || b.Kind != sightcmd.Guid {
+		return false
+	}
+	line, err := sightcmd.BuildLine(a, b, nil)
+	return err == nil && line == text
+}
+
 // playLineAllowed is the closed vocabulary of the player run's command channel, held to the contract's whole grammar
 // and not only its prefix: `.bot`, one verb of the contract, and the bot's name where the verb takes one, as single
 // spaced words. It is admitted only when botcmd.Line, the one builder of v1 requests, would write this very line, so
 // the verb's arity, the bot's normalised name, the module's chain separator and the chat validator's rules are the
 // builder's own and nothing but a typed request gets through. Beside them sits the one read-only sight query,
-// `.tb los`, admitted only as sightcmd's own line (the two shapes the pull builds).
+// `.tb los`, admitted only when sightcmd's own builder would write that very line (the two shapes the pull builds).
 func playLineAllowed(text string) bool {
 	// The one command that is not a `.bot` verb: the module's read-only sight query, in exactly the two shapes the pull
 	// builds (`.tb los <bot> <guid>` and `.tb los x,y,z <guid>`). Nothing else of `.tb` is a player run's to send.
-	if _, ok := sightcmd.QueryOf(text); ok {
+	if playSightQuery(text) {
 		return true
 	}
 	parts := strings.Split(text, " ")

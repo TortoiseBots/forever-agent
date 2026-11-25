@@ -192,10 +192,12 @@ type PlayFake struct {
 	RefuseOrders int
 	// SrvSight, when set, answers the ServerSight port (the module's own read-only sight query): TankSees asks it from
 	// the tank's live position and PointSees from the spot given, both inside PlayModuleSightYd (the module's range gate).
-	// SrvUnknown makes every answer unknown (an older module without the command, or a rate refusal), and SrvQueries
-	// records each query asked ("tank", "point") so a test can read the search's bound.
+	// SrvUnknown makes every answer unknown (an older module without the command, or a rate refusal), SrvGone names
+	// units the module cannot find (it answers NO with known set, as the live adapter reads unknown-unit), and
+	// SrvQueries records each query asked ("tank", "point") so a test can read the search's bound.
 	SrvSight   func(from, to Vec3) bool
 	SrvUnknown bool
+	SrvGone    map[wire.GUID]bool
 	SrvQueries []string
 	// WhisperOnce scripts the live module's one whisper for a mark it cannot find: the order is still refused, but the
 	// Refusals count stands at one, as it did live (three orders, one whisper, 2026-11-24).
@@ -730,6 +732,9 @@ func (f *PlayFake) TankSees(bot string, target wire.GUID) (in bool, dist float64
 		from = f.botPos(b)
 	}
 	f.SrvQueries = append(f.SrvQueries, "tank")
+	if f.SrvGone[target] {
+		return false, 0, true
+	}
 	d := dist3(from, u.Pos)
 	return f.SrvSight(from, u.Pos) && d <= PlayModuleSightYd, d, true
 }
@@ -745,6 +750,9 @@ func (f *PlayFake) PointSees(at Vec3, target wire.GUID) (in bool, dist float64, 
 		return false, 0, false
 	}
 	f.SrvQueries = append(f.SrvQueries, "point")
+	if f.SrvGone[target] {
+		return false, 0, true
+	}
 	d := dist3(at, u.Pos)
 	return f.SrvSight(at, u.Pos) && d <= PlayModuleSightYd, d, true
 }

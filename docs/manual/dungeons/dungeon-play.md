@@ -168,7 +168,13 @@ the ray clear at 30.5 yd, the refusal right after). So the run asks the server's
 the module's read-only `.tb los` query — the one line of the player run's command channel that is not a `.bot` verb:
 
 - The **skull** goes on the first member of the kill order the TANK sees. Two queries are never sent closer than
-  250 ms (`PlayLosQueryEvery`), under the module's five a second.
+  250 ms (`PlayLosQueryEvery`), under the module's five a second; a rate refusal is waited out once and that one query
+  retried.
+- The answer is the module's own words: a unit it found is echoed by its **name** (spaces and apostrophes
+  percent-encoded), even when the query named it by guid; a ground spot comes back with **two decimals**, so the echo
+  is matched within a hundredth of a yard per axis (`sightcmd.SpotToleranceYd`); a refusal carries `los=0` and no
+  distance. A unit the module cannot find (it left the view) is a NO the pick **skips**: the next member is asked.
+  A malformed line, another query's answer and an access refusal are unknown and keep the older flow.
 - A tank that **sees none** is walked into sight of the first: the navmesh path from the tank toward the unit is
   sampled every 2 yd (`PlaySrvSightStepYd`), never nearer than 5 yd to the unit, never more than 30 yd past the plan's
   stand (`PlayAgentApproachPastYd`), each sample asked as a spot on the ground with the eye at 2 yd above it

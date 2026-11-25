@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
 // tankSightPlan is playFightPlan with the pull's stand at (40,5): the pack looks north from there.
@@ -70,6 +71,37 @@ func TestPlayPullSkullOnTheMemberTheTankSees(t *testing.T) {
 	}
 	if n := playEventCount(t, rig, "agent_pull"); n != 0 {
 		t.Fatalf("%d fallback pulls; want none", n)
+	}
+	if got := playEvents(t, rig)["pull_tank_sight"]; got.Ev == "" {
+		t.Fatal("the pull recorded no pull_tank_sight event")
+	}
+}
+
+// TestPlayTankSightGoneMemberIsSkipped: the module cannot find the nearest member (it left the view, which the live
+// adapter reads as a NO with its answer known), so the pick skips it and puts the skull on the member the tank sees.
+// One unanswerable member never turns the server's sight off for the pull.
+func TestPlayTankSightGoneMemberIsSkipped(t *testing.T) {
+	gone, open := fightGUID(1), fightGUID(2)
+	rig := newPlayFightRig(t, tankSightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: gone, Entry: 11320, Pos: Vec3{38, 20, 0}})
+		f.AddUnit(Unit{GUID: open, Entry: 11320, Pos: Vec3{50, 20, 0}})
+		f.SpawnBosses()
+		f.SightFunc = func(Vec3, Vec3) bool { return true }
+		f.SrvSight = func(Vec3, Vec3) bool { return true }
+		f.SrvGone = map[wire.GUID]bool{gone: true}
+	})
+	rig.ports.ServerSight, rig.ports.Refusals = rig.fake, rig.fake
+	rig.cfg.Out = t.TempDir()
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		dumpPlay(t, rig)
+		t.Fatalf("stop = %q; want clear", res.Stop)
+	}
+	if len(rig.fake.Marks) == 0 || rig.fake.Marks[0].Target != open {
+		t.Fatalf("the skull mark = %+v; want the member the tank sees (%v)", rig.fake.Marks, open)
+	}
+	if n := playEventCount(t, rig, "agent_pull"); n != 0 {
+		t.Fatalf("%d fallback pulls; want none (a gone member is skipped, not a turn-off)", n)
 	}
 	if got := playEvents(t, rig)["pull_tank_sight"]; got.Ev == "" {
 		t.Fatal("the pull recorded no pull_tank_sight event")

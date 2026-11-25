@@ -172,9 +172,10 @@ type Refusals interface {
 // position). The agent's Sight port is a navmesh ray and not that test, so a pull reads this one where it can: the
 // skull goes on a member the tank really sees, and a tank that sees none is walked into sight of one.
 //
-// known is false when the module cannot answer: no port, an older module without the command, a rate refusal, an
-// access refusal, an unknown unit or an error. The caller then keeps its older flow exactly, and the module's own
-// refusal of the order stays the only verdict on sight.
+// known is false when the module cannot answer the question: no port, an older module without the command, a rate
+// refusal that outlived its one retry, an access refusal or an error. The caller then keeps its older flow exactly,
+// and the module's own refusal of the order stays the only verdict on sight. A unit the module cannot find (it left
+// the view) is a NO with known true: the pick skips that member and asks about the next one.
 type ServerSight interface {
 	// TankSees asks whether the bot sees the unit from where the bot stands, and how far apart they stand.
 	TankSees(bot string, target wire.GUID) (in bool, dist float64, known bool)
