@@ -316,6 +316,80 @@ func (s *session) serveWalkRay(p serveWalkRayParams) (ServeWalkRay, error) {
 	}, nil
 }
 
+// ServeWalkTo is walk_to's answer: empty on arrival, or the transfer the walk ended in.
+type ServeWalkTo struct {
+	// ChangedMap is the map the walk ended on and the position the server put the character at, when a map change
+	// ended the leg (an instance portal the walk's own area trigger opened). That is not an error: the walk was
+	// overtaken by the map change it asked for.
+	ChangedMap *ServeWalkMap `json:"changed_map,omitempty"`
+}
+
+// ServeWalkMap is a map and a position on it, after the server moved the character.
+type ServeWalkMap struct {
+	Map uint32  `json:"map"`
+	X   float32 `json:"x"`
+	Y   float32 `json:"y"`
+	Z   float32 `json:"z"`
+}
+
+// walkMapPoll is how long one wait of a walk's map-change watch lasts: the session answers the server's packets in it
+// and the between-maps window is re-read after it.
+const walkMapPoll = 100 * time.Millisecond
+
+// serveWalkTo walks one straight line (walk_to). A map change that ends the leg is answered with the map and position
+// the character landed on; only a walk still between maps when its deadline passes is an error (objects.ErrMapChange).
+// The plan trigger volumes of the route are armed for the walk (armWalkTriggers).
+func (s *session) serveWalkTo(ctx context.Context, x, y, z float32) (ServeWalkTo, error) {
+	if s.mover == nil {
+		return ServeWalkTo{}, errors.New("world: no mover (the character's create block never arrived)")
+	}
+	disarm := s.armWalkTriggers([][3]float32{{x, y, z}})
+	defer disarm()
+	between := s.betweenMaps()
+	epoch := s.mapEpoch()
+	err := s.mover.MoveTo(ctx, x, y, z)
+	if err == nil {
+		return ServeWalkTo{}, nil
+	}
+	if !errors.Is(err, objects.ErrMapChange) {
+		return ServeWalkTo{}, err
+	}
+	if between && s.mapEpoch() == epoch {
+		// The window was open before the call: the walk never started, and no map change belongs to it.
+		return ServeWalkTo{}, fmt.Errorf("%w: the walk did not start", objects.ErrMapChange)
+	}
+	landed, err := s.walkEndedInATransfer(ctx)
+	if err != nil {
+		return ServeWalkTo{}, err
+	}
+	return ServeWalkTo{ChangedMap: landed}, nil
+}
+
+// walkEndedInATransfer answers a walk whose leg a transfer ended: it waits, on the caller's context and bounded by the
+// session's own map-change limit, for the between-maps window to close, then reports the map and position the server
+// put the character at. A window still open when the caller's deadline passes is the error (objects.ErrMapChange): the
+// walk ended in a transfer that never landed, and nothing about the new map may be guessed.
+func (s *session) walkEndedInATransfer(ctx context.Context) (*ServeWalkMap, error) {
+	for s.betweenMaps() {
+		ev, err := s.nextCtx(ctx, "the map change", walkMapPoll)
+		switch {
+		case err == nil:
+			if herr := s.handle(ctx, ev); herr != nil {
+				return nil, herr
+			}
+		case errors.Is(err, errWaitTimeout):
+		case errors.Is(err, ErrMapChangeTimeout):
+			return nil, fmt.Errorf("%w: the walk ended in a transfer that did not land within %s", objects.ErrMapChange, mapChangeLimit)
+		case ctx.Err() != nil:
+			return nil, fmt.Errorf("%w: the character is still between maps at the walk's deadline", objects.ErrMapChange)
+		default:
+			return nil, err
+		}
+	}
+	x, y, z, _ := s.mover.Position()
+	return &ServeWalkMap{Map: s.world.MapID(), X: x, Y: y, Z: z}, nil
+}
+
 // serveWalkPath plans and walks a route as one continuous movement.
 func (s *session) serveWalkPath(ctx context.Context, x, y, z float32) (ServePath, error) {
 	path, err := s.servePath(x, y, z)
@@ -329,6 +403,8 @@ func (s *session) serveWalkPath(ctx context.Context, x, y, z float32) (ServePath
 	case string(navmesh.RoutePartial), string(navmesh.RouteNone):
 		return ServePath{}, fmt.Errorf("walk_path: no full route to %.1f %.1f %.1f (%s)", x, y, z, path.Status)
 	}
+	disarm := s.armWalkTriggers(path.Points)
+	defer disarm()
 	if err := s.mover.WalkPath(ctx, path.Points); err != nil {
 		return ServePath{}, err
 	}

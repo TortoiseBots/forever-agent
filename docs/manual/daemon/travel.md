@@ -4,7 +4,7 @@ title: Teleports and travel
 description: Move the character with the GM teleport, area triggers, mounts and server-flown taxi flights, and check the map handling live.
 tags: [daemon, teleport, mount, taxi, area-trigger]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T00:30:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T04:40:00Z }
 sources:
   - id: serve-gm-gaps
     resource: internal/forever/world/serve_gm_gaps.go
@@ -18,6 +18,8 @@ sources:
     resource: cmd/forever-agent/forever_map.go
   - id: serve-trigger
     resource: internal/forever/world/trigger.go
+  - id: serve-trigger-plan
+    resource: internal/forever/world/trigger_plan.go
   - id: serve-fall
     resource: internal/forever/world/fall.go
 ---
@@ -100,6 +102,32 @@ One session carries at most 32 volumes.
 
 The result is `{"triggers":[{id, map, x, y, z, radius}, ...]}`: the armed volumes after the call, in arming order
 (empty after `clear`). What the trigger did shows on `status.map` and in `event_log`, as for `area_trigger`.
+
+# When the watch is armed
+
+Three things arm it:
+
+- **This call.** `area_trigger_watch` arms a volume until `clear` (or the session ends). Use it for a trigger the
+  daemon's plans do not name, or to aim one at a point of your own.
+- **A walk, by itself.** `walk_to`, `walk_path` and every walking leg of `dungeon_run` arm the plan trigger volumes
+  of the current map that the walk's route crosses — its destination or the line or polyline it follows — and remove
+  them again when the walk ends. That is why a plain `walk_to` into an instance portal fires its trigger with no
+  call first: the walk arms the portal's volume, sends `CMSG_AREA_TRIGGER` on the step in, and the map changes.
+- **Nothing else.** Standing still, a fight, a follow loop or a teleport arms no volume: there is no movement of the
+  character's own to cross one.
+
+The plan trigger volumes come from the daemon's plan folder (`forever serve --plans-dir`, the same files
+`dungeon_run` reads):
+
+| Volume | Where it is | Radius |
+|---|---|---|
+| A plan's `entrance_trigger` | The plan's `portal` point, on the portal's map (the outer map) | The default 4 yd |
+| A plan's `area_trigger` step | The step's `center`, on the plan's map | The step's `radius` |
+
+An id the caller already armed by hand keeps the caller's volume and is not removed by the walk: one state per id is
+what keeps a walked volume from firing twice, and re-arming an id moves it. A walk that finds the 32-volume bound
+full arms no more and says so in the daemon log. A daemon whose plan folder is missing or holds no plan for the
+current map arms nothing on a walk — the explicit call above is then the way.
 
 # mount and dismount
 

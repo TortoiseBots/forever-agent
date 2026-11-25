@@ -4,7 +4,7 @@ title: Trade
 description: Trade items and gold with another player, in one call or step by step through the trade window.
 tags: [player-actions, trade, players]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T04:40:00Z }
 sources:
   - id: trade-methods
     resource: internal/forever/world/serve_trade_methods.go
@@ -86,7 +86,11 @@ refusal by the server is `result` from the server's status with a `detail`.
 # Enchanting in the window
 
 `cast` with `trade_slot: 6` casts a spell at the other player's item in the non-traded slot while the trade window
-is open. The trade must complete for the enchant to apply. See [spells and combat](spells-and-combat.md).
+is open. The server does not cast it yet: it stores the spell for the trade and answers its silent result, so the
+call answers success with `silent: true` and `completes: "trade_accept"` — the spell goes off when both players
+accept, and that is when the enchant applies. The trade status then names the stored spell as `my_spell`; a silent
+result the trade names no spell for is an error saying nothing was cast. See
+[spells and combat](spells-and-combat.md).
 
 # Examples
 

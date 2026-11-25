@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
+	"github.com/pjerra/forever-agent/internal/forever/combat"
 	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/objects"
 	"github.com/pjerra/forever-agent/internal/forever/party"
@@ -247,6 +248,68 @@ type serveCastParams struct {
 	SpellID   int32  `json:"spell_id"`
 	Target    GUID   `json:"target,omitempty"`
 	TradeSlot *uint8 `json:"trade_slot,omitempty"`
+}
+
+// CastCompletesTradeAccept is cast's answer's Completes value for a trade-slot spell the core stored for the trade: the
+// spell goes off when both players accept it (Spell.cpp:3826-3841).
+const CastCompletesTradeAccept = "trade_accept"
+
+// ServeCast is cast's answer for a spell the core stored instead of casting now: a trade-slot cast whose spell the
+// trade data holds. The plain success stays the empty object every caller already gets.
+type ServeCast struct {
+	SpellID int32 `json:"spell_id,omitempty"`
+	// TradeSlot is the slot the cast named.
+	TradeSlot *uint8 `json:"trade_slot,omitempty"`
+	// Silent says the server answered its "no message" result (combat.SpellFailSilent, SPELL_FAILED_DONT_REPORT): the
+	// cast was accepted and nothing was said about it.
+	Silent bool `json:"silent,omitempty"`
+	// Completes names what the stored spell waits for: "trade_accept", both players' accept of the trade.
+	Completes string `json:"completes,omitempty"`
+}
+
+// serveCast sends one cast and answers the server's verdict. "success" is the empty answer it always was; the core's
+// silent result is the stored trade-slot spell it is only when the trade data names that spell (the core stores it
+// there, Spell.cpp:3826-3841 and TradeData.cpp:84-101), and the answer then says so. A silent result with nothing
+// stored is no cast — the core answers it for a spell on its event cooldown too (Spell.cpp:6090) — and neither that
+// nor the trade's missing spell is called a refusal: the call says nothing was cast. Every other result is a refusal
+// naming the server's reason.
+func (s *session) serveCast(ctx context.Context, p serveCastParams) (ServeCast, error) {
+	var outcome string
+	if p.TradeSlot != nil {
+		got, err := s.castTradeSlot(ctx, p.SpellID, *p.TradeSlot)
+		if err != nil {
+			return ServeCast{}, err
+		}
+		outcome = got
+	} else {
+		if p.SpellID <= 0 {
+			return ServeCast{}, errors.New("cast needs a spell id")
+		}
+		target := wire.GUID(p.Target)
+		if target.IsZero() && s.serveRT != nil {
+			target = s.serveRT.target
+		}
+		got, err := s.Cast(ctx, p.SpellID, target, RangeWindow{})
+		if err != nil {
+			return ServeCast{}, err
+		}
+		outcome = got
+	}
+	switch {
+	case outcome == "success":
+		return ServeCast{}, nil
+	case combat.SilentSpellResult(outcome):
+		if p.TradeSlot != nil && s.tradeStoredSpell(ctx, p.SpellID) {
+			return ServeCast{SpellID: p.SpellID, TradeSlot: p.TradeSlot, Silent: true, Completes: CastCompletesTradeAccept}, nil
+		}
+		why := "no spell-go came"
+		if p.TradeSlot != nil {
+			why = "the trade names no such spell"
+		}
+		return ServeCast{}, fmt.Errorf("cast: the server answered its no-message result for spell %d and %s: nothing was cast",
+			p.SpellID, why)
+	}
+	return ServeCast{}, fmt.Errorf("cast: the server refused the spell: %s", outcome)
 }
 
 type serveCancelCastParams struct {
@@ -717,32 +780,8 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		}
 		return serveEmpty{}, nil
 	}))
-	srv.Register("cast", serveCallTyped(st, func(s *session, ctx context.Context, p serveCastParams) (serveEmpty, error) {
-		if p.TradeSlot != nil {
-			outcome, err := s.castTradeSlot(ctx, p.SpellID, *p.TradeSlot)
-			if err != nil {
-				return serveEmpty{}, err
-			}
-			if outcome != "success" {
-				return serveEmpty{}, fmt.Errorf("cast: the server refused the spell: %s", outcome)
-			}
-			return serveEmpty{}, nil
-		}
-		if p.SpellID <= 0 {
-			return serveEmpty{}, errors.New("cast needs a spell id")
-		}
-		target := wire.GUID(p.Target)
-		if target.IsZero() && s.serveRT != nil {
-			target = s.serveRT.target
-		}
-		outcome, err := s.Cast(ctx, p.SpellID, target, RangeWindow{})
-		if err != nil {
-			return serveEmpty{}, err
-		}
-		if outcome != "success" {
-			return serveEmpty{}, fmt.Errorf("cast: the server refused the spell: %s", outcome)
-		}
-		return serveEmpty{}, nil
+	srv.Register("cast", serveCallTyped(st, func(s *session, ctx context.Context, p serveCastParams) (ServeCast, error) {
+		return s.serveCast(ctx, p)
 	}))
 	srv.Register("cancel_cast", serveCallTyped(st, func(s *session, _ context.Context, p serveCancelCastParams) (serveEmpty, error) {
 		self := s.selfOrMover()
@@ -775,11 +814,8 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		}
 		return serveEmpty{}, s.serveFace(o)
 	}))
-	srv.Register("walk_to", serveCallTyped(st, func(s *session, ctx context.Context, p serveWalkParams) (serveEmpty, error) {
-		if s.mover == nil {
-			return serveEmpty{}, errors.New("world: no mover (the character's create block never arrived)")
-		}
-		return serveEmpty{}, s.mover.MoveTo(ctx, p.X, p.Y, p.Z)
+	srv.Register("walk_to", serveCallTyped(st, func(s *session, ctx context.Context, p serveWalkParams) (ServeWalkTo, error) {
+		return s.serveWalkTo(ctx, p.X, p.Y, p.Z)
 	}))
 	srv.Register("path_to", serveCallTyped(st, func(s *session, _ context.Context, p serveWalkParams) (ServePath, error) {
 		return s.servePath(p.X, p.Y, p.Z)

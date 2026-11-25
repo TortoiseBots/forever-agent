@@ -110,16 +110,7 @@ func (s *session) serveAreaTriggerWatch(p serveAreaTriggerWatchParams) (ServeAre
 	// holds (MiscHandler.cpp:556-561). A changed volume the character is already counted inside of is not a new entry
 	// either; one that leaves the character outside clears the state, so stepping back in (or arming it back onto the
 	// character) sends once.
-	replaced := false
-	for i := range s.triggers {
-		if s.triggers[i].ID == v.ID {
-			s.triggers[i], replaced = v, true
-			break
-		}
-	}
-	if !replaced {
-		s.triggers = append(s.triggers, v)
-	}
+	s.armTrigger(v)
 	if s.triggersIn == nil {
 		s.triggersIn = map[int32]bool{}
 	}
@@ -133,6 +124,30 @@ func (s *session) serveAreaTriggerWatch(p serveAreaTriggerWatchParams) (ServeAre
 		}
 	}
 	return out, nil
+}
+
+// armTrigger stores v: a volume with the same id is replaced in place (its entered state is kept, so a retried arm is
+// not a second crossing), a new one is appended and starts outside every volume.
+func (s *session) armTrigger(v srvTrigger) {
+	for i := range s.triggers {
+		if s.triggers[i].ID == v.ID {
+			s.triggers[i] = v
+			return
+		}
+	}
+	s.triggers = append(s.triggers, v)
+	delete(s.triggersIn, v.ID)
+}
+
+// disarmTrigger removes one armed volume and its entered state: the walk that armed it ended.
+func (s *session) disarmTrigger(id int32) {
+	for i := range s.triggers {
+		if s.triggers[i].ID == id {
+			s.triggers = append(s.triggers[:i], s.triggers[i+1:]...)
+			break
+		}
+	}
+	delete(s.triggersIn, id)
 }
 
 // triggerArmed reports whether id already has a volume (which arming again replaces).

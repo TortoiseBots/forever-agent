@@ -4,7 +4,7 @@ title: Spells and combat
 description: Read the spellbook and cooldowns, cast and cancel spells, and fight a unit with melee or spells.
 tags: [player-actions, spells, combat, cooldowns]
 status: stable
-generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-24T20:35:00Z }
+generated: { by: omp/deepseek-v4.1-flash, at: 2026-11-25T04:40:00Z }
 sources:
   - id: session-methods
     resource: internal/forever/world/serve_session_methods.go
@@ -36,7 +36,7 @@ knows, so it is always current.
 | Method | Parameters | Returns |
 |---|---|---|
 | `spells` | `spell_id`, `name`, `highest`, `passive` | array of spell rows |
-| `cast` | `spell_id` (required), `target`, `trade_slot` | empty object on success |
+| `cast` | `spell_id` (required), `target`, `trade_slot` | empty object on success, or the fields below for a stored trade-slot cast |
 | `cancel_cast` | `spell_id` (0 or omitted: whatever is being cast) | empty object |
 | `cast_state` | none | the cast/gcd/cooldown state |
 | `attack` | `guid`, `name`, `for_ms` | target, duration, reason |
@@ -101,6 +101,26 @@ Notes that matter in practice:
 - `trade_slot` is for enchanting another player's item: a trade window with them must already be open (see
   [trade](trade.md)), and only slot 6 (the non-traded slot) is accepted, because that is the only slot the server
   addresses. `trade_slot` and `target` cannot be combined.
+- A successful cast still answers `{}`.
+- The server's silent result — `SPELL_FAILED_DONT_REPORT`, whose name is `do not report` — has two meanings, and the
+  call tells them apart by the trade data. A trade-slot cast gets it because the core stored the spell instead of
+  casting it (`Spell.cpp:3826-3841`): it goes off when both players accept, and the answer is a success with
+
+  | Field | Meaning |
+  |---|---|
+  | `spell_id` | The spell that was cast. |
+  | `trade_slot` | The slot the call named. |
+  | `silent` | `true`: the server answered its "no message" result. |
+  | `completes` | `trade_accept`: the spell is cast when the trade is accepted. |
+
+  The stored spell is the trade's own record of it: `trade_status` (and `trade`) names it as `my_spell`
+  (`TradeData::SetSpell`, `TradeData.cpp:84-101`, sends that update at the moment the spell is stored), and the call
+  waits up to a second for it.
+- The same result with nothing stored is no cast at all: the core answers it for a spell on its event cooldown as
+  well (`Spell.cpp:6090`). The call then fails with `cast: the server answered its no-message result for spell N and
+  <why>: nothing was cast`, where `<why>` is `no spell-go came` for a plain cast and `the trade names no such spell`
+  for a trade-slot cast. That answer is not a refusal (`the server refused the spell: ...` stays the wording for a
+  real refusal); the fight log's own line for it says `spell N answered the silent result (do not report)`.
 
 # cancel_cast
 

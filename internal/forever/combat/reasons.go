@@ -123,6 +123,18 @@ const (
 	AuraNegative    uint16 = 0x0010
 )
 
+// SpellFailSilent is SPELL_FAILED_DONT_REPORT (SharedDefines.h:1747), the core's "no message" result: it answers it
+// where a cast is accepted and the player is to be told nothing (a trade-slot spell stored for the trade,
+// Spell.cpp:3826-3841: "Spell will be cast after completing the trade. Silently ignore at this place"). It is not a
+// refusal, so nothing may report it as one.
+const SpellFailSilent int32 = 32
+
+// spellSilent is the name SpellFailSilent prints (spellFailures).
+const spellSilent = "do not report"
+
+// SilentSpellResult reports whether a spell result string is that "no message" answer.
+func SilentSpellResult(result string) bool { return result == spellSilent }
+
 // spellFailures names the SpellCastResult values a level-1 fight can hit (SharedDefines.h:1712-1900). The numbers
 // are the enum's own; an unlisted result prints its number.
 var spellFailures = map[int32]string{
@@ -142,7 +154,7 @@ var spellFailures = map[int32]string{
 	27:  "caster dead",
 	28:  "charmed",
 	30:  "confused",
-	32:  "do not report",
+	32:  spellSilent, // SPELL_FAILED_DONT_REPORT: SpellFailSilent
 	33:  "equipped item",
 	37:  "error",
 	38:  "falling",
