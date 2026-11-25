@@ -56,21 +56,26 @@ func (f *fakeTables) Item(id int64) (aotc.ItemInfo, bool) {
 // spirit.
 func fixture() *fakeTables {
 	return &fakeTables{
-		specs: map[string]bool{key("priest", "holy"): true, key("warrior", "protection"): true,
-			key("warrior", "arms"): true, key("mage", "fire"): true},
+		specs: map[string]bool{key("priest", "holy"): true, key("priest", "discipline"): true,
+			key("warrior", "protection"): true, key("warrior", "arms"): true, key("mage", "fire"): true},
 		picks: map[string][]aotc.TalentPick{
-			// Holy Nova 15237: active, no cooldown. Inner Focus 14751: active, 3 min cooldown.
+			// Holy Nova 15237: active, no cooldown. Inner Focus 14751: active, 3 min cooldown. Both
+			// are situational in the priest's spell lists. Prayer of Mending 401859 is in no list.
 			key("priest", "holy"): {
 				{Talent: "Holy Nova", SpellID: 15237, Levels: "60", PickPct: 73.9},
 				{Talent: "Inner Focus", SpellID: 14751, Levels: "60", PickPct: 91.8},
 				{Talent: "Spiritual Guidance", SpellID: 14901, Levels: "60", PickPct: 99.7}, // passive
 				{Talent: "Mental Agility", SpellID: 14520, Levels: "60", PickPct: 45.2},     // below the share
 			},
+			key("priest", "discipline"): {
+				{Talent: "Prayer of Mending", SpellID: 401859, Levels: "60", PickPct: 79.4},
+			},
 		},
 		priority: map[string][]aotc.StatWeight{
 			key("priest", "holy"):        {{Order: 1, Stat: "Healing"}, {Order: 2, Stat: "Spirit"}, {Order: 3, Stat: "Intellect"}},
-			key("warrior", "protection"): {{Order: 1, Stat: "Stamina"}, {Order: 2, Stat: "Defense"}},
-			key("warrior", "arms"):       {{Order: 1, Stat: "Stamina"}, {Order: 2, Stat: "Crit"}},
+			key("priest", "discipline"):  {{Order: 1, Stat: "Healing"}, {Order: 2, Stat: "Intellect"}},
+			key("warrior", "protection"): {{Order: 1, Stat: "Stamina"}, {Order: 2, Stat: "Strength"}, {Order: 3, Stat: "Defense"}},
+			key("warrior", "arms"):       {{Order: 1, Stat: "Stamina"}, {Order: 2, Stat: "Strength"}, {Order: 3, Stat: "Crit"}},
 			key("mage", "fire"):          {{Order: 1, Stat: "Spell Power"}, {Order: 2, Stat: "Intellect"}},
 		},
 		gear: map[string][]aotc.GearItem{
@@ -149,7 +154,14 @@ func TestGearFitsSpec(t *testing.T) {
 			rec: Record{Class: "priest", Spec: "holy", Level: 60, EquippedKnown: true,
 				Equipped: []Item{{Entry: 2}}},
 			verdict: VerdictFail, k: 0, n: 1,
-			wantLine: []string{"Plate Tank Helm (2)", "worn only by", "warrior/protection", "wants Healing"},
+			wantLine: []string{"Plate Tank Helm (2)", "commonly worn by", "warrior/protection", "none of their stat families (strength) is in its priority"},
+		},
+		{
+			name: "a mage in a strength plate piece",
+			rec: Record{Class: "mage", Spec: "fire", Level: 60, EquippedKnown: true,
+				Equipped: []Item{{Entry: 2}}},
+			verdict: VerdictFail, k: 0, n: 1,
+			wantLine: []string{"Plate Tank Helm (2)", "none of their stat families (strength) is in its priority"},
 		},
 		{
 			name: "mixed wearers prove no mismatch",
@@ -218,10 +230,75 @@ func TestGearFitsSpec(t *testing.T) {
 	}
 }
 
-// TestTalentsImplySpells is the talent rule's table: a trained talent spell is expected (and fails
-// when never cast) once the read-back proves the full build, a partial marker-kit read-back makes an
-// absent talent unproven (never PASS, never FAIL), a long cooldown is not expected in a short combat
-// window, and no talent data or no proven combat reports the expectations without judging.
+// TestGearFitsSpecRealData pins the shipped tables on the cases a cold review found: a feral bot in
+// rogue/hunter agility leather and rings is no clear mismatch (Agility is feral's #2 stat; Stamina
+// names no family), an enhancement shaman in mail its own spec also wears is fine, and a mage in a
+// strength plate piece is still a clear mismatch.
+func TestGearFitsSpecRealData(t *testing.T) {
+	in := Inputs{Tables: aotc.Default()}
+	cases := []struct {
+		name    string
+		rec     Record
+		verdict string
+	}{
+		{
+			name: "feral in rogue/hunter leather and rings",
+			rec: Record{Class: "druid", Spec: "bear", Level: 60, EquippedKnown: true,
+				Equipped: []Item{{Entry: 19984}, {Entry: 18500}}},
+			verdict: VerdictPass,
+		},
+		{
+			name: "enhancement in hunter-shared mail",
+			rec: Record{Class: "shaman", Spec: "enh", Level: 60, EquippedKnown: true,
+				Equipped: []Item{{Entry: 276739}}},
+			verdict: VerdictPass,
+		},
+		{
+			// Fury Visor is warrior plate: arms/protection are strength, fury's priority starts at
+			// agility, and no mage stat family is among them.
+			name: "mage in strength plate",
+			rec: Record{Class: "mage", Spec: "fire", Level: 60, EquippedKnown: true,
+				Equipped: []Item{{Entry: 20521}}},
+			verdict: VerdictFail,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			row := gearRow(tc.rec, in)
+			if row.Verdict != tc.verdict {
+				t.Fatalf("verdict %s, want %s (%s)\n%s", row.Verdict, tc.verdict, row.Reason, strings.Join(row.Evidence, "\n"))
+			}
+		})
+	}
+}
+
+// TestGearFitsSpecEverySpecOwnGearPasses is the rule's property: every class/spec's own most-worn
+// items are exactly what the spec's players wear, so the rule must pass every one of them.
+func TestGearFitsSpecEverySpecOwnGearPasses(t *testing.T) {
+	tables := aotc.Default()
+	in := Inputs{Tables: tables}
+	for _, spec := range tables.Specs {
+		t.Run(spec.Class+"/"+spec.Spec, func(t *testing.T) {
+			var items []Item
+			seen := map[string]bool{}
+			for _, g := range tables.GearFor(spec.Class, spec.Spec, "") {
+				if g.ID <= 0 || seen[g.Slot] {
+					continue
+				}
+				seen[g.Slot] = true
+				items = append(items, Item{Entry: g.ID, Slot: g.Slot})
+			}
+			if len(items) == 0 {
+				t.Fatal("no most-worn items")
+			}
+			row := gearRow(Record{Class: spec.Class, Spec: spec.Spec, Level: GearLevel, EquippedKnown: true, Equipped: items}, in)
+			if row.Verdict != VerdictPass {
+				t.Fatalf("its own gear is %s: %s\n%s", row.Verdict, row.Reason, strings.Join(row.Evidence, "\n"))
+			}
+		})
+	}
+}
+
 func TestTalentsImplySpells(t *testing.T) {
 	tables := fixture()
 	in := testInputs(t, tables)
@@ -236,21 +313,29 @@ func TestTalentsImplySpells(t *testing.T) {
 		wantNot  []string
 	}{
 		{
-			name: "expected and never cast",
+			name: "a trained talent spell never cast FAILs",
+			rec: Record{Class: "priest", Spec: "disc", Role: "healer", Level: 60, ActiveS: 60,
+				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{401859}, Casts: casts},
+			verdict: VerdictFail, k: 0, n: 1,
+			wantLine: []string{"Prayer of Mending (Prayer of Mending, 79.4% of discipline): never cast in 60 s of combat"},
+		},
+		{
+			name: "a trained talent spell cast passes",
+			rec: Record{Class: "priest", Spec: "disc", Role: "healer", Level: 60, ActiveS: 60,
+				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{401859},
+				Casts:   map[string]int{"Renew": 4, "Prayer of Mending": 3}},
+			verdict: VerdictPass, k: 1, n: 1,
+			wantLine: []string{"Prayer of Mending (Prayer of Mending): cast"},
+		},
+		{
+			name: "a situational talent spell is reported, never failed",
 			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 60,
 				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true, TalentsComplete: true,
 				Talents: []int64{15237}, Casts: casts},
-			verdict: VerdictFail, k: 0, n: 1,
-			wantLine: []string{"Holy Nova (Holy Nova, 73.9% of holy): never cast in 60 s of combat"},
-		},
-		{
-			name: "expected and cast",
-			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 60,
-				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true, TalentsComplete: true,
-				Talents: []int64{15237},
-				Casts:   map[string]int{"Renew": 4, "Flash Heal": 6, "Holy Nova": 3}},
-			verdict: VerdictPass, k: 1, n: 1,
-			wantLine: []string{"Holy Nova (Holy Nova): cast"},
+			verdict:  VerdictInconclusive,
+			wantLine: []string{"Holy Nova (Holy Nova, 73.9% of holy): situational in the spell lists", "reported, not judged"},
 		},
 		{
 			name: "a partial marker kit never turns a false PASS",
@@ -266,8 +351,8 @@ func TestTalentsImplySpells(t *testing.T) {
 				ActiveKnown: true, Combat: combat(0, 400), TalentsKnown: true,
 				Talents: []int64{15237},
 				Casts:   map[string]int{"Renew": 4, "Holy Nova": 3}},
-			verdict: VerdictInconclusive, k: 1, n: 1,
-			wantLine: []string{"Holy Nova (Holy Nova): cast", "Inner Focus (Inner Focus, 91.8% of holy): not in the recorded talent learning"},
+			verdict:  VerdictInconclusive,
+			wantLine: []string{"Holy Nova (Holy Nova, 73.9% of holy): situational in the spell lists", "Inner Focus (Inner Focus, 91.8% of holy): not in the recorded talent learning"},
 		},
 		{
 			name: "a complete build: a talent the bot does not have is not expected",
@@ -278,12 +363,12 @@ func TestTalentsImplySpells(t *testing.T) {
 			wantLine: []string{"Holy Nova: not trained, so not expected", "Inner Focus: cooldown 180 s"},
 		},
 		{
-			name: "the same cooldown in a long fight is expected",
+			name: "a long cooldown in a long fight fits, and stays report only",
 			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 400,
 				ActiveKnown: true, Combat: combat(0, 400), TalentsKnown: true, TalentsComplete: true,
 				Talents: []int64{14751}, Casts: casts},
-			verdict: VerdictFail, k: 0, n: 1,
-			wantLine: []string{"Inner Focus (Inner Focus, 91.8% of holy): never cast in 400 s of combat"},
+			verdict:  VerdictInconclusive,
+			wantLine: []string{"Inner Focus (Inner Focus, 91.8% of holy): situational in the spell lists"},
 		},
 		{
 			name: "a long cooldown in a short fight is not expected",
@@ -291,7 +376,15 @@ func TestTalentsImplySpells(t *testing.T) {
 				ActiveKnown: true, Combat: combat(0, 60), TalentsKnown: true, TalentsComplete: true,
 				Talents: []int64{14751, 15237},
 				Casts:   map[string]int{"Renew": 4, "Flash Heal": 6, "Holy Nova": 1}},
-			verdict: VerdictPass, k: 1, n: 1,
+			verdict:  VerdictInconclusive,
+			wantLine: []string{"Inner Focus: cooldown 180 s, longer than every combat window"},
+		},
+		{
+			name: "a 180 s cooldown is not expected in a 90 s fight",
+			rec: Record{Class: "priest", Spec: "holy", Role: "healer", Level: 60, ActiveS: 90,
+				ActiveKnown: true, Combat: combat(0, 90), TalentsKnown: true, TalentsComplete: true,
+				Talents: []int64{14751}, Casts: casts},
+			verdict:  VerdictPass,
 			wantLine: []string{"Inner Focus: cooldown 180 s, longer than every combat window"},
 		},
 		{
@@ -398,7 +491,10 @@ func TestSpecNameAndFamily(t *testing.T) {
 	for stat, want := range map[string]string{
 		"Spell Power": FamilyCaster, "Intellect": FamilyCaster, "Healing": FamilyCaster, "Spirit": FamilyCaster,
 		"Agility": FamilyAgility, "Attack Power": FamilyAgility,
-		"Stamina": FamilyStrength, "Defense": FamilyStrength, "Crit": FamilyAny, "Hit": FamilyAny,
+		"Strength": FamilyStrength, "Defense": FamilyStrength,
+		// Stamina says nothing about the family: every priority lists it, for survivability.
+		"Stamina": FamilyAny, "Mana per 5": FamilyCaster,
+		"Crit": FamilyAny, "Hit": FamilyAny,
 	} {
 		if got := StatFamily(stat); got != want {
 			t.Errorf("%s: %q, want %q", stat, got, want)
@@ -407,6 +503,10 @@ func TestSpecNameAndFamily(t *testing.T) {
 	family := SpecFamily([]aotc.StatWeight{{Stat: "Hit"}, {Stat: "Agility"}, {Stat: "Stamina"}})
 	if family != FamilyAgility {
 		t.Errorf("priority family %q, want %q", family, FamilyAgility)
+	}
+	// A stamina-first feral priority resolves to its first family stat, Agility, not to Strength.
+	if family := SpecFamily([]aotc.StatWeight{{Stat: "Stamina"}, {Stat: "Agility"}, {Stat: "Strength"}}); family != FamilyAgility {
+		t.Errorf("feral priority family %q, want %q", family, FamilyAgility)
 	}
 }
 

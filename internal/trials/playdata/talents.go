@@ -18,9 +18,10 @@ type talentExpectation struct {
 // talentRow judges the should-have-cast spells the bot's talent build implies (rule
 // AOTC-TALENTS-IMPLY-SPELLS): the talents at or above MinTalentShare that grant an active spell, the
 // bot has, and whose cooldown fits one of its combat windows, join the spell judge's expectation.
-// It fails only a talent spell the record proves trained and never cast; a record with no talent
-// data, with only a partial talent read-back (the runner learns the spec's marker kit, not the
-// build), or with no proven combat reports what it has and judges nothing it cannot prove.
+// It fails only a talent spell the record proves trained and never cast, and never one the spec's
+// own spell lists call situational (that one is reported as held, not judged); a record with no
+// talent data, with only a partial talent read-back (the runner learns the spec's marker kit, not
+// the build), or with no proven combat reports what it has and judges nothing it cannot prove.
 func talentRow(rec Record, in Inputs) Row {
 	row := Row{ID: RuleTalents, Verdict: VerdictInconclusive}
 	class, spec := strings.ToLower(strings.TrimSpace(rec.Class)), SpecName(rec.Spec)
@@ -75,7 +76,9 @@ func talentRow(rec Record, in Inputs) Row {
 			if length < TalentMinActiveS {
 				continue
 			}
-			if e.CooldownMS <= 0 || float64(e.CooldownMS) <= length*1000*TalentCooldownFactor {
+			// A spell on cooldown for longer than the window divided by TalentCooldownFactor is
+			// not expected in it: a 3 min spell needs a 6 min fight, a 180 s spell no less.
+			if e.CooldownMS <= 0 || float64(e.CooldownMS) <= length*1000/TalentCooldownFactor {
 				fits = true
 				break
 			}
@@ -151,33 +154,49 @@ func talentRow(rec Record, in Inputs) Row {
 	for _, name := range finding.Missing {
 		missing[strings.ToLower(name)] = true
 	}
+	held := map[string]bool{}
+	for _, name := range finding.Held {
+		held[strings.ToLower(strings.TrimSpace(name))] = true
+	}
 	var lines []string
-	var never int
+	var never, heldCount int
 	for _, e := range judged {
-		if missing[strings.ToLower(e.Spell)] {
+		key := strings.ToLower(e.Spell)
+		switch {
+		case held[key]:
+			// The spec's spell lists call the spell situational: the bot may rightly hold it, so
+			// the rule reports it and never fails it.
+			heldCount++
+			lines = append(lines, fmt.Sprintf("%s (%s, %.1f%% of %s): situational in the spell lists, reported, not judged",
+				e.Spell, e.Talent.Talent, e.Talent.PickPct, spec))
+		case missing[key]:
 			never++
 			lines = append(lines, fmt.Sprintf("%s (%s, %.1f%% of %s): never cast in %.0f s of combat", e.Spell, e.Talent.Talent, e.Talent.PickPct, spec, rec.ActiveS))
-			continue
+		default:
+			lines = append(lines, fmt.Sprintf("%s (%s): cast", e.Spell, e.Talent.Talent))
 		}
-		lines = append(lines, fmt.Sprintf("%s (%s): cast", e.Spell, e.Talent.Talent))
 	}
 	lines = append(lines, unproven...)
 	lines = append(lines, untrained...)
 	lines = append(lines, skipped...)
 	row.Evidence = sortedEvidence(lines)
-	row.N = int64(len(judged))
-	row.K = int64(len(judged) - never)
+	row.N = int64(len(judged) - heldCount)
+	row.K = int64(len(judged) - heldCount - never)
 	if never > 0 {
 		row.Verdict = VerdictFail
-		row.Reason = fmt.Sprintf("%d of %d trained talent spells were never cast", never, len(judged))
+		row.Reason = fmt.Sprintf("%d of %d trained talent spells were never cast", never, len(judged)-heldCount)
+		return row
+	}
+	if row.N == 0 {
+		row.Reason = fmt.Sprintf("the %d trained talent spells are situational in the spell lists: reported, not judged", heldCount)
 		return row
 	}
 	if len(unproven) > 0 {
-		row.Reason = fmt.Sprintf("the %d trained talent spells were cast; %d common talent spells are unproven with only the marker-kit read-back", len(judged), len(unproven))
+		row.Reason = fmt.Sprintf("the %d trained talent spells were cast; %d common talent spells are unproven with only the marker-kit read-back", len(judged)-heldCount, len(unproven))
 		return row
 	}
 	row.Verdict = VerdictPass
-	row.Reason = fmt.Sprintf("all %d trained talent spells were cast", len(judged))
+	row.Reason = fmt.Sprintf("all %d trained talent spells were cast", len(judged)-heldCount)
 	return row
 }
 

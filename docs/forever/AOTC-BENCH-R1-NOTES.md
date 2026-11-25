@@ -36,11 +36,18 @@ serve has no equipment read and this repository carries no item stats). Per item
 - **FINE** when the item is among the items the spec's level 60 players wear in that slot.
 - **FINE** when the item's own primary stats (when the record carries them) include one of the spec's
   top `PriorityStats` stats.
-- **MISMATCH** (the rule FAILs) when its stats match none of the priority, or when the item is
-  commonly worn only by specs of one contrary stat family (`GearFamilyShare`, `GearMismatchSpecs`) —
-  the stat-family reading that catches a caster in strength plate without item stats.
-- **UNPROVEN** otherwise: the rule is INCONCLUSIVE and names the item, so a missing item table is
-  never a pass.
+- **FINE** when the item is commonly worn only by specs of one stat family that the spec's top
+  `PriorityStats` stats include (a feral's Agility, a feral bot in rogue/hunter leather).
+- **MISMATCH** (the rule FAILs) when its stats match none of the priority, or when none of the stat
+  families of the specs that commonly wear it (`GearFamilyShare`, `GearMismatchSpecs`) is in the
+  spec's top `PriorityStats` — the reading that catches a caster in strength plate without item
+  stats.
+- **UNPROVEN** otherwise (mixed wearer families, or no item table entry): the rule is INCONCLUSIVE
+  and names the item, so a missing item table is never a pass.
+
+Stamina has no stat family: every priority lists it for survivability, so it cannot make an item
+contrary (a feral's Agility is second, an enhancement shaman's Intellect second). A family is
+contrary only when it is absent from the spec's top three priority stats.
 
 Item level is never a reason. A record with no item data, a bot below level 60 (the gear data is
 level 60 only) or an unknown spec is INCONCLUSIVE with the reason.
@@ -52,13 +59,16 @@ active spell in the Forever spell table (`internal/foreverspells`, not passive) 
 judge's should-have-cast list (`kbspells.BotCasts.Expected`, judged like the spec's core list). The
 rule:
 
-- judges only spells whose cooldown fits a combat window (`TalentCooldownFactor`; a 3 minute spell is
-  not expected in a 60 s fight) and only a window of at least `TalentMinActiveS` (30 s),
+- judges only spells whose cooldown fits a combat window divided by `TalentCooldownFactor` (a 180 s
+  spell needs a 360 s window, so it is not expected in a 90 s fight) and only a window of at least
+  `TalentMinActiveS` (30 s),
 - reads combat time from the bot's own `in_combat` samples (`CombatGapS` joins consecutive
   in-combat samples into one window), never from the repeat's scored time: setup, waiting and travel
   are no fight, so a long repeat with a short fight is INCONCLUSIVE, never a FAIL,
 - expects only a talent the record proves learned: a trained talent's spell that is never cast
-  FAILs, an absent one is treated as untrained only when the read-back declares the full build
+  FAILs, unless the spec's spell lists call that spell situational — then the rule reports it as
+  held and never FAILs it (the bot may rightly hold Inner Focus, Nature's Swiftness or Cold Blood).
+  An absent pick is treated as untrained only when the read-back declares the full build
   (`complete`); with the runner's partial marker-kit read-back an absent pick is unproven, so it can
   turn a PASS into INCONCLUSIVE but never into a FAIL,
 - reports the expectations and judges nothing (INCONCLUSIVE) when the record carries no talent data

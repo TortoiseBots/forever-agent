@@ -37,7 +37,7 @@ func gearRow(rec Record, in Inputs) Row {
 	}
 	priority := in.Tables.StatPriorityFor(class, spec)
 	top := priorityNames(priority, PriorityStats)
-	family := SpecFamily(priority)
+	families := topFamilies(top)
 
 	var evidence []string
 	var fine, unproven, mismatched int
@@ -68,12 +68,30 @@ func gearRow(rec Record, in Inputs) Row {
 			}
 			continue
 		}
-		if family != FamilyAny {
-			if other, ok := otherFamilyWearers(in.Tables, item, family); ok {
-				mismatched++
-				evidence = append(evidence, fmt.Sprintf("%s: %s: wrong for %s/%s, worn only by %s specs (%s); its priority wants %s",
-					item.Slot, itemLabel(item), class, spec, other.family, other.wearers, topStat(priority)))
-				continue
+		if len(families) > 0 {
+			if other, ok := otherFamilyWearers(in.Tables, item); ok {
+				inPriority := false
+				for family := range other.families {
+					if families[family] {
+						inPriority = true
+					}
+				}
+				if !inPriority {
+					mismatched++
+					evidence = append(evidence, fmt.Sprintf("%s: %s: wrong for %s/%s, commonly worn by %s; none of their stat families (%s) is in its priority (%s)",
+						item.Slot, itemLabel(item), class, spec, strings.Join(other.wearers, ", "), familyLabel(other.families), strings.Join(top, ", ")))
+					continue
+				}
+				if len(other.families) == 1 {
+					// The wearers' one family is among the spec's own top stats (a feral in rogue
+					// agility leather): the item cannot be called contrary.
+					fine++
+					evidence = append(evidence, fmt.Sprintf("%s: %s: fine, worn only by %s, a family in its priority (%s)",
+						item.Slot, itemLabel(item), strings.Join(other.wearers, ", "), strings.Join(top, ", ")))
+					continue
+				}
+				// More than one wearer family, one of them in the priority: not evidence against
+				// the item, but not proof for it either.
 			}
 		}
 		unproven++
@@ -135,12 +153,17 @@ func priorityNames(priority []aotc.StatWeight, n int) []string {
 	return out
 }
 
-// topStat is the spec's first priority stat, "unknown" when it lists none.
-func topStat(priority []aotc.StatWeight) string {
-	if len(priority) == 0 {
-		return "unknown"
+// topFamilies is the set of stat families among the spec's top priority stats (the first
+// PriorityStats of the priority): an item whose wearers name one of them is no clear mismatch,
+// because the spec wants that family too.
+func topFamilies(top []string) map[string]bool {
+	out := map[string]bool{}
+	for _, stat := range top {
+		if family := StatFamily(stat); family != FamilyAny {
+			out[family] = true
+		}
 	}
-	return priority[0].Stat
+	return out
 }
 
 // statsMatch reports whether an item's own stats include at least one of the spec's top priority
@@ -156,18 +179,27 @@ func statsMatch(stats, top []string) (bool, string) {
 	return false, fmt.Sprintf("its stats (%s) match none of the priority (%s)", strings.Join(stats, ", "), strings.Join(top, ", "))
 }
 
-// otherFamily is the contrary-wearer reading of an item: the family, and the specs that commonly
-// wear it stated for the evidence line.
+// otherFamily is the contrary-wearer reading of an item: the union of the stat families of its
+// common wearers, in the item's own slot, with those wearers stated for the evidence line.
 type otherFamily struct {
-	family  string
-	wearers string
+	families map[string]bool
+	wearers  []string
 }
 
-// otherFamilyWearers reports whether the item is commonly worn (GearFamilyShare) only by specs of
-// one stat family other than the bot's, in the item's own slot: that is the evidence that its
-// primary stats are that family's, and a clear mismatch for this bot. ok is false when its wearers
-// are mixed, of the bot's family, too few, or the other family is unknown.
-func otherFamilyWearers(t Tables, item Item, mine string) (otherFamily, bool) {
+// familyLabel sorts a family set for an evidence line.
+func familyLabel(families map[string]bool) string {
+	names := make([]string, 0, len(families))
+	for family := range families {
+		names = append(names, family)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
+}
+
+// otherFamilyWearers reports the specs that commonly wear the item (GearFamilyShare) in its own
+// slot, and the union of their stat families: that is the evidence about its primary stats. ok is
+// false when the wearers are too few or a wearer spec's family is unknown.
+func otherFamilyWearers(t Tables, item Item) (otherFamily, bool) {
 	info, ok := t.Item(item.Entry)
 	if !ok {
 		return otherFamily{}, false
@@ -182,25 +214,18 @@ func otherFamilyWearers(t Tables, item Item, mine string) (otherFamily, bool) {
 			perSpec[key] = w
 		}
 	}
-	families := map[string]bool{}
-	var lines []string
+	out := otherFamily{families: map[string]bool{}}
 	for key, w := range perSpec {
 		family := SpecFamily(t.StatPriorityFor(w.Class, w.Spec))
 		if family == FamilyAny {
 			return otherFamily{}, false
 		}
-		if family == mine {
-			return otherFamily{}, false
-		}
-		families[family] = true
-		lines = append(lines, fmt.Sprintf("%s %.1f%%", key, w.Pct))
+		out.families[family] = true
+		out.wearers = append(out.wearers, fmt.Sprintf("%s %.1f%%", key, w.Pct))
 	}
-	if len(families) != 1 || len(lines) < GearMismatchSpecs {
+	if len(out.wearers) < GearMismatchSpecs {
 		return otherFamily{}, false
 	}
-	for family := range families {
-		sort.Strings(lines)
-		return otherFamily{family: family, wearers: strings.Join(lines, ", ")}, true
-	}
-	return otherFamily{}, false
+	sort.Strings(out.wearers)
+	return out, true
 }

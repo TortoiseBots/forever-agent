@@ -48,6 +48,10 @@ func TestLoadRep(t *testing.T) {
 {"unit":"bot","t":10,"in_combat":true}
 {"unit":"bot","t":11,"in_combat":true}
 {"unit":"player","t":1,"in_combat":true}
+{"unit":"player","t":30,"in_combat":true}
+{"unit":"player","t":31,"in_combat":true}
+{"unit":"player","t":32,"in_combat":true}
+{"unit":"player","t":33,"in_combat":true}
 `)
 
 	rec := LoadRep(dir, trial, fixture())
@@ -78,6 +82,8 @@ func TestLoadRep(t *testing.T) {
 		t.Fatal("another unit's cast is in the bot's casts")
 	}
 	// Combat time is the bot's own in_combat windows, not the repeat's clock: [1,3] and [10,11].
+	// The player rows outside those windows (t 30..33) prove the unit filter: without it a third
+	// window appears and the active time doubles.
 	if !rec.ActiveKnown || len(rec.Combat) != 2 || rec.ActiveS != 3 {
 		t.Fatalf("combat %+v (known %v): active %.1f, want [1,3] and [10,11] = 3 s", rec.Combat, rec.ActiveKnown, rec.ActiveS)
 	}

@@ -5,14 +5,17 @@
 // Rule "gear fits the spec" (AOTC-GEAR-FITS-SPEC): an equipped item is FINE when it is among the
 // items the spec's level 60 players wear in that slot, or when its primary stats match the spec's
 // stat priority. Only a clear mismatch fails: an item whose stats match none of the priority, or one
-// that only players of a contrary stat family wear (a strength/tank item on a caster, a spell item on
-// a rogue). Item level is never a reason. A record with no item data is INCONCLUSIVE, never a pass.
+// that only players of a contrary stat family wear. A family is contrary only when none of the
+// spec's top PriorityStats priority stats belongs to it (a strength plate piece on a caster);
+// stamina has no family, so it never makes an item contrary. Item level is never a reason. A record
+// with no item data is INCONCLUSIVE, never a pass.
 //
 // Rule "talents imply spells" (AOTC-TALENTS-IMPLY-SPELLS): for the bot's level group, the talents most
 // players of its spec take (share at or above MinTalentShare) that grant an ACTIVE spell join the
 // spell judge's should-have-cast list (kbspells.BotCasts.Expected), per combat window the bot's own
-// samples prove. A talent the record proves learned is expected and fails when never cast; a talent
-// absent from a partial read-back (the runner learns the spec's marker kit, not the build) is
+// samples prove. A talent the record proves learned is expected and fails when never cast, unless
+// the spec's spell lists call the spell situational: that one is reported as held, never failed. A
+// talent absent from a partial read-back (the runner learns the spec's marker kit, not the build) is
 // unproven, so it never turns a PASS; a record with no talent data or no combat reports what it has
 // and judges nothing.
 //
@@ -49,7 +52,9 @@ const (
 	// GearMismatchSpecs is how many specs of another stat family must commonly wear an item before
 	// its wearers prove a mismatch for this bot's family (one spec's item may be a shared piece).
 	GearMismatchSpecs = 2
-	// PriorityStats is how many of the spec's top priority stats an item's own stats must match.
+	// PriorityStats is how many of the spec's top priority stats ("top" throughout the rule: the
+	// first three) an item's own stats must match, and the only stats whose families decide whether
+	// an item's wearers make it contrary.
 	PriorityStats = 3
 	// MinTalentShare is the pick share at which most players of a spec take a talent (percent).
 	MinTalentShare = 50.0
@@ -220,15 +225,17 @@ const (
 )
 
 // StatFamily is the stat family of one priority stat: a caster wants spell power, intellect,
-// healing, spirit and mana per 5; a physical dps wants agility and attack power; a tank or a plate
-// damage dealer wants stamina and defense. Crit and hit say nothing about the item's family.
+// healing, spirit and mana per 5; a physical dps wants agility and attack power; a plate damage
+// dealer or tank wants strength and defense. Crit, hit and stamina say nothing about the item's
+// family: every priority lists stamina for survivability, so it cannot tell an agility piece from
+// a strength one (a feral wants Agility second, an enhancement shaman Intellect).
 func StatFamily(stat string) string {
 	switch strings.ToLower(strings.TrimSpace(stat)) {
 	case "spell power", "intellect", "healing", "spirit", "mana per 5":
 		return FamilyCaster
 	case "agility", "attack power":
 		return FamilyAgility
-	case "stamina", "defense":
+	case "strength", "defense":
 		return FamilyStrength
 	}
 	return FamilyAny

@@ -98,26 +98,26 @@ func TestJudgeLevelSkip(t *testing.T) {
 	}
 }
 
-// TestJudgeExpected: a caller's own should-have-cast list joins the core judgment. Last Stand is only situational in the
-// protection fixture; a caller that knows the bot has the talent makes it a missing core spell. An expectation the core
-// list already names is not duplicated, and one the situational list names is judged from the core side, once.
+// TestJudgeExpected: a caller's own should-have-cast list joins the core judgment, except a spell the spec's lists
+// call situational: Last Stand is situational for protection, so a caller's expectation reports it as held, never as a
+// missing core spell. An expectation the core list already names is not duplicated.
 func TestJudgeExpected(t *testing.T) {
 	o := fixtureOracle(t)
 	base := BotCasts{Name: "Ragemeister", Class: "warrior", Role: "tank", ActiveS: 60,
 		Casts: map[string]int{"Shield Slam": 4, "Sunder Armor": 8, "Heroic Strike": 3}}
 
 	f := o.Judge(base, 20)
-	if f.Level != "ok" || len(f.Missing) != 0 {
+	if f.Level != "ok" || len(f.Missing) != 0 || len(f.Held) != 0 {
 		t.Fatalf("without an expectation: %+v", f)
 	}
 
 	with := base
 	with.Expected = []string{"Last Stand"}
 	f = o.Judge(with, 20)
-	if f.Level != "warn" || !slices.Equal(f.Missing, []string{"Last Stand"}) {
+	if f.Level != "ok" || len(f.Missing) != 0 || !slices.Equal(f.Held, []string{"Last Stand"}) {
 		t.Fatalf("expected Last Stand: %+v", f)
 	}
-	if !strings.Contains(f.Text, "missing core: Last Stand") {
+	if !strings.Contains(f.Text, "held (situational): Last Stand") {
 		t.Fatalf("text %q", f.Text)
 	}
 
@@ -130,14 +130,14 @@ func TestJudgeExpected(t *testing.T) {
 		t.Fatalf("core expectation duplicated: %v", f.Missing)
 	}
 
-	// An expectation judged by the bot's level guard is skipped, like a core spell: Shield Wall's first rank is
-	// level 24 in the Turtle table.
+	// An expectation judged by the bot's level guard is skipped, like a core spell: Whirlwind is in no
+	// protection list and its first rank is level 36 in the Turtle table.
 	with = base
 	with.Level = 20
-	with.Expected = []string{"Shield Wall"}
+	with.Expected = []string{"Whirlwind"}
 	f = o.Judge(with, 20)
-	if len(f.Missing) != 0 {
-		t.Fatalf("level guard not applied: %v", f.Missing)
+	if len(f.Missing) != 0 || len(f.Held) != 0 {
+		t.Fatalf("level guard not applied: %v (held %v)", f.Missing, f.Held)
 	}
 }
 
