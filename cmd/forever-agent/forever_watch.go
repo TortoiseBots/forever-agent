@@ -149,6 +149,10 @@ func foreverWatchCmd(ctx context.Context, args []string, raid bool, stdout, stde
 		fmt.Fprintln(stderr, cmdName+": --map needs --out (the map is written beside the trace)")
 		return exitUsage
 	}
+	if pullDecisions && *out == "" {
+		fmt.Fprintln(stderr, cmdName+": --decisions-pull needs --out (the rows are written beside the record)")
+		return exitUsage
+	}
 	if !pf.check(cmdName, *dry, stderr) {
 		return exitUsage
 	}

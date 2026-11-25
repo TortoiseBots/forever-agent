@@ -172,16 +172,43 @@ func (c *Client) RunDecisions(ctx context.Context, target string, since int, has
 // for (0 takes the default page, the command's largest); since/hasSince start it above an earlier cursor. The pull
 // follows next=, asks never more than the command allows and stops on more=no, on a page that brought no row, or at
 // decisionsMaxPages (Truncated then says so).
+//
+// Every page must agree with the protocol, or the pull is refused rather than written: the header repeats the cursor
+// asked for, next= is the newest row read (and the cursor asked for when no row came back), a later page starts above
+// the cursor, and the run, capture, leader and plan are the ones the first page named. A page that breaks one of
+// these would duplicate, drop or mix rows in a file that otherwise looks whole.
 func (c *Client) PullDecisions(ctx context.Context, target string, since int, hasSince bool, limit int) (DecisionsPull, error) {
 	pull := DecisionsPull{}
 	cursor, hasCursor := since, hasSince
+	head := DecisionsHeader{}
 	for page := 0; page < decisionsMaxPages; page++ {
 		rep, err := c.RunDecisions(ctx, target, cursor, hasCursor, limit)
 		if err != nil {
 			return pull, err
 		}
-		if len(rep.Rows) > 0 && hasCursor && rep.Rows[0].Seq <= cursor {
-			return pull, fmt.Errorf("%w: the page starts at seq=%d, not above since=%d", ErrBadReport, rep.Rows[0].Seq, cursor)
+		if rep.Header.Since != cursor {
+			return pull, fmt.Errorf("%w: the page says since=%d, the pull asked since=%d", ErrBadReport, rep.Header.Since, cursor)
+		}
+		if page == 0 {
+			head = rep.Header
+		} else if rep.Header.Run != head.Run || rep.Header.Capture != head.Capture ||
+			rep.Header.Lead != head.Lead || rep.Header.Plan != head.Plan {
+			return pull, fmt.Errorf("%w: the page names run=%q lead=%q plan=%q capture=%q, not %q/%q/%q/%q",
+				ErrBadReport, rep.Header.Run, rep.Header.Lead, rep.Header.Plan, rep.Header.Capture,
+				head.Run, head.Lead, head.Plan, head.Capture)
+		}
+		if len(rep.Rows) == 0 {
+			if rep.Header.Next != cursor {
+				return pull, fmt.Errorf("%w: a page with no row moved next to %d from since=%d", ErrBadReport, rep.Header.Next, cursor)
+			}
+		} else {
+			first, last := rep.Rows[0].Seq, rep.Rows[len(rep.Rows)-1].Seq
+			if hasCursor && first <= cursor {
+				return pull, fmt.Errorf("%w: the page starts at seq=%d, not above since=%d", ErrBadReport, first, cursor)
+			}
+			if rep.Header.Next != last {
+				return pull, fmt.Errorf("%w: the page ends at seq=%d but says next=%d", ErrBadReport, last, rep.Header.Next)
+			}
 		}
 		if pull.Run == "" {
 			pull.Run, pull.Capture = rep.Header.Run, rep.Header.Capture
@@ -197,12 +224,7 @@ func (c *Client) PullDecisions(ctx context.Context, target string, since int, ha
 			pull.Note = fmt.Sprintf("the module answered more=yes at seq %d but sent no row; the older rows are past its window", rep.Header.Next)
 			return pull, nil
 		}
-		next := rep.Header.Next
-		if hasCursor && next <= cursor {
-			pull.Note = fmt.Sprintf("the module answered next=%d after since=%d; the cursor did not move", next, cursor)
-			return pull, nil
-		}
-		cursor, hasCursor = next, true
+		cursor, hasCursor = rep.Header.Next, true
 	}
 	pull.Truncated = true
 	pull.Note = fmt.Sprintf("the pull stopped at its own bound of %d pages", decisionsMaxPages)

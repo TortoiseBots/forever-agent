@@ -28,6 +28,39 @@ func runPlayCmd(t *testing.T, args ...string) (int, string, string) {
 
 func rfcPlan() string { return filepath.Join("..", "..", "dungeons", "ragefire_chasm.json") }
 
+// TestDungeonPlayDecisionsPullFlag: --decisions-pull needs --out (a usage error before the plan loads), and with a
+// folder the dry run records the note a player-led run gets: the module keeps no capture for it.
+func TestDungeonPlayDecisionsPullFlag(t *testing.T) {
+	if code, _, stderr := runPlayCmd(t, "--dry", "--plan", rfcPlan(), "--bots", playBotsArg, "--character", "Hero",
+		"--decisions-pull"); code != 2 {
+		t.Fatalf("exit %d, want 2: %s", code, stderr)
+	}
+	out := t.TempDir()
+	code, stdout, stderr := runPlayCmd(t, "--dry", "--plan", rfcPlan(), "--bots", playBotsArg, "--character", "Hero",
+		"--out", out, "--decisions-pull")
+	if code != 0 {
+		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
+	sums, _ := filepath.Glob(filepath.Join(out, "*.forever-run.json"))
+	if len(sums) != 1 {
+		t.Fatalf("summaries = %v; want one", sums)
+	}
+	raw, err := os.ReadFile(sums[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum driver.RunSummary
+	if err := json.Unmarshal(raw, &sum); err != nil {
+		t.Fatal(err)
+	}
+	if sum.Decisions == nil || sum.Decisions.Rows != 0 || !strings.Contains(sum.Decisions.Note, "no capture") {
+		t.Fatalf("summary decisions %+v", sum.Decisions)
+	}
+	if !sum.Clear || sum.Play == nil || sum.Play.GMLines != 0 {
+		t.Fatalf("the flag changed the run: clear=%v play=%+v", sum.Clear, sum.Play)
+	}
+}
+
 // TestDungeonPlayDryClearsRFC is the round's first case: the whole of Ragefire Chasm on the scripted world through
 // the command, a PASS verdict, and the files a run leaves.
 func TestDungeonPlayDryClearsRFC(t *testing.T) {

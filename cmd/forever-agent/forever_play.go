@@ -77,6 +77,10 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 		fmt.Fprintln(stderr, "forever dungeon-play: --map needs --out (the map is written beside the trace)")
 		return exitUsage
 	}
+	if pullDecisions && *out == "" {
+		fmt.Fprintln(stderr, "forever dungeon-play: --decisions-pull needs --out (the rows are written beside the record)")
+		return exitUsage
+	}
 	if !pf.check("forever dungeon-play", *dry, stderr) {
 		return exitUsage
 	}

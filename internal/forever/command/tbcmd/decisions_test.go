@@ -140,19 +140,85 @@ func TestPullDecisionsNoProgress(t *testing.T) {
 	}
 }
 
-// TestPullDecisionsRepeatedPage: a module that ignores since= and sends the same rows again is refused, never read
-// as a second page of older rows.
+// TestPullDecisionsRepeatedPage: a module that sends a row at or below the cursor again is refused, never read as a
+// second page.
 func TestPullDecisionsRepeatedPage(t *testing.T) {
+	calls := 0
 	runner := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
-		return reply(o, "run-begin #T", decisionsHeader(1, 0, 1, "yes"), decisionRow(1),
+		calls++
+		if calls == 1 {
+			return reply(o, "run-begin #T", decisionsHeader(1, 0, 1, "yes"), decisionRow(1),
+				decisionsEnd(2, 1, "yes")), nil
+		}
+		return reply(o, "run-begin #T", decisionsHeader(1, 1, 1, "yes"), decisionRow(1),
 			decisionsEnd(2, 1, "yes")), nil
 	}}
 	pull, err := NewClient(runner).PullDecisions(context.Background(), "Tankbot", 0, false, 0)
 	if !errors.Is(err, ErrBadReport) {
-		t.Fatalf("err = %v, want ErrBadReport for a repeated page", err)
+		t.Fatalf("err = %v, want ErrBadReport for a repeated row", err)
 	}
 	if len(pull.Rows) != 1 {
 		t.Fatalf("%d row(s) before the refusal, want 1", len(pull.Rows))
+	}
+}
+
+// pageSpec is one scripted answer of the inconsistent-pages test: the header's fields and its rows.
+type pageSpec struct {
+	since, next int
+	more        string
+	run         string
+	seqs        []int
+}
+
+// pageReply builds the module's answer for one pageSpec.
+func pageReply(o command.Options, p pageSpec) *command.Reply {
+	raws := []string{"run-begin #T",
+		fmt.Sprintf("decisions run=%s lead=Tankbot plan=ragefire_chasm capture=cap-7 count=%d since=%d next=%d more=%s #T",
+			p.run, len(p.seqs), p.since, p.next, p.more)}
+	for _, q := range p.seqs {
+		raws = append(raws, decisionRow(q))
+	}
+	raws = append(raws, decisionsEnd(len(p.seqs)+1, p.next, p.more))
+	return reply(o, raws...)
+}
+
+// TestPullDecisionsInconsistentPages: every paging invariant a corrupt or confusing answer can break is refused
+// instead of written.
+func TestPullDecisionsInconsistentPages(t *testing.T) {
+	cases := map[string][]pageSpec{
+		"header since is not the cursor asked": {
+			{since: 0, next: 2, more: "yes", run: "r-1", seqs: []int{1, 2}},
+			{since: 0, next: 3, more: "no", run: "r-1", seqs: []int{3}},
+		},
+		"next is past the last row": {
+			{since: 0, next: 9, more: "no", run: "r-1", seqs: []int{1, 2}},
+		},
+		"the second page repeats the cursor row": {
+			{since: 0, next: 2, more: "yes", run: "r-1", seqs: []int{1, 2}},
+			{since: 2, next: 2, more: "yes", run: "r-1", seqs: []int{2}},
+		},
+		"an empty page moved the cursor": {
+			{since: 0, next: 2, more: "yes", run: "r-1", seqs: []int{1, 2}},
+			{since: 2, next: 0, more: "no", run: "r-1"},
+		},
+		"another run on the second page": {
+			{since: 0, next: 2, more: "yes", run: "r-1", seqs: []int{1, 2}},
+			{since: 2, next: 3, more: "no", run: "r-2", seqs: []int{3}},
+		},
+	}
+	for name, pages := range cases {
+		n := 0
+		runner := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+			if n >= len(pages) {
+				return reply(o, "error code=no-run cmd=run #T"), nil
+			}
+			pg := pages[n]
+			n++
+			return pageReply(o, pg), nil
+		}}
+		if _, err := NewClient(runner).PullDecisions(context.Background(), "Tankbot", 0, false, 0); !errors.Is(err, ErrBadReport) {
+			t.Errorf("%s: err = %v, want ErrBadReport", name, err)
+		}
 	}
 }
 

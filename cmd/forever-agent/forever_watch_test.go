@@ -6,8 +6,13 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pjerra/forever-agent/internal/forever/driver"
 )
 
 func runWatchCmd(t *testing.T, args ...string) (int, string, string) {
@@ -51,11 +56,41 @@ func TestForeverWatchArguments(t *testing.T) {
 		{"--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead", "--watchdog-minutes", "0"},
 		{"--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead", "--pause-minutes", "0"},
 		{"--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead", "--pause-minutes", "121"},
+		{"--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead", "--decisions-pull"},
 	}
 	for _, args := range cases {
 		if code, _, _ := runWatchCmd(t, args...); code != 2 {
 			t.Fatalf("args %v: exit %d, want 2", args, code)
 		}
+	}
+}
+
+// TestForeverWatchDecisionsPull: with the flag and a folder the dry watch pulls the scripted module's decisions (none
+// scripted: the block counts zero), and the run ends as it did; without a folder the flag is a usage error.
+func TestForeverWatchDecisionsPull(t *testing.T) {
+	out := t.TempDir()
+	code, stdout, stderr := runWatchCmd(t, "--dry", "--plan", cmdPlan(t), "--leader", "Tank", "--character", "Lead",
+		"--enter", "none", "--poll", "1", "--out", out, "--decisions-pull")
+	if code != 0 {
+		t.Fatalf("exit %d: %s\n%s", code, stderr, stdout)
+	}
+	sums, _ := filepath.Glob(filepath.Join(out, "*.forever-run.json"))
+	if len(sums) != 1 {
+		t.Fatalf("summaries = %v; want one", sums)
+	}
+	raw, err := os.ReadFile(sums[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sum driver.RunSummary
+	if err := json.Unmarshal(raw, &sum); err != nil {
+		t.Fatal(err)
+	}
+	if sum.Decisions == nil || sum.Decisions.Rows != 0 || sum.Decisions.Note != "" {
+		t.Fatalf("summary decisions %+v", sum.Decisions)
+	}
+	if !sum.Clear && sum.StopReason != "done" {
+		t.Fatalf("the flag changed the run: %+v", sum)
 	}
 }
 
