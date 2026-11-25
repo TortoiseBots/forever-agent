@@ -133,8 +133,11 @@ func TestPlayRaidRouteNeedsRaidBlock(t *testing.T) {
 // TestValidatePlayRaid: the group's bounds are checked before anything is sent.
 func TestValidatePlayRaid(t *testing.T) {
 	spec := &dungeon.RaidSpec{Size: 20}
-	if err := ValidatePlayRaid(raidGroup(15), spec); err != nil {
-		t.Fatalf("a twenty-member group was refused: %v", err)
+	if err := ValidatePlayRaid(raidGroup(14), spec); err != nil {
+		t.Fatalf("a nineteen-bot group of a twenty-member raid was refused: %v", err)
+	}
+	if err := ValidatePlayRaid(raidGroup(15), spec); err == nil {
+		t.Fatal("twenty bots for a twenty-member raid were accepted (this character is the twentieth)")
 	}
 	cases := []struct {
 		name  string
@@ -160,8 +163,11 @@ func TestValidatePlayRaid(t *testing.T) {
 		})
 	}
 	// Without the plan's block the core's own bound applies: forty members, this character one of them.
-	if err := ValidatePlayRaid(raidGroup(36), nil); err != nil {
+	if err := ValidatePlayRaid(raidGroup(34), nil); err != nil {
 		t.Fatalf("a full raid of thirty-nine bots was refused without a raid block: %v", err)
+	}
+	if err := ValidatePlayRaid(raidGroup(35), nil); err == nil {
+		t.Fatal("forty bots were accepted without a raid block (the core's raid holds forty with this character)")
 	}
 }
 
@@ -246,7 +252,7 @@ func (g *plainGroup) Disband() error                               { return g.fa
 // a party's two.
 func TestPlayRaidAllDPSOrdered(t *testing.T) {
 	group := raidGroup(12)
-	rig := newRaidRig(t, group, true, func(f *PlayFake) { f.SpawnPacks() })
+	rig := newRaidRig(t, group, false, func(f *PlayFake) { f.SpawnPacks() })
 	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
 	if res.Stop != "raid-boss-reached" {
 		t.Fatalf("stop = %q; want raid-boss-reached (the pack was fought, the boss stop follows)", res.Stop)
@@ -284,6 +290,10 @@ func TestPlayRaidRegroupFar20(t *testing.T) {
 func TestPlayRaidHealerRezAny(t *testing.T) {
 	group := raidGroup(15)
 	rig := newRaidRig(t, group, true, nil)
+	// The group as FORM leaves it: every bot online and in the party (a run's cleanup would log them out again).
+	for _, b := range rig.fake.GoldenOwner.Bots {
+		b.Online, b.InParty = true, true
+	}
 	p := &playRun{cfg: rig.cfg, ports: rig.ports}
 	if !p.healerCanRez() {
 		t.Fatal("a raid with three living healers says no healer may raise")

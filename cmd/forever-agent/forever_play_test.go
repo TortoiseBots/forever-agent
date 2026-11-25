@@ -332,7 +332,7 @@ func TestDungeonPlayRaidFlags(t *testing.T) {
 	}{
 		{"bots and the raid flags", append([]string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--bots", playBotsArg}, raidFlags()...), "exclude each other"},
 		{"layout alone", []string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--layout", filepath.Join(t.TempDir(), "layout.txt")}, "names --tanks, --healers and --dps"},
-		{"two damage dealers", []string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--tanks", "Raidtanka,Raidtankb", "--healers", "Raidheala", "--dps", "Raiddpsa,Raiddpsb"}, "5 to 19"},
+		{"one damage dealer", []string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--tanks", "Raidtanka,Raidtankb", "--healers", "Raidheala", "--dps", "Raiddpsa"}, "at least 2"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			code, _, stderr := runPlayCmd(t, c.args...)
@@ -348,8 +348,9 @@ func TestDungeonPlayRaidFlags(t *testing.T) {
 	if code, _, stderr := runPlayCmd(t, "--dry", "--plan", raidSuitePlan(), "--bots", playBotsArg, "--character", "Hero"); code != driver.ExitPlanRefused {
 		t.Fatalf("exit %d stderr %q; want the plan refused", code, stderr)
 	}
-	// The dry raid: the whole machine over the scripted world, stopping where the raid's own watch takes over.
-	args := append([]string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero"}, raidFlags()...)
+	// The dry raid: the whole machine over the scripted world, stopping where the raid's own watch takes over. --out
+	// writes the run's record, and the raid's verdict reads it.
+	args := append([]string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--out", t.TempDir()}, raidFlags()...)
 	code, stdout, stderr := runPlayCmd(t, args...)
 	if code != 0 {
 		t.Fatalf("exit %d\nstdout: %s\nstderr: %s", code, stdout, stderr)

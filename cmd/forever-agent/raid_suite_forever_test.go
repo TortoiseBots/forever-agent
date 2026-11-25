@@ -40,11 +40,13 @@ func raidForeverSlots(t *testing.T) string {
 	return path
 }
 
-// raidForeverRig replaces the slot setup and the watch with fakes and records what each got.
+// raidForeverRig replaces the slot setup and the watch with fakes and records what each got. script answers the exit
+// code of a watch and writes the summary it wants; watch, when set, replaces it and sees the watch's context.
 type raidForeverRig struct {
 	setups []string // the out dir of every slot setup
 	args   [][]string
 	script func(args []string, out string) int
+	watch  func(ctx context.Context, args []string, out string) int
 }
 
 func newRaidForeverRig(t *testing.T) *raidForeverRig {
@@ -62,6 +64,9 @@ func newRaidForeverRig(t *testing.T) *raidForeverRig {
 	raidSuiteForeverWatch = func(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		r.args = append(r.args, args)
 		out := raidForeverFlag(args, "--out")
+		if r.watch != nil {
+			return r.watch(ctx, args, out)
+		}
 		if r.script == nil {
 			writeSuiteSummary(t, out, suiteSummary(raidSuiteForeverUntil, time.Now(), 300))
 			return exitOK
@@ -249,5 +254,93 @@ func TestRaidSuiteForeverRefusedSlot(t *testing.T) {
 	}
 	if len(rig.args) != 0 || len(rig.setups) != 0 {
 		t.Fatalf("setup/watch ran for a refused slot: %v/%v", rig.setups, rig.args)
+	}
+}
+
+// raidForeverLeaseRenew shortens the suite's renewal interval for one test.
+func raidForeverLeaseRenew(t *testing.T, d time.Duration) {
+	t.Helper()
+	prev := raidSuiteLeaseRenew
+	t.Cleanup(func() { raidSuiteLeaseRenew = prev })
+	raidSuiteLeaseRenew = d
+}
+
+// raidForeverStore is a store over the same slots file, for reading the lease the suite holds.
+func raidForeverStore(t *testing.T, slotsPath string) *slots.Store {
+	t.Helper()
+	cfg, err := slots.Load(slotsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return slots.NewStore(cfg, slotsPath)
+}
+
+// TestRaidSuiteForeverLeaseRenewed: a watch that outlives the renewal interval has its lease renewed while it runs, so
+// a two-hour watch never leaves its slot free after thirty minutes.
+func TestRaidSuiteForeverLeaseRenewed(t *testing.T) {
+	raidForeverLeaseRenew(t, 15*time.Millisecond)
+	rig := newRaidForeverRig(t)
+	slotsPath := raidForeverSlots(t)
+	store := raidForeverStore(t, slotsPath)
+	var renewed bool
+	rig.watch = func(ctx context.Context, args []string, out string) int {
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) {
+			if l, err := store.Get("fv1", "2"); err == nil && l != nil && l.Renewed.After(l.Acquired) {
+				renewed = true
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		writeSuiteSummary(t, out, suiteSummary(raidSuiteForeverUntil, time.Now(), 300))
+		return exitOK
+	}
+	code, _, stderr := raidForeverRun(t, slotsPath, raidForeverEntry())
+	if code != exitOK {
+		t.Fatalf("exit %d stderr %q", code, stderr)
+	}
+	if !renewed {
+		t.Fatal("the lease was never renewed while the watch ran")
+	}
+	if l, err := store.Get("fv1", "2"); err != nil || l != nil {
+		t.Fatalf("the lease after the watch: %+v, %v; want released", l, err)
+	}
+}
+
+// TestRaidSuiteForeverRenewalLostCancelsTheWatch: a lease that goes to another holder ends the watch — it may not keep
+// a slot it no longer holds — the raid is failed with the renewal's error, and the other holder's lease is left alone.
+func TestRaidSuiteForeverRenewalLostCancelsTheWatch(t *testing.T) {
+	raidForeverLeaseRenew(t, 15*time.Millisecond)
+	rig := newRaidForeverRig(t)
+	slotsPath := raidForeverSlots(t)
+	store := raidForeverStore(t, slotsPath)
+	rig.watch = func(ctx context.Context, args []string, out string) int {
+		go func() {
+			// Another run takes the slot after the watch started: release ours, then acquire as a stranger.
+			time.Sleep(10 * time.Millisecond)
+			if l, err := store.Get("fv1", "2"); err == nil && l != nil {
+				_, _ = store.Release("fv1", "2", l.Holder, l.LeaseID, false)
+				_, _ = store.Acquire("fv1", "2", false, "raid-suite-other", autoForeverLeaseTTL)
+			}
+		}()
+		select {
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+		}
+		return exitRaidWalkFailed
+	}
+	_, rep, stderr := raidForeverRun(t, slotsPath, raidForeverEntry())
+	if len(rep.Raids) != 1 || rep.Raids[0].Verdict != suiteFailed {
+		t.Fatalf("report = %+v; want one failed raid (stderr %q)", rep.Raids, stderr)
+	}
+	if !strings.Contains(rep.Raids[0].Reason, "renew") {
+		t.Fatalf("reason = %q; want the renewal's error", rep.Raids[0].Reason)
+	}
+	l, err := store.Get("fv1", "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l == nil || l.Holder != "raid-suite-other" {
+		t.Fatalf("the lease after the run = %+v; want the other holder's own", l)
 	}
 }

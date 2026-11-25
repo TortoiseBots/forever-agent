@@ -41,6 +41,9 @@ the same suite command and the same verdict rules as the Turtle form (see the
    places nothing. Slot 3 is refused (owner rule), as everywhere.
 2. Resolves the entry's server and slot against the slots file (the server needs its `forever` block: `rest`, `rpc`,
    `ca`) and takes the slot's lease for 30 minutes. A slot held by someone else refuses that raid; nothing is launched.
+   The lease is renewed every 5 minutes while the watch runs (a watch's budget is two hours by default), and a renewal
+   that fails — the lease is gone, or another holder has it — ends the watch at once: a run never keeps a slot it no
+   longer holds.
 3. Builds the attempt's slot dir with `slot setup --forever` (the same call the autopilot's attempt makes), then runs
    `forever raid-watch` in this process: the plan file, `--leader`, the slots file's connection flags, the slot's
    account and character, the slot dir and the attempt's folder. No `--until`, `--from`, `--place` or

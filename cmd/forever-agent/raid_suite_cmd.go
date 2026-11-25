@@ -578,6 +578,11 @@ const raidSuiteForeverUntil = "watch"
 // the tests (it answers the exit code and writes the summary the next step reads).
 var raidSuiteForeverWatch = foreverRaidWatchCmd
 
+// raidSuiteLeaseRenew is how often a running `--forever` watch's lease is renewed: the autopilot's own interval. A
+// watch's budget (two hours by default) outlives the lease's thirty minutes, so the slot would be free to another run
+// while the first still sits at its account. A test shortens it.
+var raidSuiteLeaseRenew = autoForeverLeaseRenew
+
 // raidSuiteSlotSetup builds one `--forever` raid's slot dir: the autopilot's own prepareForeverAttempt, which takes
 // the entry's lease and runs `slot setup --forever` into <out>/slot. A test replaces it.
 var raidSuiteSlotSetup = func(w *autoForeverWorld, binary string, f autoForeverSlot, out string) error {
@@ -617,8 +622,18 @@ func (s *raidSuite) walkForever(ctx context.Context, e raidSuiteEntry, prep raid
 		rep.Verdict, rep.Reason = suiteFailed, err.Error()
 		return false
 	}
-	exit := raidSuiteForeverWatch(ctx, autoForeverCommandArgs(target, f, filepath.Join(out, "slot"), out)[2:], s.stdout, s.stderr)
+	watchCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	done := make(chan int, 1)
+	go func() {
+		done <- raidSuiteForeverWatch(watchCtx, autoForeverCommandArgs(target, f, filepath.Join(out, "slot"), out)[2:], s.stdout, s.stderr)
+	}()
+	exit, renewErr := s.superviseForeverWatch(cancel, f, done)
 	rep.ExitCode = &exit
+	if renewErr != nil {
+		rep.Verdict, rep.Reason = suiteFailed, renewErr.Error()
+		return true
+	}
 	cur, err := readRaidSuiteSummary(out)
 	if err != nil {
 		rep.Verdict, rep.Reason = suiteFailed, "no summary: "+err.Error()
@@ -636,6 +651,26 @@ func (s *raidSuite) walkForever(ctx context.Context, e raidSuiteEntry, prep raid
 	}
 	verdictOf(rep, cur, filepath.Join(out, "summary.json"), hist, exit)
 	return true
+}
+
+// superviseForeverWatch waits for one `--forever` watch and keeps its lease alive: every raidSuiteLeaseRenew the lease
+// is renewed, and a renewal that fails (the lease is gone, or another holder has it) cancels the watch, because a run
+// may not keep a slot it no longer holds. It returns the watch's exit code, or the renewal's error.
+func (s *raidSuite) superviseForeverWatch(cancel context.CancelFunc, f autoForeverSlot, done <-chan int) (int, error) {
+	tick := time.NewTicker(raidSuiteLeaseRenew)
+	defer tick.Stop()
+	for {
+		select {
+		case exit := <-done:
+			return exit, nil
+		case <-tick.C:
+			if err := s.fworld.renewHeld(f); err != nil {
+				cancel()
+				<-done
+				return 0, fmt.Errorf("renew %s/%s: %v", f.server, f.slot, err)
+			}
+		}
+	}
 }
 
 // releaseForever releases the lease this suite holds for one raid. A lease that is gone or held by someone else is
