@@ -12,7 +12,7 @@ sources:
     resource: cmd/forever-agent/decisions_cmd.go
 ---
 
-This page describes the Turtle 1.12 stack. These commands refuse a ForeverCore server.
+This page describes the Turtle 1.12 stack's dashboard pull, which refuses a ForeverCore server. The command's Forever mode is its own read (below).
 
 # Decision captures
 
