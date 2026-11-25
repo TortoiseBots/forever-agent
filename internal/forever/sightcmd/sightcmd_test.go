@@ -242,3 +242,27 @@ func TestBuildLine(t *testing.T) {
 		t.Fatalf("an empty side: %v", err)
 	}
 }
+
+// TestBuildLineRefusesAHandBuiltSide: a Side's fields are exported, so BuildLine reads each word back through
+// ParseSide and refuses any side that does not come back the same. Without that, a word with a space would add
+// arguments to the line and a name claimed as a position would get past the map rule.
+func TestBuildLineRefusesAHandBuiltSide(t *testing.T) {
+	good := mustSide(t, "b", "Tanka")
+	for _, tc := range []struct {
+		name string
+		a    Side
+	}{
+		{"a name with a space would add arguments", Side{Kind: Name, Word: "Tanka x y"}},
+		{"a name claimed as a position would pass the map rule", Side{Kind: Position, Word: "Tanka"}},
+		{"a control character is not a name", Side{Kind: Name, Word: "Tanka\x00"}},
+		{"an over-long word is not a name", Side{Kind: Name, Word: strings.Repeat("a", 300)}},
+		{"a guid that is not the module's printed form", Side{Kind: Guid, Word: "0x0000000000000000000000000000BEEF"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line, err := BuildLine(tc.a, good, nil)
+			if !errors.Is(err, ErrBadValue) || line != "" {
+				t.Fatalf("line %q err %v, want a refusal wrapping ErrBadValue", line, err)
+			}
+		})
+	}
+}

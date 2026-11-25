@@ -266,11 +266,13 @@ The queries are paced at 250 ms, which keeps them inside the server's five-at-on
 the whole query pass has a one-minute bound. A `rate` refusal is waited out and the same query asked once more. A unit
 the server no longer has (`unknown-unit`, `not-in-world`, `different-maps`: it despawned, died or changed map between
 the read and the query) is skipped alone, with one note naming how many pack units stayed unanswered; the rest of the
-pack is still asked. An answer for one unit that is not understood (it is not the module's record, or not the call's) is
+pack is still asked. `no-access` is skipped for that one unit too, with its own note: the query is a ground point
+against a creature guid, which needs no access of its own, so below GameMaster the server says it for the same gone
+creature. An answer for one unit that is not understood (it is not the module's record, or not the call's) is
 recorded for that unit as `answer not understood` in one note with the count, and the pass goes on with the rest of the
-pack. A server whose module build has no query, that refuses access, or that answers `rate` twice is
-said once in the notes and the pass goes on with the ray alone. When the query pass's bound or such a stop leaves
-stands unasked, one note says how many were not asked.
+pack. A server whose module build has no query, that answers `bad-argument` (the sides would be read the same way for
+every unit), or that answers `rate` twice is said once in the notes and the pass goes on with the ray alone. When the
+query pass's bound or such a stop leaves stands unasked, one note says how many were not asked.
 
 # plan-diff
 

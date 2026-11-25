@@ -112,10 +112,10 @@ type fakeForeverServe struct {
 	losRefusal  string
 	losRefusals map[string]string
 	// losErrs answers the query for the named guid (canonical form) with this error.
-	losErrs     map[string]error
-	losCalls    int
-	loss        []string
-	lossAt      []time.Time
+	losErrs  map[string]error
+	losCalls int
+	loss     []string
+	lossAt   []time.Time
 	// rays logs every walk_ray read: the sight point and the target.
 	rays []fakeRay
 }
@@ -1292,10 +1292,11 @@ func TestScoutForeverServerSightFallsBack(t *testing.T) {
 }
 
 // TestScoutForeverServerSightSkipsOneRefusedUnit: a unit that despawned, died or changed map between the read and the
-// query answers unknown-unit, not-in-world or different-maps. That one unit is left unanswered and the pass asks the
-// rest; it does not turn server sight off.
+// query answers unknown-unit, not-in-world or different-maps. Below GM the module says no-access for the same gone
+// creature (a ground point against a creature guid needs no access of its own), so that is a per-unit skip too. The
+// one unit is left unanswered, with its own note, and the pass asks the rest; it does not turn server sight off.
 func TestScoutForeverServerSightSkipsOneRefusedUnit(t *testing.T) {
-	for _, reason := range []string{"unknown-unit", "not-in-world", "different-maps"} {
+	for _, reason := range []string{"unknown-unit", "not-in-world", "different-maps", "no-access"} {
 		t.Run(reason, func(t *testing.T) {
 			dir := t.TempDir()
 			mmaps := foreverFlat(t)
@@ -1318,10 +1319,21 @@ func TestScoutForeverServerSightSkipsOneRefusedUnit(t *testing.T) {
 				t.Fatalf("%d los queries, want both pack units asked", calls)
 			}
 			rep := foreverReport(t, dir, "scout_skip")
+			noted := false
 			for _, n := range rep.Notes {
 				if strings.Contains(n, "does not answer los") || strings.Contains(n, "refused the los query") {
 					t.Fatalf("one refused unit stopped the pass: %q", n)
 				}
+				want := "the module refused 1 pack unit(s)"
+				if reason == "no-access" {
+					want = "answered no-access for 1 pack unit(s)"
+				}
+				if strings.Contains(n, want) {
+					noted = true
+				}
+			}
+			if !noted {
+				t.Fatalf("the report does not record the %s unit: %q", reason, rep.Notes)
 			}
 			var step int
 			for _, st := range rep.Steps {
@@ -1339,6 +1351,42 @@ func TestScoutForeverServerSightSkipsOneRefusedUnit(t *testing.T) {
 				t.Fatalf("check data %v, want the one unit the server answered", c.Data)
 			}
 		})
+	}
+}
+
+// TestScoutForeverServerSightBadArgumentEndsThePass: the scout sends canonical sides, so bad-argument means the module
+// and this client read the line differently and every unit would answer the same. That one refusal ends the sight
+// pass (said once) instead of being counted per unit.
+func TestScoutForeverServerSightBadArgumentEndsThePass(t *testing.T) {
+	dir := t.TempDir()
+	mmaps := foreverFlat(t)
+	foreverScoutPackPlanFile(t, dir, "scout_badarg")
+	fake := newFakeForeverServe(foreverPackUnits()...)
+	fake.ray = func(_ [3]float32, _, _, _ float32) serveclient.WalkRay {
+		return serveclient.WalkRay{Known: true, In: false, Hit: 3, Source: "navmesh_raycast"}
+	}
+	fake.losRefusals = map[string]string{fakeCanonGuid("0x00000000000000000000000000000064"): "bad-argument"}
+	useFakeForeverServe(t, fake)
+	code, _, errOut := runCLI("plan-scout", "scout_badarg", "--dir", dir, "--mmaps", mmaps,
+		"--spawns", foreverExport(), "--forever", "--out", filepath.Join(dir, "out"), "--live", "--slot", t.TempDir())
+	if code == exitLivePhaseRefused || code == exitPlanScoutLiveAborted {
+		t.Fatalf("live pass: code %d err %q", code, errOut)
+	}
+	fake.mu.Lock()
+	calls := fake.losCalls
+	fake.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("%d los queries, want the pass to stop after the bad-argument answer", calls)
+	}
+	rep := foreverReport(t, dir, "scout_badarg")
+	said := 0
+	for _, n := range rep.Notes {
+		if strings.Contains(n, "refused the los query for bad-argument") {
+			said++
+		}
+	}
+	if said != 1 {
+		t.Fatalf("%d note(s) say the module refused the query for bad-argument: %q", said, rep.Notes)
 	}
 }
 

@@ -168,10 +168,20 @@ func (l Side) Matches(answered string) bool {
 // BuildLine builds the `.tb los` line for two sides and the map two spots need. `map=` is the two-spots word only (a
 // unit side carries its own map, and the module refuses the word on it), and its id is 1-65535; every other use is
 // refused here, before any line is sent. Every caller that sends the query builds its line here, so the map rule has
-// one home. A refusal wraps ErrBadValue.
+// one home.
+//
+// A Side's fields are exported, so the word of each side is checked against the reading of itself before the line is
+// built: ParseSide must give back the same Kind and Word. A hand-built Side whose word adds arguments, reads as
+// another form, or is not what the module takes is refused instead of being written into the line. A refusal wraps
+// ErrBadValue.
 func BuildLine(a, b Side, mapID *uint32) (string, error) {
-	if a.Word == "" || b.Word == "" {
-		return "", fmt.Errorf("%w: a los side is empty", ErrBadValue)
+	for _, s := range []struct {
+		what string
+		side Side
+	}{{"a", a}, {"b", b}} {
+		if err := canonicalSide(s.what, s.side); err != nil {
+			return "", err
+		}
 	}
 	if a.Kind != Position || b.Kind != Position {
 		if mapID != nil {
@@ -186,6 +196,20 @@ func BuildLine(a, b Side, mapID *uint32) (string, error) {
 		return "", fmt.Errorf("%w: map= takes 1-65535, not %d", ErrBadValue, *mapID)
 	}
 	return ".tb los " + a.Word + " " + b.Word + " map=" + strconv.FormatUint(uint64(*mapID), 10), nil
+}
+
+// canonicalSide refuses a side whose word does not read back as itself. ParseSide is the whole grammar of a side, so a
+// word that it reads as another form, refuses, or rewrites (a spot it would print differently, a guid it would strip)
+// is not a side a caller can have built through it.
+func canonicalSide(what string, s Side) error {
+	back, err := ParseSide(what, s.Word)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrBadValue, err)
+	}
+	if back.Kind != s.Kind || back.Word != s.Word {
+		return fmt.Errorf("%w: the %s side %q reads as a %s side %q", ErrBadValue, what, s.Word, back.Kind, back.Word)
+	}
+	return nil
 }
 
 // answerKeys is the module's line, key by key. Every key is required (a refusal writes an empty dist=), and reason is
