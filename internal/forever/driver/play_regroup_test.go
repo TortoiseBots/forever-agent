@@ -406,3 +406,33 @@ func slicesLastIndex(s []string, v string) int {
 	}
 	return -1
 }
+
+// TestPlayRegroupDeathAtThePullGatherResumesThePull: the tank falls while the party gathers at the pull's stand. The
+// run brings it back and then re-enters the pull it was gathering for (the leg walk's next pack is that same pack),
+// instead of dropping the pull or stopping.
+func TestPlayRegroupDeathAtThePullGatherResumesThePull(t *testing.T) {
+	stand := Vec3{40, 0, 0}
+	rig := newPlayFightRig(t, playFightPlan(), func(f *PlayFake) {
+		f.AddUnit(Unit{GUID: fightGUID(1), Entry: 11320, Pos: Vec3{39, 18, 0}})
+		f.AddUnit(Unit{GUID: fightGUID(2), Entry: 11319, Pos: Vec3{42, 22, 0}})
+		f.SpawnBosses()
+		fell := false
+		f.OnWalk = func(f *PlayFake, to Vec3) {
+			if fell || dist3(to, stand) > 0.01 {
+				return
+			}
+			fell = true
+			// The tank trails 15 yd behind the stand, so the gather waits; it falls there, and the healer raises it.
+			f.BotPos["botone"] = Vec3{40, -15, 0}
+			f.Clock.After(4*time.Second, func() { f.GoldenOwner.Bots[0].Dead = true })
+			f.Clock.After(30*time.Second, func() { f.GoldenOwner.Bots[0].Dead = false })
+		}
+	})
+	res := Play(context.Background(), rig.route, rig.ports, rig.cfg)
+	if res.Stop != "clear" {
+		t.Fatalf("stop = %q; want clear (states %v)", res.Stop, res.States)
+	}
+	if res.Summary.Deaths != 1 {
+		t.Fatalf("deaths = %d; want 1 (the tank at the gather)", res.Summary.Deaths)
+	}
+}
