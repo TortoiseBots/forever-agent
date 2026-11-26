@@ -481,3 +481,63 @@ func (c *Client) Cast(ctx context.Context, spellID uint32, target string) error 
 	}
 	return c.call(ctx, "cast", params, nil, 10*time.Second)
 }
+
+// InvItem is one item row in the serve's `inv` snapshot.
+type InvItem struct {
+	GUID        string `json:"guid"`
+	Container   int    `json:"container"`
+	Slot        int    `json:"slot"`
+	Entry       int32  `json:"entry"`
+	Count       uint32 `json:"count"`
+	Placed      bool   `json:"placed"`
+	Unconfirmed bool   `json:"unconfirmed"`
+}
+
+// InvSnapshot is the serve's `inv` answer.
+type InvSnapshot struct {
+	Known       bool      `json:"known"`
+	Items       []InvItem `json:"items"`
+	FreeSlot    int       `json:"free_slot"`
+	Stale       bool      `json:"stale"`
+	StaleReason string    `json:"stale_reason"`
+}
+
+// Inv reads the session character's inventory snapshot from `inv`.
+func (c *Client) Inv(ctx context.Context) (InvSnapshot, error) {
+	var out InvSnapshot
+	err := c.call(ctx, "inv", nil, &out, 10*time.Second)
+	return out, err
+}
+
+// EquipmentItem is one occupied slot row from the serve's `equipment` method.
+type EquipmentItem struct {
+	Slot      int    `json:"slot"`
+	SlotName  string `json:"slot_name"`
+	GUID      string `json:"guid"`
+	ItemEntry int32  `json:"item_entry"`
+	Name      string `json:"name"`
+}
+
+// Equipment reads the session character's equipped slots (0-18) from `equipment`.
+func (c *Client) Equipment(ctx context.Context) ([]EquipmentItem, error) {
+	var out []EquipmentItem
+	err := c.call(ctx, "equipment", map[string]any{"names": true}, &out, 10*time.Second)
+	return out, err
+}
+
+// EquippedRow is the serve `equip` method's result row.
+type EquippedRow struct {
+	Bag         int    `json:"bag"`
+	Slot        int    `json:"slot"`
+	GUID        string `json:"guid"`
+	ItemEntry   int32  `json:"item_entry"`
+	Placed      bool   `json:"placed"`
+	Unconfirmed bool   `json:"unconfirmed"`
+}
+
+// Equip equips one item by entry through the serve's `equip` method.
+func (c *Client) Equip(ctx context.Context, itemEntry int32) (EquippedRow, error) {
+	var out EquippedRow
+	err := c.call(ctx, "equip", map[string]any{"item_entry": itemEntry}, &out, 15*time.Second)
+	return out, err
+}

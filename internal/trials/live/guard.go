@@ -77,7 +77,7 @@ var guardTargets = map[string][]string{
 	"modify_energy": {"hire"},
 	"npc_add_temp":  {"none"},
 	"go_xyz":        {"none", "self"},
-	"additem":       {"hire"},
+	"additem":       {"self", "hire"},
 	"cooldown":      {"self", "hire"},
 	"die":           {"summon"},
 	"lookup_item":   {"none"},
@@ -287,7 +287,7 @@ func render(kind string, args []string) (string, error) {
 var selectionKinds = map[string]bool{
 	"damage": true, "modify_hp": true, "modify_mana": true, "modify_rage": true,
 	"modify_energy": true, "aura": true, "unaura": true, "die": true,
-	"levelup": true, "learn": true, "cooldown": true,
+	"levelup": true, "learn": true, "cooldown": true, "additem": true,
 }
 
 // unitLineKinds are the raw lines the serve's GM-unit boundary classifies:

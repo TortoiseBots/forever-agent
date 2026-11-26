@@ -126,6 +126,32 @@ func TestServeEquipmentSlotNames(t *testing.T) {
 	}
 }
 
+func TestServeEquipmentReadsOffHandAndRefusesUnknown(t *testing.T) {
+	s := &session{report: &Report{}}
+	if _, err := s.serveEquipment(serveEquipmentParams{}); err == nil || !strings.Contains(err.Error(), "has not arrived") {
+		t.Fatalf("unknown equipment answered %v", err)
+	}
+	f := newItemWorld(t)
+	itemShield := wire.GUID{Low: 0x7F7F, High: 0x4000000000000000}
+	f.apply(
+		fragmentPlayer(map[int]wire.GUID{15: itemSword, 16: itemShield, 30: itemBag, 35: itemPotion, 36: itemSword2}),
+		fragmentItem(itemShield, 9404, 1),
+	)
+	rows, err := f.s.serveEquipment(serveEquipmentParams{})
+	if err != nil {
+		t.Fatalf("equipment with off-hand: %v", err)
+	}
+	var offHand *ServeEquipmentItem
+	for i := range rows {
+		if rows[i].Slot == 16 {
+			offHand = &rows[i]
+		}
+	}
+	if offHand == nil || offHand.SlotName != "off_hand" || offHand.ItemEntry != 9404 {
+		t.Fatalf("off-hand row = %+v, rows = %+v", offHand, rows)
+	}
+}
+
 func TestServeEquipSendsAutoEquip(t *testing.T) {
 	f := newItemWorld(t)
 	var got []byte

@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
+	"github.com/pjerra/forever-agent/internal/trials/gear"
 )
 
 // TestPlayerLevelReadsTheOwnUnitRow pins item 3: the status snapshot stays at
@@ -315,5 +316,359 @@ func TestTalentKitInvalidIsStillAFailure(t *testing.T) {
 	row := prov.ensureTalents(context.Background(), BotSpec{Class: "rogue", Spec: "combat"}, "Bnrog")
 	if rowOK(row) || skippedIn(rowEvidence(row)) != "" {
 		t.Fatalf("not-learned is a failed row, not a SKIP: %v", row)
+	}
+}
+
+type gearFakeWorld struct {
+	mu          sync.Mutex
+	f           *fakeServe
+	known       bool
+	stale       bool
+	staleReason string
+	backpack    map[int32]bool
+	equipped    map[int]int32
+	unconfirmed map[int32]bool
+	learned     []int
+	added       []int32
+	equipCalls  []int32
+	dropAddItem bool
+	unconfirmEq bool
+	equipErr    string
+}
+
+func newGearFakeWorld(t *testing.T) *gearFakeWorld {
+	t.Helper()
+	f := newFakeServe(t)
+	gw := &gearFakeWorld{
+		f:           f,
+		known:       true,
+		backpack:    map[int32]bool{},
+		equipped:    map[int]int32{},
+		unconfirmed: map[int32]bool{},
+	}
+	target := ""
+	f.statusFn = func() map[string]any {
+		gw.mu.Lock()
+		tg := target
+		gw.mu.Unlock()
+		return map[string]any{"state": "in_world", "guid": gTester, "character": "Atank", "level": 40, "mono_ms": 1000, "target": tg}
+	}
+	f.hook = func(method string, params map[string]any) {
+		switch method {
+		case "target":
+			gw.mu.Lock()
+			target, _ = params["guid"].(string)
+			gw.mu.Unlock()
+		case "gm":
+			text, _ := params["text"].(string)
+			gw.mu.Lock()
+			defer gw.mu.Unlock()
+			switch {
+			case strings.HasPrefix(text, ".learn "):
+				var sp int
+				if _, err := fmt.Sscanf(text, ".learn %d", &sp); err == nil {
+					gw.learned = append(gw.learned, sp)
+				}
+			case strings.HasPrefix(text, ".additem "):
+				var entry int32
+				var count int
+				if _, err := fmt.Sscanf(text, ".additem %d %d", &entry, &count); err == nil {
+					gw.added = append(gw.added, entry)
+					if !gw.dropAddItem {
+						gw.backpack[entry] = true
+					}
+				}
+			}
+		case "inv":
+			gw.mu.Lock()
+			items := []map[string]any{}
+			slot := 35
+			for entry := range gw.backpack {
+				items = append(items, map[string]any{
+					"guid": "0x4000000000000001", "container": 255, "slot": slot,
+					"entry": entry, "count": 1, "placed": true, "unconfirmed": gw.unconfirmed[entry],
+				})
+				slot++
+			}
+			for eqSlot, entry := range gw.equipped {
+				items = append(items, map[string]any{
+					"guid": "0x4000000000000002", "container": 255, "slot": eqSlot,
+					"entry": entry, "count": 1, "placed": true, "unconfirmed": gw.unconfirmed[entry],
+				})
+			}
+			for entry := range gw.unconfirmed {
+				if !gw.backpack[entry] {
+					inEq := false
+					for _, e := range gw.equipped {
+						if e == entry {
+							inEq = true
+						}
+					}
+					if !inEq {
+						items = append(items, map[string]any{
+							"guid": "0x4000000000000003", "container": 255, "slot": 255,
+							"entry": entry, "count": 1, "placed": false, "unconfirmed": true,
+						})
+					}
+				}
+			}
+			ans := map[string]any{
+				"known": gw.known, "stale": gw.stale, "stale_reason": gw.staleReason, "items": items,
+			}
+			f.mu.Lock()
+			f.script["inv"] = append(f.script["inv"], ans)
+			f.mu.Unlock()
+			gw.mu.Unlock()
+		case "equipment":
+			gw.mu.Lock()
+			rows := []map[string]any{}
+			for eqSlot, entry := range gw.equipped {
+				rows = append(rows, map[string]any{
+					"slot": eqSlot, "slot_name": slotNameForTest(eqSlot),
+					"guid": "0x4000000000000002", "item_entry": entry,
+				})
+			}
+			f.mu.Lock()
+			f.script["equipment"] = append(f.script["equipment"], rows)
+			f.mu.Unlock()
+			gw.mu.Unlock()
+		case "equip":
+			entry := int32(numOrZero(params["item_entry"]))
+			gw.mu.Lock()
+			gw.equipCalls = append(gw.equipCalls, entry)
+			if gw.equipErr != "" {
+				f.mu.Lock()
+				f.errCodes["equip"] = append(f.errCodes["equip"], -32003)
+				f.errMsg["equip"] = gw.equipErr
+				f.mu.Unlock()
+				gw.mu.Unlock()
+				return
+			}
+			delete(gw.backpack, entry)
+			if gw.unconfirmEq {
+				gw.unconfirmed[entry] = true
+				f.mu.Lock()
+				f.script["equip"] = append(f.script["equip"], map[string]any{
+					"bag": 255, "slot": 255, "item_entry": entry, "placed": false, "unconfirmed": true,
+				})
+				f.mu.Unlock()
+				gw.mu.Unlock()
+				return
+			}
+			var slot int
+			if entry == 10758 { // X'caliboar two-hander: clears off-hand
+				slot = 15
+				delete(gw.equipped, 16)
+			} else if entry == 9404 {
+				slot = 16
+			} else {
+				for slot = 0; slot == 15 || slot == 16 || gw.equipped[slot] != 0; slot++ {
+				}
+			}
+			gw.equipped[slot] = entry
+			f.mu.Lock()
+			f.script["equip"] = append(f.script["equip"], map[string]any{
+				"bag": 255, "slot": slot, "item_entry": entry, "placed": true, "unconfirmed": false,
+			})
+			f.mu.Unlock()
+			gw.mu.Unlock()
+		}
+	}
+	return gw
+}
+
+func slotNameForTest(slot int) string {
+	names := []string{
+		"head", "neck", "shoulders", "body", "chest", "waist", "legs", "feet", "wrists", "hands",
+		"finger1", "finger2", "trinket1", "trinket2", "back", "main_hand", "off_hand", "ranged", "tabard",
+	}
+	if slot >= 0 && slot < len(names) {
+		return names[slot]
+	}
+	return fmt.Sprintf("slot_%d", slot)
+}
+
+func gearTestSetup(gw *gearFakeWorld) (*LiveSetup, *Repeat) {
+	cl := NewClient(gw.f.rpc())
+	led := NewLedger("")
+	rep := &Repeat{
+		Client:  cl,
+		Ledger:  led,
+		Marks:   NewMarks(""),
+		Guard:   NewGuard(cl, GuardOptions{Ledger: led, Marks: NewMarks(""), PlayerGUID: gTester}),
+		TrialID: "tank-warrior-defensives",
+	}
+	s := &LiveSetup{
+		Client:    cl,
+		Ledger:    led,
+		Player:    "Atank",
+		EquipWait: 40 * time.Millisecond,
+		EquipPoll: 5 * time.Millisecond,
+	}
+	return s, rep
+}
+
+func warriorTierTrial() map[string]any {
+	return map[string]any{
+		"player": map[string]any{
+			"class":       "warrior",
+			"level":       float64(40),
+			"forced_role": "dps",
+			"gear":        "tier",
+		},
+		"setup_checks": []any{"player_gear", "player_no_shield"},
+	}
+}
+
+func TestPlayerGearProvisionsKitAndConfirmsEquipment(t *testing.T) {
+	gw := newGearFakeWorld(t)
+	gw.equipped[16] = 9404 // pre-existing shield displaced by two-hander X'caliboar
+	s, rep := gearTestSetup(gw)
+	trial := warriorTierTrial()
+	rows := s.playerGearRows(context.Background(), rep, trial, wantedChecks(trial))
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2: %v", len(rows), rows)
+	}
+	if !rowOK(rows[0]) || strOf(rows[0]["id"]) != "player_gear" {
+		t.Fatalf("player_gear failed: %v", rows[0])
+	}
+	if !rowOK(rows[1]) || strOf(rows[1]["id"]) != "player_no_shield" {
+		t.Fatalf("player_no_shield failed: %v", rows[1])
+	}
+	kit, _, _ := gear.PickKit(trial["player"].(map[string]any))
+	if len(gw.added) != len(kit) {
+		t.Fatalf("added %d items, want %d", len(gw.added), len(kit))
+	}
+	if len(gw.equipCalls) != len(kit) {
+		t.Fatalf("equipped %d items, want %d", len(gw.equipCalls), len(kit))
+	}
+	wantSpells := gear.ProficiencySpells(kit)
+	if len(gw.learned) != len(wantSpells) {
+		t.Fatalf("learned %v, want %v", gw.learned, wantSpells)
+	}
+}
+
+func TestPlayerGearAlreadyEquippedSkipsAdditemAndEquip(t *testing.T) {
+	gw := newGearFakeWorld(t)
+	trial := warriorTierTrial()
+	kit, _, _ := gear.PickKit(trial["player"].(map[string]any))
+	for i, item := range kit {
+		slot := i
+		if item.Slot == "twohand" {
+			slot = 15
+		}
+		gw.equipped[slot] = int32(item.Entry)
+	}
+	s, rep := gearTestSetup(gw)
+	row := s.ensurePlayerGear(context.Background(), rep, trial)
+	if !rowOK(row) {
+		t.Fatalf("already-equipped kit must pass: %v", row)
+	}
+	if len(gw.added) != 0 || len(gw.equipCalls) != 0 {
+		t.Fatalf("already-equipped kit sent additem=%v equip=%v", gw.added, gw.equipCalls)
+	}
+}
+
+func TestPlayerGearFailsClosedOnUnconfirmedOrRefused(t *testing.T) {
+	t.Run("additem missing from inv", func(t *testing.T) {
+		gw := newGearFakeWorld(t)
+		gw.dropAddItem = true
+		s, rep := gearTestSetup(gw)
+		row := s.ensurePlayerGear(context.Background(), rep, warriorTierTrial())
+		if rowOK(row) || !strings.Contains(rowEvidence(row), "UNVERIFIED") {
+			t.Fatalf("missing additem read-back must fail UNVERIFIED: %v", row)
+		}
+		if len(gw.equipCalls) != 0 {
+			t.Fatalf("equip called without inv confirmation: %v", gw.equipCalls)
+		}
+	})
+	t.Run("equip refused by server", func(t *testing.T) {
+		gw := newGearFakeWorld(t)
+		gw.equipErr = "equip: the server refused it: cant_equip_level_i (needs level 40)"
+		s, rep := gearTestSetup(gw)
+		row := s.ensurePlayerGear(context.Background(), rep, warriorTierTrial())
+		if rowOK(row) || !strings.Contains(rowEvidence(row), "cant_equip_level_i") {
+			t.Fatalf("refused equip must fail with server reason: %v", row)
+		}
+	})
+	t.Run("unconfirmed equip fails both gear and shield closed", func(t *testing.T) {
+		gw := newGearFakeWorld(t)
+		gw.unconfirmEq = true
+		s, rep := gearTestSetup(gw)
+		trial := warriorTierTrial()
+		rows := s.playerGearRows(context.Background(), rep, trial, wantedChecks(trial))
+		if len(rows) != 2 {
+			t.Fatalf("rows = %d, want 2", len(rows))
+		}
+		if rowOK(rows[0]) || !strings.Contains(rowEvidence(rows[0]), "UNVERIFIED") {
+			t.Fatalf("unconfirmed equip must fail player_gear UNVERIFIED: %v", rows[0])
+		}
+		if rowOK(rows[1]) || !strings.Contains(rowEvidence(rows[1]), "UNVERIFIED") {
+			t.Fatalf("unconfirmed equip must fail player_no_shield UNVERIFIED: %v", rows[1])
+		}
+	})
+	t.Run("nil gear is no gear requested", func(t *testing.T) {
+		gw := newGearFakeWorld(t)
+		s, rep := gearTestSetup(gw)
+		trial := map[string]any{"player": map[string]any{"class": "warrior", "level": float64(60), "gear": nil}}
+		row := s.ensurePlayerGear(context.Background(), rep, trial)
+		if !rowOK(row) {
+			t.Fatalf("nil gear must pass: %v", row)
+		}
+	})
+}
+
+func TestPlayerNoShieldReadsOffHandSlot(t *testing.T) {
+	t.Run("empty off-hand passes", func(t *testing.T) {
+		gw := newGearFakeWorld(t)
+		gw.equipped[15] = 10758
+		s, rep := gearTestSetup(gw)
+		row := s.playerNoShield(context.Background(), rep)
+		if !rowOK(row) || strOf(row["value"]) != "none" {
+			t.Fatalf("empty off-hand must pass with none: %v", row)
+		}
+	})
+	t.Run("shield in slot 16 fails", func(t *testing.T) {
+		gw := newGearFakeWorld(t)
+		gw.equipped[16] = 9404
+		s, rep := gearTestSetup(gw)
+		row := s.playerNoShield(context.Background(), rep)
+		if rowOK(row) || intOf(row["value"]) != 9404 || !strings.Contains(rowEvidence(row), "9404") {
+			t.Fatalf("shield in off-hand must fail naming 9404: %v", row)
+		}
+	})
+	t.Run("stale or unknown inv fails closed even with empty equipment", func(t *testing.T) {
+		for _, tc := range []struct {
+			name string
+			mut  func(*gearFakeWorld)
+		}{
+			{"unknown", func(gw *gearFakeWorld) { gw.known = false }},
+			{"stale", func(gw *gearFakeWorld) { gw.stale = true; gw.staleReason = "lost slot" }},
+			{"unconfirmed", func(gw *gearFakeWorld) { gw.unconfirmed[9404] = true }},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				gw := newGearFakeWorld(t)
+				tc.mut(gw)
+				s, rep := gearTestSetup(gw)
+				row := s.playerNoShield(context.Background(), rep)
+				if rowOK(row) || !strings.Contains(rowEvidence(row), "UNVERIFIED") {
+					t.Fatalf("%s inv must fail closed UNVERIFIED: %v", tc.name, row)
+				}
+			})
+		}
+	})
+}
+
+func TestGuardAllowsSelfAddItem(t *testing.T) {
+	f := newFakeServe(t)
+	g := NewGuard(NewClient(f.rpc()), GuardOptions{PlayerGUID: gTester})
+	if err := g.Send(context.Background(), "additem", TargetSelf, gTester, "7922", "1"); err != nil {
+		t.Fatalf("self additem refused: %v", err)
+	}
+	if lines := f.gmLines(); len(lines) != 1 || lines[0] != ".additem 7922 1" {
+		t.Fatalf("gm lines = %v", lines)
+	}
+	if err := g.Send(context.Background(), "additem", TargetSelf, "0xdead", "7922", "1"); err == nil {
+		t.Fatal("wrong self guid additem passed")
 	}
 }

@@ -97,6 +97,9 @@ world.
 
 Each row is `slot`, `slot_name`, `guid`, `item_entry`, and with `names: true` also `name` and `quality`.
 
+The call is refused with `equipment: the character's own create has not arrived yet` until the session is in the
+world.
+
 # equip
 
 `equip` moves one item to a worn slot. The item is named by `item_entry` (the first stack whose position the server

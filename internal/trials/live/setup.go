@@ -2,10 +2,12 @@ package live
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
+	"github.com/pjerra/forever-agent/internal/trials/gear"
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
 )
 
@@ -73,8 +75,11 @@ type LiveSetup struct {
 	Previous       string
 	PreviousExtras []string
 
-	// Timeout bounds one check; 0 means 20 s.
-	Timeout time.Duration
+	// Timeout bounds one check; 0 means 20 s. EquipWait and EquipPoll bound
+	// inventory/equipment read-backs after item provisioning (0 means 2 s / 100 ms).
+	Timeout   time.Duration
+	EquipWait time.Duration
+	EquipPoll time.Duration
 
 	// Server is the test server's name (the recovery marks' word);
 	// RecoveryPath is the recovery mark file of the items the trial gives;
@@ -249,9 +254,12 @@ func (s *LiveSetup) Run(ctx context.Context, r *Repeat) (map[string]any, error) 
 		}
 		_ = exCtx
 	}
-	// Player gear / off-hand rows (non-fatal strip, shield check).
-	for _, row := range s.playerGearRows(ctx, r, trial, wanted) {
-		checks = append(checks, retryOnce(func() map[string]any { return row }))
+	// Player gear / off-hand rows (each retried once on failure).
+	if wanted["player_gear"] {
+		checks = append(checks, retryOnce(func() map[string]any { return s.ensurePlayerGear(ctx, r, trial) }))
+	}
+	if wanted["player_no_shield"] {
+		checks = append(checks, retryOnce(func() map[string]any { return s.playerNoShield(ctx, r) }))
 	}
 	// Config: no Forever source — ok=false, defaults assumed (Python path).
 	if wanted["config_read"] {
@@ -406,18 +414,39 @@ func hasExtras(trial map[string]any) bool {
 	return false
 }
 
-// playerGearRows writes the player gear rows: the tier kit is out of scope
-// this round (no Forever source for the carry-over/strip path), so a trial
-// that wants player_gear gets ok=false with the reason (INVALID, never a
-// silent pass); player_no_shield fails closed (ok=false, UNVERIFIED): the
-// serve model has no equipment read (`equipment` answers -32003), so the
-// off-hand can never be proven empty this round and a REQUIRED row that is
-// unverifiable makes the trial INVALID, never PASS.
+func (s *LiveSetup) timeoutVal() time.Duration {
+	if s.Timeout > 0 {
+		return s.Timeout
+	}
+	return 20 * time.Second
+}
+
+func (s *LiveSetup) equipWaitVal() time.Duration {
+	if s.EquipWait > 0 {
+		return s.EquipWait
+	}
+	return 2 * time.Second
+}
+
+func (s *LiveSetup) equipPollVal() time.Duration {
+	if s.EquipPoll > 0 {
+		return s.EquipPoll
+	}
+	return 100 * time.Millisecond
+}
+
+func (s *LiveSetup) guardOr(r *Repeat) *Guard {
+	if r != nil && r.Guard != nil {
+		return r.Guard
+	}
+	return s.Guard
+}
+
+// playerGearRows runs the player gear and off-hand rows in trial order.
 func (s *LiveSetup) playerGearRows(ctx context.Context, r *Repeat, trial map[string]any, wanted map[string]bool) []map[string]any {
 	var out []map[string]any
 	if wanted["player_gear"] {
-		out = append(out, rowOf("player_gear", false, nil,
-			"player gear kit not provisioned this round (no Forever item source); trial needs a data pass"))
+		out = append(out, s.ensurePlayerGear(ctx, r, trial))
 	}
 	if wanted["player_no_shield"] {
 		out = append(out, s.playerNoShield(ctx, r))
@@ -425,28 +454,219 @@ func (s *LiveSetup) playerGearRows(ctx context.Context, r *Repeat, trial map[str
 	return out
 }
 
-// playerNoShield checks the player's off-hand: the serve unit row carries
-// no equipment slots and the `equipment` method is NOT-PORTED, so the
-// off-hand state is unreadable and the row fails with UNVERIFIED (never
-// ok=true): an unverifiable REQUIRED row makes the trial INVALID, never
-// PASS.
+// ensurePlayerGear provisions the player's tier gear kit using the same flow
+// as wearKit (learn proficiencies, grant missing items via GM .additem
+// verified by inv read-back, equip through the daemon's equip method) and
+// passes only when inv and equipment confirm every kit piece is worn.
+func (s *LiveSetup) ensurePlayerGear(ctx context.Context, r *Repeat, trial map[string]any) map[string]any {
+	player, _ := trial["player"].(map[string]any)
+	gearName, _ := player["gear"].(string)
+	if player["gear"] == nil || gearName == "" {
+		return rowOf("player_gear", true, nil, "no player gear requested")
+	}
+	if gearName != "tier" {
+		return rowOf("player_gear", false, gearName, "unknown player gear kind "+gearName)
+	}
+	kit, kitLevel, why := gear.PickKit(player)
+	if len(kit) == 0 {
+		return rowOf("player_gear", false, nil, why)
+	}
+	entries := make([]uint32, 0, len(kit))
+	for _, item := range kit {
+		entries = append(entries, uint32(item.Entry))
+	}
+	cl := s.clientOr(r)
+	tctx, cancel := context.WithTimeout(ctx, s.timeoutVal())
+	inv, eq, readWhy := readConfirmedEquipment(tctx, cl)
+	cancel()
+	if readWhy != "" {
+		return rowOf("player_gear", false, entries, readWhy)
+	}
+	if missing := missingKitEntries(kit, eq); len(missing) == 0 {
+		return rowOf("player_gear", true, entries,
+			fmt.Sprintf("tier kit (level %d): %d piece(s) confirmed by equipment read", kitLevel, len(kit)))
+	}
+	guard := s.guardOr(r)
+	self := playerGUIDOf(r, s)
+	if self == "" && guard != nil {
+		self = guard.PlayerGUID()
+	}
+	if guard == nil || self == "" {
+		return rowOf("player_gear", false, entries, "UNVERIFIED: no GM guard or player guid for gear setup")
+	}
+	for _, sp := range gear.ProficiencySpells(kit) {
+		gctx, gcancel := context.WithTimeout(ctx, s.timeoutVal())
+		err := guard.Send(gctx, "learn", TargetSelf, self, fmt.Sprint(sp))
+		gcancel()
+		if err != nil {
+			return rowOf("player_gear", false, entries, fmt.Sprintf(".learn proficiency %d: %s", sp, err.Error()))
+		}
+	}
+	equipped := equippedEntrySet(eq)
+	for _, item := range kit {
+		entry := int32(item.Entry)
+		if equipped[entry] {
+			continue
+		}
+		if err := s.ensurePlayerItemInBags(ctx, r, guard, cl, self, inv, item); err != nil {
+			return rowOf("player_gear", false, entries, err.Error())
+		}
+		ectx, ecancel := context.WithTimeout(ctx, s.timeoutVal())
+		res, err := cl.Equip(ectx, entry)
+		ecancel()
+		s.ledgerOr(r).Add(map[string]any{"kind": "equip", "player": s.playerOr(r),
+			"item": entry, "slot": res.Slot, "placed": res.Placed, "unconfirmed": res.Unconfirmed})
+		if err != nil {
+			return rowOf("player_gear", false, entries, fmt.Sprintf("equip %d (%s): %s", entry, item.Name, err.Error()))
+		}
+	}
+	eqAfter, confirmWhy := s.awaitConfirmedKit(ctx, cl, kit)
+	if confirmWhy != "" {
+		return rowOf("player_gear", false, entries, confirmWhy)
+	}
+	if missing := missingKitEntries(kit, eqAfter); len(missing) > 0 {
+		return rowOf("player_gear", false, entries,
+			fmt.Sprintf("UNVERIFIED: equipment read-back missing %d piece(s): %v", len(missing), missing))
+	}
+	return rowOf("player_gear", true, entries,
+		fmt.Sprintf("tier kit (level %d): %d piece(s) equipped and confirmed by equipment read", kitLevel, len(kit)))
+}
+
+// ensurePlayerItemInBags gives item through GM .additem if it is not already
+// in the player's inventory and waits for inv to confirm it placed.
+func (s *LiveSetup) ensurePlayerItemInBags(ctx context.Context, r *Repeat, guard *Guard, cl *Client, self string, inv InvSnapshot, item gear.Kit) error {
+	entry := int32(item.Entry)
+	if hasPlacedConfirmedItem(inv, entry) {
+		return nil
+	}
+	if countInvEntry(inv, entry) == 0 {
+		gctx, gcancel := context.WithTimeout(ctx, s.timeoutVal())
+		err := guard.Send(gctx, "additem", TargetSelf, self, fmt.Sprint(entry), "1")
+		gcancel()
+		s.ledgerOr(r).Add(map[string]any{"kind": "additem", "player": s.playerOr(r),
+			"item": item.Name, "item_id": entry, "count": 1})
+		if err != nil {
+			return fmt.Errorf(".additem %d (%s): %w", entry, item.Name, err)
+		}
+	}
+	deadline := time.Now().Add(s.equipWaitVal())
+	for {
+		ictx, icancel := context.WithTimeout(ctx, s.timeoutVal())
+		cur, err := cl.Inv(ictx)
+		icancel()
+		if err == nil && cur.Known && !cur.Stale && hasPlacedConfirmedItem(cur, entry) {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("UNVERIFIED: .additem %d (%s) not confirmed placed in inventory read-back", entry, item.Name)
+		}
+		sleepCtx(ctx, s.equipPollVal())
+	}
+}
+
+func (s *LiveSetup) awaitConfirmedKit(ctx context.Context, cl *Client, kit []gear.Kit) ([]EquipmentItem, string) {
+	deadline := time.Now().Add(s.equipWaitVal())
+	var lastEq []EquipmentItem
+	var lastWhy string
+	for {
+		tctx, cancel := context.WithTimeout(ctx, s.timeoutVal())
+		_, eq, why := readConfirmedEquipment(tctx, cl)
+		cancel()
+		lastEq, lastWhy = eq, why
+		if why == "" && len(missingKitEntries(kit, eq)) == 0 {
+			return eq, ""
+		}
+		if !time.Now().Before(deadline) {
+			return lastEq, lastWhy
+		}
+		sleepCtx(ctx, s.equipPollVal())
+	}
+}
+
+// playerNoShield checks the player's off-hand slot (slot 16 / off_hand)
+// through inv and equipment, failing closed whenever the state cannot be
+// confirmed (unknown, stale, unconfirmed move, or RPC error).
 func (s *LiveSetup) playerNoShield(ctx context.Context, r *Repeat) map[string]any {
-	timeout := s.Timeout
-	if timeout <= 0 {
-		timeout = 20 * time.Second
-	}
-	cctx, cancel := context.WithTimeout(ctx, timeout)
+	tctx, cancel := context.WithTimeout(ctx, s.timeoutVal())
 	defer cancel()
-	st, err := s.clientOr(r).StatusOf(cctx)
-	if err != nil {
-		return rowOf("player_no_shield", false, "unreadable", "UNVERIFIED: no status read: "+err.Error())
+	_, eq, why := readConfirmedEquipment(tctx, s.clientOr(r))
+	if why != "" {
+		return rowOf("player_no_shield", false, "unreadable", why)
 	}
-	u, err := s.clientOr(r).Unit(cctx, st.GUID)
-	if err != nil {
-		return rowOf("player_no_shield", false, "unreadable", "UNVERIFIED: no unit read: "+err.Error())
+	for _, row := range eq {
+		if row.Slot == 16 || row.SlotName == "off_hand" {
+			desc := fmt.Sprintf("slot 16 (%s) holds item %d", row.SlotName, row.ItemEntry)
+			if row.Name != "" {
+				desc += " (" + row.Name + ")"
+			}
+			return rowOf("player_no_shield", false, row.ItemEntry, desc)
+		}
 	}
-	_ = u
-	return rowOf("player_no_shield", false, "unreadable", "UNVERIFIED: the serve unit row carries no equipment slots and `equipment` is not ported, so the off-hand cannot be proven empty")
+	return rowOf("player_no_shield", true, "none", "equipment read confirms off-hand slot 16 is empty")
+}
+
+func readConfirmedEquipment(ctx context.Context, cl *Client) (InvSnapshot, []EquipmentItem, string) {
+	inv, err := cl.Inv(ctx)
+	if err != nil {
+		return InvSnapshot{}, nil, "UNVERIFIED: no inv read: " + err.Error()
+	}
+	if !inv.Known {
+		return inv, nil, "UNVERIFIED: inventory not known yet (own create not arrived)"
+	}
+	if inv.Stale {
+		return inv, nil, "UNVERIFIED: inventory is stale (" + inv.StaleReason + ")"
+	}
+	for _, it := range inv.Items {
+		if it.Unconfirmed {
+			return inv, nil, fmt.Sprintf("UNVERIFIED: inventory has unconfirmed item move (entry %d)", it.Entry)
+		}
+	}
+	eq, err := cl.Equipment(ctx)
+	if err != nil {
+		return inv, nil, "UNVERIFIED: no equipment read: " + err.Error()
+	}
+	return inv, eq, ""
+}
+
+func countInvEntry(inv InvSnapshot, entry int32) int {
+	n := 0
+	for _, it := range inv.Items {
+		if it.Entry == entry {
+			n++
+		}
+	}
+	return n
+}
+
+func hasPlacedConfirmedItem(inv InvSnapshot, entry int32) bool {
+	for _, it := range inv.Items {
+		if it.Entry == entry && it.Placed && !it.Unconfirmed {
+			return true
+		}
+	}
+	return false
+}
+
+func equippedEntrySet(eq []EquipmentItem) map[int32]bool {
+	out := make(map[int32]bool, len(eq))
+	for _, row := range eq {
+		if row.ItemEntry > 0 {
+			out[row.ItemEntry] = true
+		}
+	}
+	return out
+}
+
+func missingKitEntries(kit []gear.Kit, eq []EquipmentItem) []int32 {
+	have := equippedEntrySet(eq)
+	var missing []int32
+	for _, item := range kit {
+		entry := int32(item.Entry)
+		if !have[entry] {
+			missing = append(missing, entry)
+		}
+	}
+	return missing
 }
 
 // TrialNeeds extracts the SKIPPED needs of a setup doc ("" when none).
