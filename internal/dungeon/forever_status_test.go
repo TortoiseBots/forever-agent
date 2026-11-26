@@ -374,6 +374,61 @@ func TestMarshalKeepsForeverStatus(t *testing.T) {
 	}
 }
 
+// TestZulGurubForeverStatusChecked pins Zul'Gurub's Forever offline-check status and its shared Turtle content counts
+// (9 legs, 148 pull groups, 8 bosses, and every leg-0 pull group's base entries).
+func TestZulGurubForeverStatusChecked(t *testing.T) {
+	p, err := Load(filepath.Join(plansDir, "zul_gurub.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(p.ForeverStatus, ForeverTodo+" (") || !strings.Contains(p.ForeverStatus, "offline-checked") {
+		t.Fatalf("zul_gurub forever_status = %q; want %q", p.ForeverStatus, "todo (...offline-checked...)")
+	}
+	pulls, bosses := 0, 0
+	for _, l := range p.Legs {
+		pulls += len(l.PullGroups)
+		if l.Boss != nil {
+			bosses++
+		}
+	}
+	if len(p.Legs) != 9 || pulls != 148 || bosses != 8 {
+		t.Fatalf("zul_gurub: %d legs, %d pull groups, %d bosses; want 9, 148, 8", len(p.Legs), pulls, bosses)
+	}
+	wantLeg0 := [][]uint32{
+		{11372, 11372},
+		{11350, 11350},
+		{11371},
+		{11372},
+		{11371, 11371, 11371, 11372},
+		{11351, 11351, 11831},
+		{11368, 14750, 11368, 11368},
+		{11368, 11368, 14750, 11368, 11368},
+		{11352},
+		{11351, 11351, 11831},
+		{11368, 14750},
+		{11368, 14750},
+		{11368, 11368, 14750, 14750, 11368},
+		{11351, 11351, 11831},
+		{14750, 11368, 11368, 11368, 11368, 11368},
+		{11831, 11831, 11351, 11368, 11368, 11368, 11368, 11368, 14750, 14750},
+	}
+	if len(p.Legs[0].PullGroups) != len(wantLeg0) {
+		t.Fatalf("leg 0 has %d pull groups; want %d", len(p.Legs[0].PullGroups), len(wantLeg0))
+	}
+	for i, g := range p.Legs[0].PullGroups {
+		if len(g.Entries) != len(wantLeg0[i]) {
+			t.Errorf("leg 0 pull group %d entries = %v; want %v", i, g.Entries, wantLeg0[i])
+			continue
+		}
+		for j, e := range wantLeg0[i] {
+			if g.Entries[j] != e {
+				t.Errorf("leg 0 pull group %d entries = %v; want %v", i, g.Entries, wantLeg0[i])
+				break
+			}
+		}
+	}
+}
+
 func contains(list []string, s string) bool {
 	for _, v := range list {
 		if v == s {

@@ -186,7 +186,11 @@ func lintCountsText(c map[string]int) string {
 // failure: the note says why the lints did not run.
 func planLints(p *dungeon.Plan, planner *navmesh.Planner, dir, spawnDir string, floorAware, approachHops, forever bool) ([]planlint.Finding, string, error) {
 	planner.SetAvoid(p.Map, dungeon.NavBoxes(p.Avoid))
-	res, err := planexport.Build(p, planexport.Options{Source: "plan-check", Cut: cutWith(planner, floorAware), ApproachHops: approachHops})
+	opt := planexport.Options{Source: "plan-check", Cut: cutWith(planner, floorAware), ApproachHops: approachHops}
+	if forever {
+		opt.Server = foreverServer
+	}
+	res, err := planexport.Build(p, opt)
 	if err != nil {
 		return nil, fmt.Sprintf("lints skipped: the exporter refused the plan: %v", err), nil
 	}

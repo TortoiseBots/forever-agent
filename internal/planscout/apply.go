@@ -9,12 +9,21 @@ import (
 	"github.com/pjerra/forever-agent/internal/routeedit"
 )
 
+// DroppedFix is an applicable fix that ApplyFixes undid because the edited plan failed dungeon.Parse.
+type DroppedFix struct {
+	ID     int    `json:"id"`
+	Step   int    `json:"step"`
+	Kind   string `json:"kind"`
+	Reason string `json:"reason"`
+}
+
 // ApplyFixes applies the applicable fixes to a copy of the plan (routeedit.Clone), then checks the copy: a fix set that adds a
-// plan-check issue is refused as a whole, with nothing returned. The base plan is never changed.
-func ApplyFixes(p *dungeon.Plan, fixes []Fix, nav dungeon.Navmesh) (*dungeon.Plan, routeedit.CheckResult, error) {
-	edited, err := routeedit.Clone(p)
+// plan-check issue is refused as a whole, with nothing returned. Any fix after which dungeon.Parse fails is undone and
+// dropped; if every applicable fix is dropped, an error is returned. The base plan is never changed.
+func ApplyFixes(p *dungeon.Plan, fixes []Fix, nav dungeon.Navmesh) (*dungeon.Plan, routeedit.CheckResult, []DroppedFix, error) {
+	good, err := routeedit.Clone(p)
 	if err != nil {
-		return nil, routeedit.CheckResult{}, err
+		return nil, routeedit.CheckResult{}, nil, err
 	}
 	var todo []Fix
 	for _, f := range fixes {
@@ -24,19 +33,42 @@ func ApplyFixes(p *dungeon.Plan, fixes []Fix, nav dungeon.Navmesh) (*dungeon.Pla
 	}
 	// Highest step first: an insertion at a low index never shifts the element a later fix names.
 	sort.SliceStable(todo, func(i, j int) bool { return todo[i].Step > todo[j].Step })
-	for _, f := range todo {
-		if err := applyFix(edited, f); err != nil {
-			return nil, routeedit.CheckResult{}, fmt.Errorf("fix %d (step %d, %s): %w", f.ID, f.Step, f.Kind, err)
-		}
+	var dropped []DroppedFix
+	applied := 0
+	name := good.Name
+	if name == "" {
+		name = "plan"
 	}
-	res := routeedit.Evaluate(p, edited, nav)
+	for _, f := range todo {
+		cand, err := routeedit.Clone(good)
+		if err != nil {
+			return nil, routeedit.CheckResult{}, dropped, err
+		}
+		if err := applyFix(cand, f); err != nil {
+			return nil, routeedit.CheckResult{}, dropped, fmt.Errorf("fix %d (step %d, %s): %w", f.ID, f.Step, f.Kind, err)
+		}
+		raw, err := dungeon.Marshal(cand)
+		if err != nil {
+			return nil, routeedit.CheckResult{}, dropped, err
+		}
+		if _, err := dungeon.Parse(name+".json", raw); err != nil {
+			dropped = append(dropped, DroppedFix{ID: f.ID, Step: f.Step, Kind: f.Kind, Reason: err.Error()})
+			continue
+		}
+		good = cand
+		applied++
+	}
+	if len(todo) > 0 && applied == 0 {
+		return nil, routeedit.CheckResult{}, dropped, fmt.Errorf("every applicable fix (%d) failed plan validation and was dropped", len(dropped))
+	}
+	res := routeedit.Evaluate(p, good, nav)
 	if !res.Checked {
-		return nil, res, fmt.Errorf("the plan check of the edited plan could not run: %s", res.Skipped)
+		return nil, res, dropped, fmt.Errorf("the plan check of the edited plan could not run: %s", res.Skipped)
 	}
 	if res.NewIssues > 0 {
-		return nil, res, fmt.Errorf("the fixes add %d plan-check issue(s): %s", res.NewIssues, res.Refusal())
+		return nil, res, dropped, fmt.Errorf("the fixes add %d plan-check issue(s): %s", res.NewIssues, res.Refusal())
 	}
-	return edited, res, nil
+	return good, res, dropped, nil
 }
 
 func applyFix(p *dungeon.Plan, f Fix) error {
@@ -98,7 +130,22 @@ func insertVias(p *dungeon.Plan, ref planexport.RowOrigin, vias []dungeon.Point)
 		leg.Via = out
 		return nil
 	case "approach":
-		if ref.Group < 0 || ref.Group >= len(leg.PullGroups) {
+		if ref.Group < 0 {
+			if leg.Boss == nil {
+				return fmt.Errorf("the leg has no boss")
+			}
+			ap := leg.Boss.Approach
+			if ref.Index < 0 || ref.Index > len(ap) {
+				return fmt.Errorf("approach index %d is outside the group", ref.Index)
+			}
+			var out []dungeon.Point
+			out = append(out, ap[:ref.Index]...)
+			out = append(out, vias...)
+			out = append(out, ap[ref.Index:]...)
+			leg.Boss.Approach = out
+			return nil
+		}
+		if ref.Group >= len(leg.PullGroups) {
 			return fmt.Errorf("pull group %d is outside the leg", ref.Group)
 		}
 		ap := leg.PullGroups[ref.Group].Approach

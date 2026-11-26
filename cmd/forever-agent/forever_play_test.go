@@ -370,3 +370,11 @@ func TestDungeonPlayRaidFlags(t *testing.T) {
 		}
 	}
 }
+
+func TestPlayCmdRaidLastLegUnknown(t *testing.T) {
+	args := append([]string{"--dry", "--plan", raidSuitePlan(), "--character", "Hero", "--last-leg", "nowhere"}, raidFlags()...)
+	code, _, stderr := runPlayCmd(t, args...)
+	if code != exitUsage || !strings.Contains(stderr, "nowhere") {
+		t.Fatalf("exit %d stderr %q; want usage error naming nowhere", code, stderr)
+	}
+}

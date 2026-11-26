@@ -3,7 +3,7 @@
   "name": "zul_gurub",
   "kind": "raid",
   "status": "mapped (live-walked in ZG walks 31-34: Jeklik, Venoxis, Mar'li, Thekal and Mandokir killed; Arlokk via the gong step; Hakkar pending)",
-  "forever_status": "todo",
+  "forever_status": "todo (2026-11-26 offline-checked on ForeverCore data: leg 0 passes plan-scout and plan-check with 17 allowed joiners, one-body aggro and step-17 cut-row findings and 52 warnings; legs 1-8: 694 lints (125 errors, 569 warnings) and 3 failed points; raid rows are not exported, a player-led run reads the plan)",
   "map": 309,
   "entrance": {"x": -11916.6, "y": -1243.52, "z": 92.5338},
   "entrance_trigger": 3928,
@@ -77,9 +77,14 @@
           ],
           "radius": 11,
           "approach": [
-            {"x": -11934.7, "y": -1306.9, "z": 77.1}
+            {"x": -11930.818, "y": -1292.4111, "z": 77.851494}
           ],
-          "stand_pull": true
+          "stand_pull": true,
+          "alt_entries": {
+            "forever": {
+              "11372": 11371
+            }
+          }
         },
         {
           "entries": [11350, 11350],
@@ -239,7 +244,7 @@
           "positions": [
             {"x": -12148, "y": -1485, "z": 130.8}
           ],
-          "radius": 4.6,
+          "radius": 7,
           "approach": [
             {"x": -12093, "y": -1464, "z": 131.5}
           ],
@@ -250,7 +255,7 @@
           "positions": [
             {"x": -12153.9, "y": -1489.43, "z": 130.725}
           ],
-          "radius": 1,
+          "radius": 4,
           "approach": [
             {"x": -12108, "y": -1479, "z": 130.9}
           ],
@@ -261,7 +266,7 @@
           "positions": [
             {"x": -12208.9, "y": -1478.72, "z": 131.26}
           ],
-          "radius": 5.5,
+          "radius": 9,
           "approach": [
             {"x": -12183, "y": -1488, "z": 131.2}
           ],

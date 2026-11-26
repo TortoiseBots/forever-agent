@@ -400,12 +400,37 @@ type PullGroup struct {
 	// ClearYd is how far from the lead bot another patrol must be for a StandPull group's pull to go out (yards, 1-60, the
 	// pull row's param; 0: the run leader's 40). Only with StandPull.
 	ClearYd int `json:"clear_yd,omitempty"`
+	// AltEntries names the entry another server uses for a creature entry in this group: server name to
+	// {"<plan entry>": <server entry>}. Readers that know no server use Entries; a reader that names a server in
+	// AltEntries maps matching entries through it via EntriesFor. Empty: the entries are the same everywhere.
+	AltEntries map[string]map[uint32]uint32 `json:"alt_entries,omitempty"`
 	// MaxBodies is the pull row's bodies ceiling (the run leader's bodies count
 	// including the target): the pull_size lint warns when the estimate is above
 	// it, and the run leader's plan ceiling replaces the config one on this row.
 	// 0: the plan's PullCeiling (or the lint default). The pull row carries it in
 	// item (unused on pull rows today); 1-80 (kPlanMaxPullBodies).
 	MaxBodies int `json:"max_bodies,omitempty"`
+}
+
+// EntriesFor returns the pull group's creature entries for server, mapping any entry listed in AltEntries[server]
+// while keeping the order and length of Entries. When server is "" or has no entry overrides, Entries is returned.
+func (g PullGroup) EntriesFor(server string) []uint32 {
+	if server == "" || len(g.AltEntries) == 0 {
+		return slices.Clone(g.Entries)
+	}
+	alt := g.AltEntries[server]
+	if len(alt) == 0 {
+		return slices.Clone(g.Entries)
+	}
+	out := make([]uint32, len(g.Entries))
+	for i, e := range g.Entries {
+		if v := alt[e]; v != 0 {
+			out[i] = v
+		} else {
+			out[i] = e
+		}
+	}
+	return out
 }
 
 // Hold is a scripted event that the TortoiseBots run leader fights out on one spot (its `hold` step, TortoiseBots #1041): the party
@@ -997,6 +1022,8 @@ type rawPullGroup struct {
 	ClearYd int `json:"clear_yd"`
 	// MaxBodies is PullGroup.MaxBodies.
 	MaxBodies *int `json:"max_bodies"`
+	// AltEntries is PullGroup.AltEntries.
+	AltEntries map[string]map[string]uint32 `json:"alt_entries"`
 }
 
 type rawHold struct {
@@ -1639,6 +1666,40 @@ func (c *checker) leg(path string, r *rawLeg) Leg {
 				c.fail(gp+".max_bodies", "%d: use 1-80 bodies (the pull row's item; kPlanMaxPullBodies)", v)
 			} else {
 				pg.MaxBodies = v
+			}
+		}
+		for server, m := range g.AltEntries {
+			if server == "" {
+				c.fail(gp+".alt_entries", "a server name is required (the server the alternate entries belong to)")
+				continue
+			}
+			for rawKey, alt := range m {
+				kp := fmt.Sprintf("%s.alt_entries.%s.%s", gp, server, rawKey)
+				k, err := strconv.ParseUint(rawKey, 10, 32)
+				if err != nil || k == 0 || strconv.FormatUint(k, 10) != rawKey {
+					c.fail(kp, "%q is not a creature entry", rawKey)
+					continue
+				}
+				key := uint32(k)
+				if !slices.Contains(g.Entries, key) {
+					c.fail(kp, "%d is not in this pull group's entries", key)
+					continue
+				}
+				if alt == 0 {
+					c.fail(kp, "0 is not a creature entry")
+					continue
+				}
+				if alt == key {
+					c.fail(kp, "%d is already the entry: an alternate entry must differ", alt)
+					continue
+				}
+				if pg.AltEntries == nil {
+					pg.AltEntries = map[string]map[uint32]uint32{}
+				}
+				if pg.AltEntries[server] == nil {
+					pg.AltEntries[server] = map[uint32]uint32{}
+				}
+				pg.AltEntries[server][key] = alt
 			}
 		}
 		l.PullGroups = append(l.PullGroups, pg)

@@ -1,6 +1,7 @@
 package planexport
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"regexp"
@@ -848,5 +849,42 @@ func TestForeverRoundTripHalfThousandth(t *testing.T) {
 	}
 	if err := EqualForever(want, movedBack); err == nil {
 		t.Fatal("a unit moved by two thousandths reads back equal")
+	}
+}
+
+func TestExportPullAltEntriesForever(t *testing.T) {
+	p := parsePlan(t, `{"version":1,"name":"alt_pull","status":"live-checked","map":309,"entrance":{"x":0,"y":0,"z":0},
+ "legs":[{"name":"jeklik","to":{"x":10,"y":0,"z":0},
+  "pull_groups":[{"entries":[11372,11350],"positions":[{"x":20,"y":0,"z":0},{"x":22,"y":0,"z":0}],"alt_entries":{"forever":{"11372":11371}}}]}]}`)
+	rep, err := BuildForever(p, Options{Source: "test"})
+	if err != nil {
+		t.Fatalf("BuildForever: %v", err)
+	}
+	var pullRow *StepRow
+	for i := range rep.Rows.Steps {
+		if rep.Rows.Steps[i].Kind == KindPull {
+			pullRow = &rep.Rows.Steps[i]
+			break
+		}
+	}
+	if pullRow == nil || fmt.Sprint(pullRow.Entries) != "[11371 11350]" {
+		t.Fatalf("forever pull row = %+v; want entries [11371 11350]", pullRow)
+	}
+	if len(rep.Units) != 2 || rep.Units[0].Entry != 11371 || rep.Units[1].Entry != 11350 {
+		t.Fatalf("forever units = %+v; want [11371 11350]", rep.Units)
+	}
+	turtleRes, err := Build(p, Options{Source: "test"})
+	if err != nil {
+		t.Fatalf("Build (turtle): %v", err)
+	}
+	var turtlePull *StepRow
+	for i := range turtleRes.Rows.Steps {
+		if turtleRes.Rows.Steps[i].Kind == KindPull {
+			turtlePull = &turtleRes.Rows.Steps[i]
+			break
+		}
+	}
+	if turtlePull == nil || fmt.Sprint(turtlePull.Entries) != "[11372 11350]" {
+		t.Fatalf("turtle pull row = %+v; want entries [11372 11350]", turtlePull)
 	}
 }

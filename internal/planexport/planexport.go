@@ -677,9 +677,10 @@ func (b *builder) pull(gi int, g dungeon.PullGroup) error {
 		b.at("approach", gi, ai)
 		b.move(a, false, c+" approach")
 	}
+	entries := uniq(g.EntriesFor(b.opt.Server))
 	if g.Hold != nil {
 		b.at("hold", gi, 0)
-		return b.hold(g.Hold, uniq(g.Entries), c+" hold")
+		return b.hold(g.Hold, entries, c+" hold")
 	}
 	if g.StandPull {
 		c += "; stand pull"
@@ -693,7 +694,7 @@ func (b *builder) pull(gi int, g dungeon.PullGroup) error {
 		patrolSource = g.Patrol.Source
 		patrolPath = g.Patrol.Path
 	}
-	b.add(StepRow{Kind: KindPull, X: f32(cx), Y: f32(cy), Z: f32(cz), Radius: radius, Item: uint32(g.MaxBodies), Flags: flags, Param: param, Entries: uniq(g.Entries), Comment: c, PatrolEntries: patrol, PatrolSource: patrolSource, PatrolPath: patrolPath})
+	b.add(StepRow{Kind: KindPull, X: f32(cx), Y: f32(cy), Z: f32(cz), Radius: radius, Item: uint32(g.MaxBodies), Flags: flags, Param: param, Entries: entries, Comment: c, PatrolEntries: patrol, PatrolSource: patrolSource, PatrolPath: patrolPath})
 	b.last, b.haveLast = dungeon.Point{X: f32(cx), Y: f32(cy), Z: f32(cz)}, true
 	if g.StandPull {
 		b.last = g.Approach[len(g.Approach)-1] // the party fights from its stand: the next move's hop is measured from there
