@@ -16,6 +16,7 @@ package live
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -437,11 +438,14 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		if _, err := tb.Free(ctx, name); err != nil {
 			r.logf("%s: .tb order %s free: %v", trialID, name, err)
 		}
-		lines, err := tb.FreeTextLogout(ctx, name)
-		ev := "logout sent"
-		if err != nil {
-			ev = trimReason(tbErrText(err, lines))
-			r.logf("%s: .tb logout %s: %v", trialID, name, err)
+		// The module answers `.tb logout` before the character is gone: a
+		// teardown that returned on the answer left the hire online and the
+		// next trial's login found it "already logged in" (2026-11-25). A
+		// roster drop alone is no proof (a kick or a disband drops it too), so
+		// the hire's own unit row must stop answering as well.
+		lines, ev, proved := r.logoutProved(ctx, rep.Client, tb, name, hireGUID(rep, name))
+		if !proved {
+			r.logf("%s: .tb logout %s: %s", trialID, name, ev)
 			problems = append(problems, "logout of "+name+" not confirmed: "+ev)
 		}
 		rep.Ledger.Add(map[string]any{"kind": "logged_out", "bot": name, "reply": firstLines(lines),
@@ -452,6 +456,146 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		problems = append(problems, "forced role not cleared: "+trimReason(err.Error()))
 	}
 	return problems
+}
+
+// hireGUID is the guid setup recorded for the named hire (the main hire or an
+// extra, aligned by name with rep.Guids.Extras): the logout proof's unit read
+// keys on it.
+func hireGUID(rep *Repeat, name string) string {
+	if strings.EqualFold(name, rep.BotName) {
+		return canonGUID(rep.Guids.Bot)
+	}
+	// The extras' names and guids are separate lists: only equal lengths
+	// prove the same order (a slot without a guid drops out of the guid
+	// list), so a mismatch is no guid at all rather than a neighbour's.
+	if len(rep.Guids.Extras) != len(rep.ExtraNames) {
+		return ""
+	}
+	for i, extra := range rep.ExtraNames {
+		if strings.EqualFold(name, extra) {
+			return canonGUID(rep.Guids.Extras[i])
+		}
+	}
+	return ""
+}
+
+// logoutProved sends `.tb logout` and waits for the hire to leave both the
+// party roster and the server's unit list. The module answers before the
+// character is logged out, and a party roster drop alone is no proof (a kick
+// or a party disband drops the name while the bot stays online), so the unit
+// row of the setup's recorded guid must stop answering too. A refusal is
+// returned at once; a hire still online after the wait gets one more send,
+// then the caller records the problem. It returns the last send's lines, the
+// evidence, and whether the logout was proved.
+func (r *Runner) logoutProved(ctx context.Context, client *Client, tb *tbcmd.Client, name, guid string) ([]string, string, bool) {
+	var lines []string
+	last := ""
+	for send := 1; send <= 2; send++ {
+		l, err := tb.FreeTextLogout(ctx, name)
+		lines = l
+		if err != nil {
+			// A second send can race the character's own logout: a refusal
+			// is no problem when the roster and the unit row prove it left.
+			if send > 1 {
+				if ok, why := r.logoutSettled(ctx, client, name, guid); ok {
+					return lines, why, true
+				}
+			}
+			return lines, trimReason(tbErrText(err, l)), false
+		}
+		if guid == "" {
+			// Without the hire's guid there is no second read to prove the
+			// logout; one send and the problem, never a long wait.
+			return lines, "logout sent; the hire has no recorded guid, so a roster drop alone cannot prove it", false
+		}
+		deadline := time.Now().Add(r.logoutWait())
+		for {
+			ok, why := r.logoutSettled(ctx, client, name, guid)
+			last = why
+			if ok {
+				return lines, "logout sent; " + why, true
+			}
+			if !time.Now().Before(deadline) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return lines, "logout sent; the wait ended with " + last, false
+			case <-time.After(r.logoutPoll()):
+			}
+		}
+	}
+	return lines, "still online after two logout sends: " + last, false
+}
+
+// logoutSettled reports whether the hire is proved gone: off the party roster
+// AND the server no longer answers its unit row. A missing guid, an
+// unreadable roster or a unit row that still answers keep it unproved.
+func (r *Runner) logoutSettled(ctx context.Context, client *Client, name, guid string) (bool, string) {
+	if guid == "" {
+		return false, "the hire has no recorded guid"
+	}
+	online, err := r.rosterHas(ctx, client, name)
+	if err != nil {
+		return false, "the party roster is unreadable: " + trimReason(err.Error())
+	}
+	if online {
+		return false, "still in the party roster"
+	}
+	tctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	_, uerr := client.Unit(tctx, guid)
+	cancel()
+	if uerr == nil {
+		return false, "the roster dropped it but the server still answers its unit"
+	}
+	if !isNotInView(uerr) {
+		return false, "the unit read failed: " + trimReason(uerr.Error())
+	}
+	return true, "the party roster dropped it and the server no longer answers its unit"
+}
+
+// isNotInView is the serve's exact answer for a guid the world no longer
+// holds: an RPC error -32003 whose message says the unit is not in view.
+// Anything else (a method-not-found from a skewed daemon, a transport error)
+// is not evidence the character left.
+func isNotInView(err error) bool {
+	var rpc *RPCError
+	if errors.As(err, &rpc) {
+		return rpc.Code == -32003 && strings.Contains(strings.ToLower(rpc.Message), "not in view")
+	}
+	return false
+}
+
+// rosterHas reads the party roster and reports whether name is still on it.
+func (r *Runner) rosterHas(ctx context.Context, client *Client, name string) (bool, error) {
+	tctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	info, err := client.Party(tctx)
+	if err != nil {
+		return false, err
+	}
+	for _, m := range info.Members {
+		if strings.EqualFold(m.Name, name) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// logoutWait bounds the roster wait after `.tb logout` (0 is 20 s).
+func (r *Runner) logoutWait() time.Duration {
+	if r.LogoutWait > 0 {
+		return r.LogoutWait
+	}
+	return 20 * time.Second
+}
+
+// logoutPoll is the pause between roster reads during that wait.
+func (r *Runner) logoutPoll() time.Duration {
+	if r.TeardownPoll > 0 {
+		return r.TeardownPoll
+	}
+	return 500 * time.Millisecond
 }
 
 func listOrNone(list []string) string {

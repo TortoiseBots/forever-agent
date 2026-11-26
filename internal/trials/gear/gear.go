@@ -165,6 +165,50 @@ func orQ(s string) string {
 	return s
 }
 
+// IsShield reports whether the item is a shield (item class 4, subclass 6).
+func (k Kit) IsShield() bool {
+	return k.ItemClass != nil && *k.ItemClass == 4 && k.Subclass != nil && *k.Subclass == 6
+}
+
+// HasShield reports whether any item in items is a shield.
+func HasShield(items []Kit) bool {
+	for _, item := range items {
+		if item.IsShield() {
+			return true
+		}
+	}
+	return false
+}
+
+// PickKitNoShield returns the player's kit without any shield ({4, 6}). When
+// the selected kit carries a shield and a shield-free dps kit exists for the
+// same class and level, that kit (two-hand or non-shield off-hand) is returned
+// so equipping it clears slot 16; otherwise shield entries are omitted.
+func PickKitNoShield(player map[string]any, kitSets ...Kits) (items []Kit, kitLevel int64, why string) {
+	items, kitLevel, why = PickKit(player, kitSets...)
+	if len(items) == 0 || !HasShield(items) {
+		return items, kitLevel, why
+	}
+	dpsPlayer := make(map[string]any, len(player)+1)
+	for k, v := range player {
+		dpsPlayer[k] = v
+	}
+	dpsPlayer["forced_role"] = "dps"
+	if alt, altLevel, _ := PickKit(dpsPlayer, kitSets...); len(alt) > 0 && !HasShield(alt) {
+		return alt, altLevel, ""
+	}
+	filtered := make([]Kit, 0, len(items))
+	for _, item := range items {
+		if !item.IsShield() {
+			filtered = append(filtered, item)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil, 0, "no kit items remain after removing shield"
+	}
+	return filtered, kitLevel, ""
+}
+
 // Proficiency maps (item class, subclass) to the proficiency spell a kit item needs. Cloth
 // (class 4, subclass 1) is known by every class and is not listed.
 var Proficiency = map[[2]int64]int64{

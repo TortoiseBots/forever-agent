@@ -4,7 +4,7 @@ title: Trials
 description: "Run the behaviour test bench: hire a bot into a scripted fight, score each specified behaviour, and read the card."
 tags: [testing, trials, behaviour, verdicts]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T14:00:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T00:50:00Z }
 sources:
   - id: trials-cmd
     resource: cmd/forever-agent/trials_cmd.go
@@ -138,6 +138,12 @@ The command leases the slot, renews the lease while it runs, provisions the play
 A serve started from a `slot setup --forever` dir holds that slot's lease for its whole run, so `trials run` on
 the same slot is refused `held by <holder>` (exit `15`) while the serve runs. Run the bench against a bare
 `forever serve --dir` (a `slot.json` with no lease), or a slot no serve leases.
+
+# Setup read-backs and server gaps
+
+Every setup row is a read-back of the server, and a missing server capability is never turned into a `PASS`. Where the server's own answer names a gap the trial cannot cross, the row is `SKIPPED needs=<check>` and the trial ends `SKIPPED`. The spec kit is the current example: the kit's ids come from `specs.json` and the Forever overlay, and when the server's own `.tb learn` answers `unknown` for an id, the row is `SKIPPED needs=bot_spec` with the ids, instead of an `INVALID` from a learn this server cannot hold.
+
+Two reads are taken so that a live server's snapshots cannot fail a good setup or pass a bad one. The player's level is read from the server's own unit row (`status` is no fallback: a core can keep the login level there after `.levelup`, so a stale status that happens to equal the target is no proof), and the power set is polled in the units model for a moment before it is judged. Player tier gear (`player_gear`) learns the kit's proficiencies, grants missing items with `.additem` (verified in `inv`), equips them with `equip`, and passes only when `inv` and `equipment` confirm every piece is worn (when the trial also asks for `player_no_shield`, it chooses a shield-free kit without a `{4, 6}` shield); `player_no_shield` checks slot 16 (`off_hand`) through `inv` and `equipment` and fails closed (`UNVERIFIED`) whenever the inventory is unknown, stale, or has an unconfirmed move. Teardown sends `.tb logout` and waits until the hire is off the party roster **and** the server no longer answers its unit row, so neither a slow logout nor a bot that merely left the party can pass for one.
 
 # Scoring a run folder
 

@@ -47,6 +47,36 @@ type fakeCall struct {
 	params json.RawMessage
 }
 
+// callCount is how many calls of a method the fake has served.
+func (f *fakeServe) callCount(method string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, c := range f.calls {
+		if c.method == method {
+			n++
+		}
+	}
+	return n
+}
+
+// setOwnUnitLevel replaces the own-unit row with one at level. The map is
+// copied under the lock, because the handler marshals the map it read after
+// unlocking; mutating a map in place would race that marshal.
+func (f *fakeServe) setOwnUnitLevel(level int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ownUnit == nil {
+		return
+	}
+	cp := make(map[string]any, len(f.ownUnit))
+	for k, v := range f.ownUnit {
+		cp[k] = v
+	}
+	cp["level"] = level
+	f.ownUnit = cp
+}
+
 func newFakeServe(t *testing.T) *fakeServe {
 	t.Helper()
 	f := &fakeServe{t: t, script: map[string][]any{}, errCodes: map[string][]int{}, errMsg: map[string]string{}}

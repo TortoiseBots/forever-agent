@@ -458,6 +458,16 @@ func levelPlayer(t *testing.T, w *levelWorld) (*PlayerSetup, *fakeServe) {
 		}
 		return st
 	}
+	// The server's own unit row is the level source the setup reads; a world
+	// with no readable level (noRead) answers no unit row either.
+	w.mu.Lock()
+	noRead, start := w.noRead, w.level
+	w.mu.Unlock()
+	if !noRead {
+		f.ownUnit = map[string]any{"guid": gTester, "name": "Atank", "type": "player",
+			"level": start, "health": 2000, "max_health": 2000, "power": 100, "max_power": 100,
+			"auras": []any{}}
+	}
 	f.hook = func(method string, params map[string]any) {
 		switch method {
 		case "target":
@@ -468,7 +478,13 @@ func levelPlayer(t *testing.T, w *levelWorld) (*PlayerSetup, *fakeServe) {
 			var delta int
 			if text, _ := params["text"].(string); strings.HasPrefix(text, ".levelup") {
 				_, _ = fmt.Sscanf(text, ".levelup %d", &delta)
-				time.AfterFunc(300*time.Millisecond, func() { w.mu.Lock(); w.level += delta; w.mu.Unlock() })
+				time.AfterFunc(300*time.Millisecond, func() {
+					w.mu.Lock()
+					w.level += delta
+					level := w.level
+					w.mu.Unlock()
+					f.setOwnUnitLevel(level)
+				})
 			}
 		}
 	}

@@ -162,6 +162,9 @@ func (s *session) fillInvItemNames(rows []ServeInvItem) {
 // serveEquipment answers equipment: the occupied slots 0-18 with the core's names.
 func (s *session) serveEquipment(p serveEquipmentParams) ([]ServeEquipmentItem, error) {
 	inv := s.inventoryNow()
+	if !inv.Known {
+		return nil, errors.New("equipment: the character's own create has not arrived yet")
+	}
 	rows := make([]ServeEquipmentItem, 0, items.EquippedSlots)
 	for slot, guid := range inv.Equipped {
 		if guid.IsZero() {

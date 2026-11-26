@@ -86,11 +86,14 @@ type Runner struct {
 
 	// TeardownTimeout bounds one teardown (0 is two minutes); TeardownWait and
 	// TeardownPoll bound the heal read-back (0 is 6 s and 500 ms);
+	// LogoutWait bounds the wait for a hire to leave the party roster after
+	// `.tb logout` (0 is 20 s), polled every TeardownPoll;
 	// TeardownAbort, when set, is the only abort the teardown's GM hands
 	// honour (nil: none, so Ctrl-C cannot cancel the kills).
 	TeardownTimeout time.Duration
 	TeardownWait    time.Duration
 	TeardownPoll    time.Duration
+	LogoutWait      time.Duration
 	TeardownAbort   func() string
 
 	// Abort reports why the run must stop (a lost lease renewal, an

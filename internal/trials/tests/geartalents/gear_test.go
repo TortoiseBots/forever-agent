@@ -203,3 +203,65 @@ func TestValidatorAndTrialsTest_EveryTankAndDpsTrialTurnsItOnWithAKitThatFits(t 
 		}
 	}
 }
+
+func TestPickKitNoShield(t *testing.T) {
+	t.Run("tank kit switches to shield-free two-hand kit", func(t *testing.T) {
+		for _, level := range []int64{40, 45, 50} {
+			items, kitLevel, why := gear.PickKitNoShield(gtPlayer("warrior", level, "tank"))
+			if why != "" || kitLevel != level || len(items) == 0 {
+				t.Fatalf("level %d: kit=%d level=%d why=%q", level, len(items), kitLevel, why)
+			}
+			if gear.HasShield(items) {
+				t.Fatalf("level %d: PickKitNoShield returned a shield", level)
+			}
+			if !gtSlots(items)["twohand"] {
+				t.Fatalf("level %d: expected twohand weapon in shield-free kit", level)
+			}
+		}
+	})
+
+	t.Run("one-hand plus non-shield off-hand is kept", func(t *testing.T) {
+		c2, s7 := int64(2), int64(7)  // one-hand sword
+		c4, s0 := int64(4), int64(0)  // off-hand misc (non-shield)
+		c4p, s4 := int64(4), int64(4) // plate
+		custom := gear.Kits{
+			"paladin": {
+				"tank": {
+					"40": {
+						{Entry: 1001, Slot: "head", ItemClass: &c4p, Subclass: &s4},
+						{Entry: 1002, Slot: "mainhand", ItemClass: &c2, Subclass: &s7},
+						{Entry: 1003, Slot: "offhand", ItemClass: &c4, Subclass: &s0},
+					},
+				},
+			},
+		}
+		items, _, why := gear.PickKitNoShield(gtPlayer("paladin", 40, "tank"), custom)
+		if why != "" || len(items) != 3 {
+			t.Fatalf("got %d items why=%q, want all 3 kept", len(items), why)
+		}
+	})
+
+	t.Run("strips shield when no shield-free dps kit exists", func(t *testing.T) {
+		c2, s4 := int64(2), int64(4) // one-hand mace
+		c4, s6 := int64(4), int64(6) // shield
+		c4p, s4p := int64(4), int64(4)
+		custom := gear.Kits{
+			"paladin": {
+				"tank": {
+					"40": {
+						{Entry: 1001, Slot: "head", ItemClass: &c4p, Subclass: &s4p},
+						{Entry: 1002, Slot: "mainhand", ItemClass: &c2, Subclass: &s4},
+						{Entry: 1003, Slot: "offhand", ItemClass: &c4, Subclass: &s6},
+					},
+				},
+			},
+		}
+		items, _, why := gear.PickKitNoShield(gtPlayer("paladin", 40, "tank"), custom)
+		if why != "" || len(items) != 2 {
+			t.Fatalf("got %d items why=%q, want 2 (without shield)", len(items), why)
+		}
+		if gear.HasShield(items) {
+			t.Fatalf("shield item was not stripped: %+v", items)
+		}
+	})
+}

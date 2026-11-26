@@ -653,14 +653,35 @@ func (p *Provisioner) ensureTalents(ctx context.Context, spec BotSpec, name stri
 		}
 		return rowOf("bot_spec", false, spec.Spec, ".tb learn "+name+": "+err.Error())
 	}
+	// The server's own learn record is the evidence: a spell it answers
+	// `unknown` for is one it cannot hold (2026-11-25: rogue combat's copied
+	// 52507), so the row is a SKIP that names the ids. `invalid` and
+	// `not-learned` stay failures: the server knows the spell and refused it.
+	var unknown []uint32
 	for _, r := range rep.Results {
 		switch r.Result {
 		case "learned", "known":
+		case "unknown":
+			unknown = append(unknown, r.Spell)
 		default:
 			return rowOf("bot_spec", false, spec.Spec, fmt.Sprintf(".tb learn %s: spell %d result %s", name, r.Spell, r.Result))
 		}
 	}
+	if len(unknown) > 0 {
+		return rowOf("bot_spec", false, spec.Spec, fmt.Sprintf(
+			"SKIPPED needs=bot_spec: .tb learn answered unknown for spell(s) %s of the %s/%s kit; this server cannot learn them",
+			joinUint32s(unknown), spec.Class, spec.Spec))
+	}
 	return rowOf("bot_spec", true, spec.Spec, fmt.Sprintf(".tb learn %s: %d spell(s) learned|known", name, len(rep.Results)))
+}
+
+// joinUint32s renders ids as "a, b" for a row's evidence.
+func joinUint32s(ids []uint32) string {
+	parts := make([]string, len(ids))
+	for i, id := range ids {
+		parts[i] = strconv.FormatUint(uint64(id), 10)
+	}
+	return strings.Join(parts, ", ")
 }
 
 // talentKit reads specs.json (class -> spec -> spell ids) for the kit.
@@ -999,11 +1020,20 @@ func (p *Provisioner) ensureGrouped(ctx context.Context, name string) map[string
 	return rowOf("grouped", ok && hit, len(members), "in_group="+boolWord(ok)+", members="+strings.Join(members, ", "))
 }
 
+// manaReadWait bounds the read-back after `.tb power`: the units snapshot can
+// lag the command by a moment, and one immediate read once judged a 15% set at
+// 19% (2026-11-25). manaPoll is the pause between those reads.
+const (
+	manaReadWait = 5 * time.Second
+	manaPoll     = 100 * time.Millisecond
+)
+
 // ensureMana sets the bot's power through the module's own command and reads
-// it back from the units model (within 3 points). The hire's row is matched
-// by its party guid (player rows carry no name on this core); an unreadable
-// power is UNKNOWN and fails the row, never a 0% that could satisfy a 0%
-// target.
+// it back from the units model (within 3 points), polling that model for up
+// to manaReadWait so a lagging snapshot is not read as a wrong set. The
+// hire's row is matched by its party guid (player rows carry no name on this
+// core); an unreadable power is UNKNOWN and fails the row, never a 0% that
+// could satisfy a 0% target.
 func (p *Provisioner) ensureMana(ctx context.Context, spec BotSpec, name string) map[string]any {
 	if spec.Mana == nil {
 		return rowOf("bot_mana", true, nil, "not a mana trial")
@@ -1028,13 +1058,37 @@ func (p *Provisioner) ensureMana(ctx context.Context, spec BotSpec, name string)
 	if err != nil {
 		return rowOf("bot_mana", false, nil, ".tb power "+name+" mana: "+tbErrText(err, lines))
 	}
-	maxAfter, power, known := p.unitPower(ctx, guid)
-	if !known || maxAfter <= 0 {
+	have, maxAfter, readable := p.awaitPower(ctx, guid, *spec.Mana)
+	if !readable {
 		return rowOf("bot_mana", false, "unknown", "UNVERIFIED: "+name+" power is not readable after .tb power")
 	}
-	have := 100 * float64(power) / float64(maxAfter)
 	ok := math.Abs(have-*spec.Mana) <= 3
 	return rowOf("bot_mana", ok, math.Round(have*10)/10, fmt.Sprintf("power %.0f%% of %d (set %.0f%%)", have, maxAfter, *spec.Mana))
+}
+
+// awaitPower polls the units model after `.tb power` until the hire's power
+// is within 3 points of want or manaReadWait ends, and returns the last
+// readable percentage. readable is false when no read carried a power pool.
+func (p *Provisioner) awaitPower(ctx context.Context, guid string, want float64) (have float64, maxP uint32, readable bool) {
+	deadline := time.Now().Add(manaReadWait)
+	for {
+		maxP, power, known := p.unitPower(ctx, guid)
+		if known && maxP > 0 {
+			readable = true
+			have = 100 * float64(power) / float64(maxP)
+			if math.Abs(have-want) <= 3 {
+				return have, maxP, true
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return have, maxP, readable
+		}
+		select {
+		case <-ctx.Done():
+			return have, maxP, readable
+		case <-time.After(manaPoll):
+		}
+	}
 }
 
 // unitPower reads one unit's max power and power by guid from the units

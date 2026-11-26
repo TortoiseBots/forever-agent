@@ -162,7 +162,7 @@ func (p *PlayerSetup) ensureLevel(ctx context.Context, trial map[string]any) (ma
 	level, known := p.playerLevel(ctx)
 	if !known {
 		return rowOf("player_level", false, "unknown",
-			fmt.Sprintf("UNVERIFIED: the player's level (target %d) is not readable from status; no .levelup sent", target)), nil
+			fmt.Sprintf("UNVERIFIED: the player's level (target %d) is not readable from the server's unit row; no .levelup sent", target)), nil
 	}
 	if level == target {
 		return rowOf("player_level", true, level, fmt.Sprintf("level %d (target %d)", level, target)), nil
@@ -248,19 +248,24 @@ func (p *PlayerSetup) recordLevelUp(guid string, from, delta int) {
 		"line": fmt.Sprintf(".levelup %+d", delta)})
 }
 
-// playerLevel reads the session character's level from `status`, on its own
-// deadline. ok is false when it cannot be read: unknown is not level 0.
+// playerLevel reads the session character's level from the server's own unit
+// row. `status` is deliberately not a fallback: on this core it carries the
+// level the character logged in with and keeps it after `.levelup` (the
+// 2026-11-25 sweep), so a stale status that happens to equal the target must
+// never pass a level the server did not confirm. ok is false when the unit
+// row cannot be read or carries no positive level: unknown is not level 0.
 func (p *PlayerSetup) playerLevel(ctx context.Context) (int, bool) {
-	rctx, cancel := p.ctxOf(ctx)
-	defer cancel()
-	st, err := p.Client.StatusOf(rctx)
-	if err != nil {
+	guid := p.playerGUIDOf(ctx)
+	if guid == "" {
 		return 0, false
 	}
-	if f, ok := pyjson.Num(st.Raw["level"]); ok && f >= 1 {
-		return int(f), true
+	rctx, cancel := p.ctxOf(ctx)
+	defer cancel()
+	u, err := p.Client.Unit(rctx, guid)
+	if err != nil || u.Level < 1 {
+		return 0, false
 	}
-	return 0, false
+	return u.Level, true
 }
 
 // trialLevel reads trial["player"]["level"] (40 when absent or bad).
