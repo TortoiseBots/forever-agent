@@ -75,7 +75,7 @@ Commands executed offline with ForeverCore map `309` exports and mmaps alongside
 | Forever `plan-check` leg 0 | `50 warn, 19 err`, `0` failed pts | `52 warn, 17 err`, `0` failed pts | Pass (`0` failed pts, allowed err kinds only) |
 | Forever `plan-check` legs 1–8 | `125 err`, `3` failed pts | `694` lints (`569 warn, 125 err`), `3` failed pts | Recorded in `forever_status` |
 | `plan-export --forever --report` | Refused (`kind; raid; phase_entries; summon_open_step`) | Refused (same fields; `alt_entries` accepted) | Pass (player-led reads JSON) |
-| `forever dungeon-play --dry --last-leg high_priestess_jeklik` | Not runnable with `--last-leg` / `stand_pull` / `max_bodies` | `exit=0`, `stop raid-boss-reached, 16 pulls, 0 wipes, 0 deaths`, `verdict: PASS` | Pass |
+| `forever dungeon-play --dry --last-leg high_priestess_jeklik` | Not runnable with `--last-leg` / `stand_pull` / `max_bodies` | `exit=0`, `play: stop raid-boss-reached, 16 pulls, 0 wipes, 0 deaths, 3.7 min, gm_lines=0` | Pass (ends `raid-boss-reached`) |
 
 ## Remaining Live Gap
 
