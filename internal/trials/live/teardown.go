@@ -426,9 +426,10 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		// What the trial gave goes back out of the bags while the hire is
 		// still online; a clear that cannot be proved is ledgered and the
 		// recovery mark stays for the next run to clean first. The trial's
-		// own ids are cleared too, so a give whose mark was never written
-		// (a killed run) is still taken back. Both read `.tb itemscan` by
-		// item id; no `.bot inv` reply is parsed.
+		// own ids are cleared too, down to the baseline each mark recorded,
+		// so a give whose mark was never written (a killed run) is still
+		// taken back and a copy the hire carried before the trial stays.
+		// Both read `.tb itemscan` by item id; no `.bot inv` reply is parsed.
 		clearEv, cleared := prov.ClearGiven(ctx, name)
 		if ev, ok := prov.ClearTrialItems(ctx, name, trialItemIDs(trialSpecFor(rep, name))); !ok {
 			cleared = false

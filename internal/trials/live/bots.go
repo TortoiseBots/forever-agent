@@ -755,7 +755,9 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 	// this trial is about to give, so a leftover with no mark cannot fill
 	// the bags. Both clears read `.tb itemscan` by item id (never a `.bot
 	// inv` reply, which the live server truncated); a clear that cannot be
-	// proved fails this row closed instead of giving into unknown bags.
+	// proved fails this row closed instead of giving into unknown bags. Both
+	// stop at the baseline each mark recorded, so copies the hire carried
+	// before the trial stay.
 	known := trialItemIDs(spec)
 	clearEv, clearOK := p.ClearGiven(ctx, name)
 	if ev, ok := p.ClearTrialItems(ctx, name, known); !ok {

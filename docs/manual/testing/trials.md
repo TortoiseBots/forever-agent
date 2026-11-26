@@ -4,7 +4,7 @@ title: Trials
 description: "Run the behaviour test bench: hire a bot into a scripted fight, score each specified behaviour, and read the card."
 tags: [testing, trials, behaviour, verdicts]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-26T15:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T19:06:00Z }
 sources:
   - id: trials-cmd
     resource: cmd/forever-agent/trials_cmd.go
@@ -38,6 +38,8 @@ sources:
     resource: internal/trials/scenario/scenario.go
   - id: live-run
     resource: internal/trials/live/run.go
+  - id: live-items
+    resource: internal/trials/live/items.go
   - id: trial-sample
     resource: internal/trials/trialdefs/healers/paladin-holy-heal-latency.json
 ---
@@ -152,7 +154,7 @@ Two reads are taken so that a live server's snapshots cannot fail a good setup o
 
 A module limit sits behind the wait: this core answers an equipment move with an `ActivePlayerData` update behind a `PlayerData` one that the client does not decode, so the moved piece and any displaced piece stay unconfirmed until the next own create (a relog or a map change). The bench does not retry the read forever and never turns that state into a `PASS`: targeting the slot with `dst` keeps unrelated worn items out of the move, the read waits the client's confirmation window and retries once, then the row stays `UNVERIFIED`.
 
-Before a trial gives its hire items, setup takes back what an earlier trial left on that pool bot: the items its recovery marks name, and the ids this trial is about to give (its consumables and kit pieces), so a killed run's stack — or a copy the hire already carried — cannot fill the bags for the next trial. Teardown clears the same ids before it logs the hire out, so a trial leaves no item behind. Both count and clear by item id through `.tb itemscan` (its `inv` counts worn and bag copies together, never a parsed `.bot inv` reply, which the live server truncated on 2026-11-26): bag copies go first through `.tb removeitem` (freeing bag slots), then a worn copy is unequipped through `.bot item <bot> unequip 255 <slot>` and removed at once; every step reads the count back. A count that cannot be read or cleared fails the row closed (the recovery mark stays for the next run), and the trial never gives into bags it cannot prove clean.
+Before a trial gives its hire items, setup takes back what an earlier trial left on that pool bot: the items its recovery marks name, and the ids this trial is about to give (its consumables and kit pieces), so a killed run's stack cannot fill the bags for the next trial. Teardown clears the same ids before it logs the hire out, so no trial-added item is left behind. Every clear stops at the baseline its mark recorded — the carried count the hire had before the trial's give — and a proved clear keeps that baseline, so the copies the hire carried before the trial stay on it from run to run; an id no give has ever marked has no baseline and is cleared. Both count and clear by item id through `.tb itemscan` (its `inv` counts worn and bag copies together, never a parsed `.bot inv` reply, which the live server truncated on 2026-11-26): bag copies go first through `.tb removeitem` (freeing bag slots), then a worn copy is unequipped through `.bot item <bot> unequip 255 <slot>` and removed at once; every step reads the count back. A count that cannot be read or cleared fails the row closed (the recovery mark stays for the next run), and the trial never gives into bags it cannot prove clean.
 
 # Scoring a run folder
 

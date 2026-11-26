@@ -11,12 +11,15 @@ package live
 // teardown and the next setup take back at most that count, through the
 // module's own `.tb removeitem`, and never reduce the carried count below
 // the baseline, so the number of items the hire had before the trial is
-// preserved. A clear is proved by an `ItemScan` read-back (the count back at
-// the baseline); an item that cannot be proved gone stays in the mark and
-// the caller says so. The count is always the ItemScan `inv` (worn plus bag
-// copies) and never a parsed `.bot inv` reply: that reply was truncated on
-// the live server (2026-11-26), so a clear that depended on it could not see
-// the worn copies and left a pool bot's bags full for every later trial.
+// preserved. A proved clear keeps a non-zero baseline as a zero-count mark,
+// so a later run still knows which copies the hire carried before the trial
+// and the known-id clear stops there too. A clear is proved by an `ItemScan`
+// read-back (the count back at the baseline); an item that cannot be proved
+// gone stays in the mark and the caller says so. The count is always the
+// ItemScan `inv` (worn plus bag copies) and never a parsed `.bot inv` reply:
+// that reply was truncated on the live server (2026-11-26), so a clear that
+// depended on it could not see the worn copies and left a pool bot's bags
+// full for every later trial.
 // A kit piece that was equipped is unequipped through `.bot item <bot>
 // unequip 255 <slot>` (the slot the ItemScan record names) and then removed
 // from bags. Bag copies are removed first so unequipping has free bag slots.
@@ -43,7 +46,9 @@ import (
 
 // givenItem is one confirmed give: Count is the bag increase the read-back
 // proved, Base the carried count (bags plus worn) before the first give.
-// Worn is set once the piece was equipped.
+// Worn is set once the piece was equipped. A Count of 0 with a non-zero Base
+// is a kept baseline: the give is gone, but the count the hire carried before
+// the trial remains (see drop).
 type givenItem struct {
 	Server string `json:"server"`
 	Bot    string `json:"bot"`
@@ -121,7 +126,10 @@ func (m *recoveryMarks) store(list []givenItem) error {
 }
 
 // add records one confirmed give; a later give of the same item adds to the
-// count and keeps the first baseline.
+// count and keeps the first baseline. A give whose own read found fewer copies
+// on the hire (its own were used up) lowers the baseline to that count: the
+// kept baseline is the copies the hire carries, and a stale higher one would
+// leave the give's last copies behind.
 func (m *recoveryMarks) add(g givenItem) error {
 	recoveryMu.Lock()
 	defer recoveryMu.Unlock()
@@ -131,13 +139,17 @@ func (m *recoveryMarks) add(g givenItem) error {
 	for i := range list {
 		if sameGive(list[i], g.Server, g.Bot, g.Item) {
 			list[i].Count += g.Count
+			if g.Base < list[i].Base {
+				list[i].Base = g.Base
+			}
 			return m.store(list)
 		}
 	}
 	return m.store(append(list, g))
 }
 
-// forBot lists the marked gives of one bot on one server.
+// forBot lists the marks of one bot on one server: the gives still to take
+// back and the zero-count baselines they left.
 func (m *recoveryMarks) forBot(server, bot string) []givenItem {
 	recoveryMu.Lock()
 	defer recoveryMu.Unlock()
@@ -152,7 +164,11 @@ func (m *recoveryMarks) forBot(server, bot string) []givenItem {
 	return out
 }
 
-// drop removes one proved-cleared give from the mark.
+// drop removes one proved-cleared give from the mark. A give that sat on a
+// baseline keeps it as a zero-count entry: the carried count the hire had
+// before the trial outlives the clear, so the next run's known-id clear still
+// knows not to take those copies back. A give from an empty bag is dropped
+// outright.
 func (m *recoveryMarks) drop(g givenItem) {
 	recoveryMu.Lock()
 	defer recoveryMu.Unlock()
@@ -161,6 +177,11 @@ func (m *recoveryMarks) drop(g givenItem) {
 	var keep []givenItem
 	for _, e := range m.load() {
 		if !sameGive(e, g.Server, g.Bot, g.Item) {
+			keep = append(keep, e)
+			continue
+		}
+		if e.Base > 0 {
+			e.Count = 0
 			keep = append(keep, e)
 		}
 	}
@@ -276,7 +297,12 @@ func (p *Provisioner) giveItem(ctx context.Context, bot string, item uint32, cou
 // goes below the pre-trial baseline. An item that cannot be read, unequipped
 // or proved removed stays marked and fails closed (`allOK=false`).
 func (p *Provisioner) ClearGiven(ctx context.Context, bot string) (string, bool) {
-	gives := p.marks().forBot(p.Server, bot)
+	var gives []givenItem
+	for _, g := range p.marks().forBot(p.Server, bot) {
+		if g.Count > 0 { // a zero-count entry is a kept baseline, not a give
+			gives = append(gives, g)
+		}
+	}
 	if len(gives) == 0 {
 		return "no items to clear", true
 	}
@@ -435,17 +461,34 @@ func (p *Provisioner) scanItemBatch(ctx context.Context, bot string, ids []uint3
 	return out, "", true
 }
 
-// ClearTrialItems removes every copy of the ids the trial gives (its
-// consumables and its kit pieces) before the setup gives them again. An
-// earlier trial can leave those ids in the hire's bags and equipment with no
-// recovery mark naming them (a run killed between the give and the mark
-// write); without this pass the next give hits "bags full" for an item the
-// trial itself added. Counts come from `.tb itemscan`, never a `.bot inv`
-// reply; one batched read tells which ids carry anything, bag copies of every
-// such id go first (so the worn pieces have free slots), then worn copies
-// come off one at a time. A count that cannot be read, unequipped or proved
-// removed fails the setup row (fail-closed): the trial does not give into
-// bags it cannot read.
+// trialBaselines returns the carried count the hire had before the trial, per
+// item id, as the recovery marks recorded it: a mark's Base is the count read
+// before the give that wrote it, and add keeps the first baseline, so every
+// give of that id names the pre-trial count once. An id with no mark has no
+// recorded baseline (0): nothing proves the hire carried it before a trial.
+func (p *Provisioner) trialBaselines(bot string) map[uint32]int {
+	out := map[uint32]int{}
+	for _, g := range p.marks().forBot(p.Server, bot) {
+		if base, ok := out[g.Item]; !ok || int(g.Base) < base {
+			out[g.Item] = int(g.Base)
+		}
+	}
+	return out
+}
+
+// ClearTrialItems removes every copy above the pre-trial baseline of the ids
+// the trial gives (its consumables and its kit pieces) before the setup gives
+// them again. An earlier trial can leave those ids in the hire's bags and
+// equipment with no recovery mark naming them (a run killed between the give
+// and the mark write); without this pass the next give hits "bags full" for
+// an item the trial itself added. Counts come from `.tb itemscan`, never a
+// `.bot inv` reply; one batched read tells which ids carry anything, bag
+// copies of every such id go first (so the worn pieces have free slots), then
+// worn copies come off one at a time. The floor is the per-id baseline the
+// marks recorded (the carried count before the trial), never 0 for a marked
+// id, so a copy the hire carried before the trial stays. A count that cannot
+// be read, unequipped or proved removed fails the setup row (fail-closed):
+// the trial does not give into bags it cannot read.
 func (p *Provisioner) ClearTrialItems(ctx context.Context, bot string, ids []uint32) (string, bool) {
 	ids = uniqueItemIDs(ids)
 	if len(ids) == 0 {
@@ -457,6 +500,8 @@ func (p *Provisioner) ClearTrialItems(ctx context.Context, bot string, ids []uin
 	}
 	allOK := true
 	var notes []string
+	baselines := p.trialBaselines(bot)
+	carried := map[uint32]int{}
 	var toClear []uint32
 	for _, id := range ids {
 		r, found := records[id]
@@ -473,12 +518,19 @@ func (p *Provisioner) ClearTrialItems(ctx context.Context, bot string, ids []uin
 			notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s named no carried count)", id, bot))
 			continue
 		}
+		carried[id] = r.Inv
 		toClear = append(toClear, id)
 	}
 	cleared := 0
 	bagFailed := map[uint32]bool{}
 	for _, id := range toClear {
-		n, note, ok := p.emptyItemBags(ctx, bot, id, 0)
+		// At or below the recorded baseline everything carried is the hire's
+		// own: nothing above the pre-trial count to take back.
+		above := carried[id] - baselines[id]
+		if above <= 0 {
+			continue
+		}
+		n, note, ok := p.emptyItemBags(ctx, bot, id, above)
 		cleared += n
 		if !ok {
 			allOK = false
@@ -487,10 +539,10 @@ func (p *Provisioner) ClearTrialItems(ctx context.Context, bot string, ids []uin
 		}
 	}
 	for _, id := range toClear {
-		if bagFailed[id] {
+		if bagFailed[id] || carried[id] <= baselines[id] {
 			continue
 		}
-		if r, note, ok := p.clearWorn(ctx, bot, id, 0); !ok {
+		if r, note, ok := p.clearWorn(ctx, bot, id, baselines[id]); !ok {
 			allOK = false
 			notes = append(notes, note)
 		} else {
