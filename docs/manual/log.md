@@ -2,6 +2,7 @@
 
 ## 2026-11-26
 
+* **Update**: `wailing_caverns` is `refused` for Forever in [dungeon plans](dungeons/plans.md): 3 of its 203 exported unit rows (two Druid of the Fang 3840, the Kresh 3653 boss) have no ForeverCore map-43 spawn within the row's radius, and one plan-check point is off the Forever tiles. The page now lists every remaining `todo` raid plan by name and points at `docs/forever/PLAN-STATUS.md`, the new table of every plan's Forever status.
 * **Update**: Documented `plan-export --forever --last-leg NAME` and the leg field `forever_checked` in [plan tools](dungeons/plan-tools.md), [dungeon plans](dungeons/plans.md) and [plan tools troubleshooting](dungeons/plan-troubleshooting.md): a raid plan exports only the legs a Forever check remapped (`zul_gurub` leg 0 writes `plan_zul_gurub.sql`), a selection past them is refused, and a raid's size has no row.
 * **Update**: Documented `pull_groups[].alt_entries` and `zul_gurub` leg-0 offline check status in [dungeon plans](dungeons/plans.md), `--apply-fixes` validation and `dropped.json` output in [plan tools](dungeons/plan-tools.md), and raid `stand_pull`, `max_bodies` and `--last-leg` handling in [dungeon-play](dungeons/dungeon-play.md).
 * **Update**: Documented in [dungeon plans](dungeons/plans.md) that a patrol's `path` is treated as a closed loop (closing leg included, empty `path` entry-only) in the watch and play drivers alike; `plan-scout --forever --live` level fill keys live units by `UnitSpawnKey` and `serve`'s `los` clears a previous said-aloud answer at the start of each call.

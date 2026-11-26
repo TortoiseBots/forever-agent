@@ -4,7 +4,7 @@ title: Dungeon plans
 description: What a dungeon plan file is, every field it can carry, and what its status and forever_status mean.
 tags: [dungeons, plans, reference, format]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-26T00:18:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T16:08:40Z }
 sources:
   - id: plan-go
     resource: internal/dungeon/plan.go
@@ -95,18 +95,19 @@ was checked against ForeverCore data and cannot be cleared for a Forever run: th
 or the spawns or the route the server does not have) or `live-checked` (it was run on a Forever server). `plan-list`
 prints the whole value, free text included.
 
-The check runs in batches (issue #223); a plan's own `forever_status` and `notes` carry the numbers. Of the classic
+The check runs in batches (issue #223); a plan's own `forever_status` and `notes` carry the numbers, and
+`docs/forever/PLAN-STATUS.md` is the one table of every plan's status. Of the classic
 dungeons, `stormwind_stockade` and `ragefire_chasm` are `exported`, and `deadmines`, `shadowfang_keep`,
 `blackfathom_deeps`, `gnomeregan`, `razorfen_kraul`, the four Scarlet Monastery wings (`scarlet_graveyard`,
 `scarlet_library`, `scarlet_armory`, `scarlet_cathedral`), `razorfen_downs`, `uldaman`, `sunken_temple`,
 `zulfarrak`, `maraudon_purple`, `maraudon_orange`, `lower_blackrock_spire`, `blackrock_depths`, `scholomance`, the
 three Dire Maul wings (`dire_maul_east`, `dire_maul_north`, `dire_maul_west`), `stratholme_live`,
-`stratholme_undead` and `wailing_caverns-extra` are `refused`, each with the field, the spawns or the segments its
-value names. `zul_gurub` is `todo (offline-checked ...)` on leg 0 (`high_priestess_jeklik`, the leg marked
-`forever_checked`; `plan-export --forever --last-leg high_priestess_jeklik` writes its module plan rows, while legs
-1-8 are not remapped and a player-led run reads them from the plan), while `wailing_caverns`, `molten_core`,
-`onyxias_lair` and `ruins_of_ahnqiraj` remain `todo` (`molten_core` and `onyxias_lair` carry Turtle-only entries and
-would be refused on ForeverCore data).
+`stratholme_undead`, `wailing_caverns-extra` and `wailing_caverns` are `refused`, each with the field, the spawns or
+the segments its value names. `zul_gurub` is `todo (offline-checked ...)` on leg 0 (`high_priestess_jeklik`, the leg
+marked `forever_checked`; `plan-export --forever --last-leg high_priestess_jeklik` writes its module plan rows, while
+legs 1-8 are not remapped and a player-led run reads them from the plan), while `blackwing_lair`, `molten_core`,
+`naxxramas`, `onyxias_lair`, `ruins_of_ahnqiraj`, `temple_of_ahnqiraj` and `upper_blackrock_spire` remain `todo` (all
+seven are raids: `molten_core` and `onyxias_lair` carry Turtle-only entries and would be refused on ForeverCore data).
 
 A naming rule that bites: `plan-export` refuses a `draft` plan unless `--allow-draft` is passed, and
 `--all-live` exports only `live-checked` plans. The plan check does not care about the status: it walks the file as
