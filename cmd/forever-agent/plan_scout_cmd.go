@@ -428,6 +428,9 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	// The fix file (always when asked, also with no fixes).
 	fixes := planscout.ProposeFixes(rep, in, planner, world)
 	rowsSHA := scoutRowsSHA(in.Rows)
+	// replayed are the recorded fixes a replay refused before applying: an unrecorded coordinate, a target its step's row
+	// does not name, or a point off the mesh. They are refused here, not handed to the apply pass.
+	var replayed []planscout.DroppedFix
 	if fixIn != "" {
 		ff, err := readFixFile(fixIn)
 		if err != nil {
@@ -436,8 +439,13 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		if err := checkFixFile(ff, rep.Plan, rep.Map, rowsSHA); err != nil {
 			return fail("--fix-in %s: %v", fixIn, err)
 		}
-		fixes = ff.Fixes
-		note := fmt.Sprintf("fix-in: %d fix(es) read from %s; this pass's own proposals were not used", len(fixes), fixIn)
+		read := len(ff.Fixes)
+		fixes, replayed = ff.VerifiedFixes(in, planner)
+		for _, d := range replayed {
+			fmt.Fprintf(stderr, "plan-scout: fix %d (step %d, %s) dropped: %s\n", d.ID, d.Step, d.Kind, d.Reason)
+			rep.Notes = append(rep.Notes, fmt.Sprintf("fix %d (step %d, %s) dropped: %s", d.ID, d.Step, d.Kind, d.Reason))
+		}
+		note := fmt.Sprintf("fix-in: %d fix(es) read from %s, %d refused before applying; this pass's own proposals were not used", read, fixIn, len(replayed))
 		rep.Notes = append(rep.Notes, note)
 		fmt.Fprintf(stderr, "plan-scout: %s\n", note)
 	}
@@ -498,15 +506,20 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		if o.forever {
 			checkNav = scoutForeverCheckNav{planner}
 		}
-		edited, res, dropped, err := planscout.ApplyFixes(in.Plan, fixes, checkNav)
+		edited, res, dropped, applyErr := planscout.ApplyFixes(in.Plan, fixes, checkNav)
+		if applyErr == nil && countApplied(fixes) == 0 && len(replayed) > 0 {
+			// Only advice fixes are left: the replay refused every fix it could have applied.
+			applyErr = fmt.Errorf("every recorded fix (%d) was dropped before applying", len(replayed))
+		}
 		for _, d := range dropped {
 			fmt.Fprintf(stderr, "plan-scout: fix %d (step %d, %s) dropped: %s\n", d.ID, d.Step, d.Kind, d.Reason)
 			rep.Notes = append(rep.Notes, fmt.Sprintf("fix %d (step %d, %s) dropped: %s", d.ID, d.Step, d.Kind, d.Reason))
 		}
-		if err != nil {
+		allDropped := append(append([]planscout.DroppedFix{}, replayed...), dropped...)
+		if applyErr != nil {
 			applyRefused = true
-			rep.Notes = append(rep.Notes, "apply-fixes refused: "+err.Error())
-			fmt.Fprintf(stderr, "plan-scout: --apply-fixes refused: %v\n", err)
+			rep.Notes = append(rep.Notes, "apply-fixes refused: "+applyErr.Error())
+			fmt.Fprintf(stderr, "plan-scout: --apply-fixes refused: %v\n", applyErr)
 			_ = res
 		} else {
 			if err := os.MkdirAll(applyTo, 0o755); err != nil {
@@ -524,8 +537,8 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			if err := os.WriteFile(filepath.Join(applyTo, rep.Plan+".diff"), []byte(diff), 0o644); err != nil {
 				return fail("%v", err)
 			}
-			if len(dropped) > 0 {
-				if err := writeJSON(filepath.Join(applyTo, "dropped.json"), dropped); err != nil {
+			if len(allDropped) > 0 {
+				if err := writeJSON(filepath.Join(applyTo, "dropped.json"), allDropped); err != nil {
 					return fail("dropped.json: %v", err)
 				}
 			}

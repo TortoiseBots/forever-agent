@@ -21,8 +21,9 @@ type DroppedFix struct {
 
 // ApplyFixes applies the applicable fixes to a copy of the plan (routeedit.Clone) one at a time, each on the plan the fixes
 // before it left: a fix after which dungeon.Parse fails, or that adds a plan-check issue against the base plan, is undone and
-// dropped with its reason (the remap spec's A3 rule); a fix that adds none stays. If every applicable fix is dropped, an error
-// is returned. The base plan is never changed.
+// dropped with its reason (the remap spec's A3 rule); a fix that adds none stays. Point moves run first and insertions after
+// them (back to front), so an insertion never shifts the element a point move names. If every applicable fix is dropped, an
+// error is returned. The base plan is never changed.
 func ApplyFixes(p *dungeon.Plan, fixes []Fix, nav dungeon.Navmesh) (*dungeon.Plan, routeedit.CheckResult, []DroppedFix, error) {
 	good, err := routeedit.Clone(p)
 	if err != nil {
@@ -39,8 +40,21 @@ func ApplyFixes(p *dungeon.Plan, fixes []Fix, nav dungeon.Navmesh) (*dungeon.Pla
 			todo = append(todo, f)
 		}
 	}
-	// Highest step first: an insertion at a low index never shifts the element a later fix names.
-	sort.SliceStable(todo, func(i, j int) bool { return todo[i].Step > todo[j].Step })
+	// Point moves first (highest step first), then insertions: an insertion shifts the indexes of the list it writes to, so
+	// applying it before a point move would move the inserted waypoint in place of the one the fix names. Insertions of one
+	// list run back to front (the highest index first) for the same reason.
+	sort.SliceStable(todo, func(i, j int) bool {
+		ai, ains := insertion(todo[i])
+		bi, bins := insertion(todo[j])
+		switch {
+		case ains != bins:
+			return !ains
+		case ains:
+			return originAfter(ai, bi)
+		default:
+			return todo[i].Step > todo[j].Step
+		}
+	})
 	var dropped []DroppedFix
 	applied := 0
 	name := good.Name
@@ -98,6 +112,33 @@ func planCheckDrop(res routeedit.CheckResult) string {
 		}
 	}
 	return fmt.Sprintf("the fix adds %d plan-check issue(s): %s", res.NewIssues, strings.Join(texts, "; "))
+}
+
+// insertion says the fix adds vias to a plan element instead of moving a point, and the element whose list it inserts into.
+func insertion(f Fix) (planexport.RowOrigin, bool) {
+	if f.Ref == nil || f.Point != nil || len(f.Vias) == 0 {
+		return planexport.RowOrigin{}, false
+	}
+	switch f.Kind {
+	case FixInsertVia, FixDryDetour:
+		return *f.Ref, true
+	}
+	return planexport.RowOrigin{}, false
+}
+
+// originAfter says a names a later element than b, in the same list: its insertion runs first, so it does not shift the
+// index b's insertion names.
+func originAfter(a, b planexport.RowOrigin) bool {
+	if a.Leg != b.Leg {
+		return a.Leg > b.Leg
+	}
+	if a.Part != b.Part {
+		return a.Part > b.Part
+	}
+	if a.Group != b.Group {
+		return a.Group > b.Group
+	}
+	return a.Index > b.Index
 }
 
 func applyFix(p *dungeon.Plan, f Fix) error {
@@ -298,16 +339,29 @@ func setPoint(p *dungeon.Plan, ref planexport.RowOrigin, pt dungeon.Point) error
 }
 
 // setStand moves the stand a row names to pt. A pull row names its group's stand, the last approach point (one is created
-// when the group has none); every other row names the plan element it sits on (the leg's to point, a via, an approach
-// point or a step's stand), so its stand move is a move of that element: only a row of the boss itself needs the leg to
-// have one.
+// when the group has none); a boss row names the party's stand, the last approach point before the boss (also created when
+// the leg has none) — never the boss's own position, which is where the boss stands, not where the party does. Every other
+// row names the plan element it sits on (the leg's to point, a via, an approach point or a step's stand), so its stand move
+// is a move of that element.
 func setStand(p *dungeon.Plan, ref planexport.RowOrigin, pt dungeon.Point) error {
+	leg := &p.Legs[ref.Leg]
+	if ref.Part == "boss" || (ref.Part == "pull" && ref.Group < 0) {
+		// A boss row (an older fix file names it part "pull" with group -1).
+		if leg.Boss == nil {
+			return fmt.Errorf("the leg has no boss")
+		}
+		if n := len(leg.Boss.Approach); n > 0 {
+			leg.Boss.Approach[n-1] = pt
+		} else {
+			leg.Boss.Approach = []dungeon.Point{pt}
+		}
+		return nil
+	}
 	if ref.Part != "pull" {
 		return setPoint(p, ref, pt)
 	}
-	leg := &p.Legs[ref.Leg]
 	group := ref.Group
-	if group < 0 || group >= len(leg.PullGroups) {
+	if group >= len(leg.PullGroups) {
 		return fmt.Errorf("pull group %d is outside the leg", group)
 	}
 	g := &leg.PullGroups[group]

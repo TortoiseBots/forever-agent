@@ -253,13 +253,22 @@ forever-agent plan-scout <plan> [--dir dungeons] [--sql FILE] [--mmaps DIR] [--s
 - `--fix-in FILE` uses the fixes of a recorded fix file (`tb-scout-fix` version 1: an earlier `--fix-out`, or the list a
   live pass wrote) instead of this pass's own proposals, so a walk's fix list can be re-run or applied later. It proves
   the file was made for this plan's own exported rows (format and version, plan and map, the rows' sha256) and refuses
-  one that was not. It cannot be combined with `--live`: a live pass merges the fixes it finds.
+  one that was not. A replay then checks each applicable fix before applying it: its target must be the plan element its
+  step's row names in this export (the target is taken from the export, not from the file), and every destination must be
+  a point the file records whole and the map's mesh holds — a missing coordinate is never read as zero. A fix that fails
+  is dropped with the reason in the report notes, `dropped.json` and stderr, and the rest still land; a list the replay
+  refuses whole writes no copy and exits 27 when it is applied. It cannot be combined with `--live`: a live pass merges
+  the fixes it finds.
 - `--apply-fixes DIR` writes a patched plan copy and `<plan>.diff` into a new or empty folder; it refuses a folder
   inside a `dungeons/` folder, and with `--sql` it first proves the migration's rows equal the plan's export. Each
   applicable fix is applied on the plan the fixes before it left and then checked: one the plan loader refuses, or that
   adds a plan-check issue against the plan as it was, is undone and recorded in `dropped.json` beside the copy with its
-  reason (for a plan-check issue, the issues it makes), and the rest of the list still lands. If every applicable fix
-  is dropped, no copy is written and the command exits 27.
+  reason (for a plan-check issue, the issues it makes), and the rest of the list still lands. Point moves run before
+  insertions, and insertions of one list back to front, so an insertion never shifts the element a point move names. A
+  `move_stand` fix moves the plan element its row names (a leg's `to` point, a via, an approach point or a step's stand);
+  a pull row's stand is the last approach point, and a boss row's stand is the last approach point before the boss (both
+  created when there is none) — never the boss's position. If every applicable fix is dropped, no copy is written and the
+  command exits 27.
 - `--fail-on fail` (the default) exits 27 on a failed step; `--fail-on warn` also on a warning. The live pass that
   stopped part-way exits 28; a refused or failed live phase exits 18; a mesh that cannot answer exits 1.
 

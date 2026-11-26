@@ -353,3 +353,111 @@ func TestApplyFixesDropsFarStand(t *testing.T) {
 		t.Fatalf("all-dropped: edited=%v dropped=%+v err=%v", editedAll, droppedAll, err)
 	}
 }
+
+// viaPlan is one leg with the given vias, a to point and a pull group: the list an insertion and a point move share.
+func viaPlan(xs ...float32) *dungeon.Plan {
+	via := make([]dungeon.Waypoint, len(xs))
+	for i, x := range xs {
+		via[i] = dungeon.Waypoint{Point: dungeon.Point{X: x}}
+	}
+	return &dungeon.Plan{Version: 1, Name: "t", Map: 1, Entrance: dungeon.Point{},
+		Legs: []dungeon.Leg{{
+			Name: "one",
+			Via:  via,
+			To:   dungeon.Point{X: 30},
+			PullGroups: []dungeon.PullGroup{
+				{Entries: []uint32{100}, Positions: []dungeon.Point{{X: 40}}, Approach: []dungeon.Point{{X: 35}}},
+			},
+		}}}
+}
+
+// TestApplyFixesMovesTheWaypointAPointFixNamesAfterAnInsertion: an insertion in the same step shifts the via list a point
+// move names. The move must land on the original waypoint and the insertion before it, whichever way the plan check takes
+// the two, not on the waypoint the insertion added.
+func TestApplyFixesMovesTheWaypointAPointFixNamesAfterAnInsertion(t *testing.T) {
+	ref := planexport.RowOrigin{Leg: 0, Part: "via", Group: -1, Index: 1}
+	fixes := []Fix{
+		{ID: 1, Step: 2, Kind: FixInsertVia, Apply: true, Ref: &ref, Vias: []dungeon.Point{{X: 3}}},
+		{ID: 2, Step: 2, Kind: FixSnapPoint, Apply: true, Ref: &ref, Point: &dungeon.Point{X: 7}},
+	}
+	edited, _, dropped, err := ApplyFixes(viaPlan(1, 5), fixes, fakePlanNet{})
+	if err != nil {
+		t.Fatalf("ApplyFixes: %v", err)
+	}
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %+v; want both fixes", dropped)
+	}
+	via := edited.Legs[0].Via
+	if len(via) != 3 || via[0].Point.X != 1 || via[1].Point.X != 3 || via[2].Point.X != 7 {
+		t.Fatalf("vias = %+v; want [1 3 7]: the insertion before the moved via, no point moved twice", via)
+	}
+}
+
+// TestApplyFixesInsertsBackToFront: two insertions in one list must not shift each other's index either: the later index is
+// inserted first, so each one's vias land in front of the waypoint it names.
+func TestApplyFixesInsertsBackToFront(t *testing.T) {
+	first := planexport.RowOrigin{Leg: 0, Part: "via", Group: -1, Index: 1}
+	second := planexport.RowOrigin{Leg: 0, Part: "via", Group: -1, Index: 2}
+	fixes := []Fix{
+		{ID: 1, Step: 2, Kind: FixInsertVia, Apply: true, Ref: &first, Vias: []dungeon.Point{{X: 3}}},
+		{ID: 2, Step: 2, Kind: FixInsertVia, Apply: true, Ref: &second, Vias: []dungeon.Point{{X: 7}}},
+	}
+	edited, _, dropped, err := ApplyFixes(viaPlan(1, 5, 9), fixes, fakePlanNet{})
+	if err != nil {
+		t.Fatalf("ApplyFixes: %v", err)
+	}
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %+v; want both insertions", dropped)
+	}
+	var got []float32
+	for _, w := range edited.Legs[0].Via {
+		got = append(got, w.Point.X)
+	}
+	if fmt.Sprint(got) != "[1 3 5 7 9]" {
+		t.Fatalf("vias = %v; want [1 3 5 7 9]", got)
+	}
+}
+
+// TestSetStandBossRowMovesThePartyStand: a boss row's move_stand edits the party's stand, the last approach point before the
+// boss (created when the leg has none), and never the boss's own position.
+func TestSetStandBossRowMovesThePartyStand(t *testing.T) {
+	pt := dungeon.Point{X: 20, Y: 1, Z: 2}
+	bossPlan := func(approach ...dungeon.Point) *dungeon.Plan {
+		return &dungeon.Plan{Version: 1, Name: "t", Map: 1, Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 10},
+			Boss: &dungeon.Boss{Entry: 100, Position: dungeon.Point{X: 30}, Approach: approach},
+		}}}
+	}
+	for _, c := range []struct {
+		name string
+		ref  planexport.RowOrigin
+	}{
+		{"boss row", planexport.RowOrigin{Leg: 0, Part: "boss", Group: -1}},
+		{"older fix file's boss row", planexport.RowOrigin{Leg: 0, Part: "pull", Group: -1}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := bossPlan(dungeon.Point{X: 15}, dungeon.Point{X: 18})
+			if err := setStand(p, c.ref, pt); err != nil {
+				t.Fatalf("setStand %+v: %v", c.ref, err)
+			}
+			if got := p.Legs[0].Boss.Position; got != (dungeon.Point{X: 30}) {
+				t.Errorf("the boss's position = %+v; a stand move must not move the boss", got)
+			}
+			if got := p.Legs[0].Boss.Approach; len(got) != 2 || got[0].X != 15 || got[1] != pt {
+				t.Errorf("the approach points = %+v; want the stand (15, then %+v) moved", got, pt)
+			}
+			// A leg whose boss has no approach gets the stand as its approach point.
+			p = bossPlan()
+			if err := setStand(p, c.ref, pt); err != nil {
+				t.Fatalf("setStand %+v with no approach: %v", c.ref, err)
+			}
+			if got := p.Legs[0].Boss.Approach; len(got) != 1 || got[0] != pt {
+				t.Errorf("the approach points = %+v; want the created stand %+v", got, pt)
+			}
+			if got := p.Legs[0].Boss.Position; got != (dungeon.Point{X: 30}) {
+				t.Errorf("the boss's position = %+v; a stand move must not move the boss", got)
+			}
+		})
+	}
+}

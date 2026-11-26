@@ -67,6 +67,9 @@ type FixFile struct {
 	RowsSHA256 string `json:"rows_sha256"`
 	Scout      string `json:"scout"`
 	Fixes      []Fix  `json:"fixes"`
+	// unrecorded names, for each Fixes entry, the coordinate fields its JSON leaves out ("stand.y", "vias[0].z"): a
+	// replay refuses such a fix instead of reading the missing coordinate as zero.
+	unrecorded [][]string
 }
 
 // waterPolygonNav is what a dry detour needs: the polygons of a box and a planner that keeps out of the boxes it is given.
