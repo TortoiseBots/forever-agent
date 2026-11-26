@@ -66,9 +66,7 @@ func TestPlayerLevelReadsTheOwnUnitRow(t *testing.T) {
 			unitLevel += delta
 			level := unitLevel
 			mu.Unlock()
-			f.mu.Lock()
-			f.ownUnit["level"] = level
-			f.mu.Unlock()
+			f.setOwnUnitLevel(level)
 		})
 	}
 	cl := NewClient(f.rpc())
@@ -82,6 +80,34 @@ func TestPlayerLevelReadsTheOwnUnitRow(t *testing.T) {
 	}
 	if !rowOK(row) || intOf(row["value"]) != 60 {
 		t.Fatalf("the unit row's new level is the read-back: %v", row)
+	}
+}
+
+// TestPlayerLevelDoesNotTrustAStaleStatus pins the review's case: the status
+// snapshot carries the target level, the player's unit row cannot be read, and
+// the world may be at another level. A stale status that happens to equal the
+// target is no proof, so the row fails UNVERIFIED and no delta is sent.
+func TestPlayerLevelDoesNotTrustAStaleStatus(t *testing.T) {
+	f := newFakeServe(t)
+	f.statusFn = func() map[string]any {
+		return map[string]any{"state": "in_world", "guid": gTester, "character": "Atank",
+			"level": 60, "mono_ms": 1000, "target": ""}
+	}
+	// No ownUnit and no units: `unit <guid>` answers "not in view".
+	cl := NewClient(f.rpc())
+	row, err := levelStepSetup(cl, NewLedger("")).ensureLevel(context.Background(), trialLevelOf(60))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rowOK(row) {
+		t.Fatalf("a stale status equal to the target is no proof of the level: %v", row)
+	}
+	ev := rowEvidence(row)
+	if !strings.Contains(ev, "UNVERIFIED") || !strings.Contains(ev, "unit row") {
+		t.Fatalf("the row must say UNVERIFIED on the unit row: %q", ev)
+	}
+	if lines := levelUpLines(f); len(lines) != 0 {
+		t.Fatalf("an unreadable level must send no .levelup: %v", lines)
 	}
 }
 
@@ -132,14 +158,57 @@ func TestEnsureManaWaitsOutAStaleUnitsSnapshot(t *testing.T) {
 }
 
 // TestTrialTeardownWaitsForTheLogoutToLand pins item 5: the module answers
-// `.tb logout` before the bot leaves, so the smoke test's next login found it
-// already online. Teardown reads the party roster until the name is gone.
+// `.tb logout` before the bot leaves, so the sweep's next login found it
+// already online. Teardown reads the party roster and the hire's unit row
+// until both prove it gone.
 func TestTrialTeardownWaitsForTheLogoutToLand(t *testing.T) {
 	s, f := newSetupFake(t)
+	// The server still holds the hire's unit until the logout lands.
+	f.units = []map[string]any{{"guid": gHire, "name": "Bheal", "type": "player", "level": 40,
+		"health": 1500, "max_health": 1500, "auras": []any{}}}
 	// The roster keeps the bot for two reads after the logout answer.
 	s.scriptParty("Atank", "Bheal")
 	s.scriptParty("Atank", "Bheal")
 	s.scriptParty("Atank")
+	s.tbFn = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb logout"):
+			f.mu.Lock()
+			f.units = nil // the character is gone from the server's world
+			f.mu.Unlock()
+			return []string{"TortoiseBots: Bheal is logging out."}
+		case strings.HasPrefix(line, ".tb role clear"):
+			return []string{"role-begin #T", "role bot=Acmd role= seq=8 status=queued #T",
+				"role-end role= target=Acmd count=1 records=1 queued=1 #T"}
+		}
+		return nil
+	}
+	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2",
+		TeardownWait: time.Second, TeardownPoll: time.Millisecond}
+	r.tbRunner = s.runner
+	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal", TrialID: "t",
+		Guids: Guids{Bot: gHire}}
+	problems := r.trialTeardown(context.Background(), rep, "t")
+	for _, p := range problems {
+		if strings.Contains(p, "logout") {
+			t.Fatalf("the logout must be waited out, not reported: %v", problems)
+		}
+	}
+	if got := f.callCount("party"); got < 3 {
+		t.Fatalf("teardown stopped after %d roster read(s); it must see the bot leave", got)
+	}
+}
+
+// TestTrialTeardownDoesNotProveALogoutFromTheRosterAlone pins the review's
+// case: the roster drops the name (a kick or a disband) while the server still
+// holds the bot's unit row. That is not a logout, and teardown must say so.
+func TestTrialTeardownDoesNotProveALogoutFromTheRosterAlone(t *testing.T) {
+	s, f := newSetupFake(t)
+	f.units = []map[string]any{{"guid": gHire, "name": "Bheal", "type": "player", "level": 40,
+		"health": 1500, "max_health": 1500, "auras": []any{}}}
+	for range 20 {
+		s.scriptParty("Atank")
+	}
 	s.tbFn = func(line string) []string {
 		switch {
 		case strings.HasPrefix(line, ".tb logout"):
@@ -151,17 +220,19 @@ func TestTrialTeardownWaitsForTheLogoutToLand(t *testing.T) {
 		return nil
 	}
 	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2",
-		TeardownWait: time.Second, TeardownPoll: time.Millisecond}
+		TeardownPoll: time.Millisecond, LogoutWait: time.Millisecond}
 	r.tbRunner = s.runner
-	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal", TrialID: "t"}
+	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal", TrialID: "t",
+		Guids: Guids{Bot: gHire}}
 	problems := r.trialTeardown(context.Background(), rep, "t")
+	found := false
 	for _, p := range problems {
-		if strings.Contains(p, "logout") {
-			t.Fatalf("the logout must be waited out, not reported: %v", problems)
+		if strings.Contains(p, "logout of Bheal") && strings.Contains(p, "still answers its unit") {
+			found = true
 		}
 	}
-	if got := f.callCount("party"); got < 3 {
-		t.Fatalf("teardown stopped after %d roster read(s); it must see the bot leave", got)
+	if !found {
+		t.Fatalf("a roster drop with the unit still online is no logout: %v", problems)
 	}
 }
 

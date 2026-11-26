@@ -47,6 +47,12 @@ func levelStepFake(t *testing.T, w *levelStepWorld) (*fakeServe, *Client) {
 		return map[string]any{"state": "in_world", "guid": gTester, "character": "Atank",
 			"level": w.level, "mono_ms": 1000, "target": w.target}
 	}
+	// The server's own unit row: the level source the setup reads. It moves
+	// with the world when a `.levelup` lands; a status-only stale read cannot
+	// stand in for it.
+	f.ownUnit = map[string]any{"guid": gTester, "name": "Atank", "type": "player",
+		"level": w.get(), "health": 2000, "max_health": 2000, "power": 100, "max_power": 100,
+		"auras": []any{}}
 	f.hook = func(method string, params map[string]any) {
 		if method == "target" {
 			w.mu.Lock()
@@ -71,7 +77,9 @@ func levelStepFake(t *testing.T, w *levelStepWorld) (*fakeServe, *Client) {
 		time.AfterFunc(300*time.Millisecond, func() {
 			w.mu.Lock()
 			w.level += delta
+			level := w.level
 			w.mu.Unlock()
+			f.setOwnUnitLevel(level)
 		})
 	}
 	return f, NewClient(f.rpc())

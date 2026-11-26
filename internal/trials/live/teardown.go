@@ -439,9 +439,10 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		}
 		// The module answers `.tb logout` before the character is gone: a
 		// teardown that returned on the answer left the hire online and the
-		// next trial's login found it "already logged in" (2026-11-25). The
-		// roster is the hire's identity, so wait for the name to leave it.
-		lines, ev, proved := r.logoutProved(ctx, rep.Client, tb, name)
+		// next trial's login found it "already logged in" (2026-11-25). A
+		// roster drop alone is no proof (a kick or a disband drops it too), so
+		// the hire's own unit row must stop answering as well.
+		lines, ev, proved := r.logoutProved(ctx, rep.Client, tb, name, hireGUID(rep, name))
 		if !proved {
 			r.logf("%s: .tb logout %s: %s", trialID, name, ev)
 			problems = append(problems, "logout of "+name+" not confirmed: "+ev)
@@ -456,54 +457,106 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 	return problems
 }
 
-// logoutProved sends `.tb logout` and waits for the hire to leave the party
-// roster. The module answers before the character is logged out, so the
-// answer alone is no proof: the roster is the hire's identity (setup logs it
-// in and groups it), and only its absence proves the logout landed. A refusal
-// is returned at once; a name still online after the wait gets one more send,
+// hireGUID is the guid setup recorded for the named hire (the main hire or an
+// extra, aligned by name with rep.Guids.Extras): the logout proof's unit read
+// keys on it.
+func hireGUID(rep *Repeat, name string) string {
+	if strings.EqualFold(name, rep.BotName) {
+		return canonGUID(rep.Guids.Bot)
+	}
+	// The extras' names and guids are separate lists: only equal lengths
+	// prove the same order (a slot without a guid drops out of the guid
+	// list), so a mismatch is no guid at all rather than a neighbour's.
+	if len(rep.Guids.Extras) != len(rep.ExtraNames) {
+		return ""
+	}
+	for i, extra := range rep.ExtraNames {
+		if strings.EqualFold(name, extra) {
+			return canonGUID(rep.Guids.Extras[i])
+		}
+	}
+	return ""
+}
+
+// logoutProved sends `.tb logout` and waits for the hire to leave both the
+// party roster and the server's unit list. The module answers before the
+// character is logged out, and a party roster drop alone is no proof (a kick
+// or a party disband drops the name while the bot stays online), so the unit
+// row of the setup's recorded guid must stop answering too. A refusal is
+// returned at once; a hire still online after the wait gets one more send,
 // then the caller records the problem. It returns the last send's lines, the
 // evidence, and whether the logout was proved.
-func (r *Runner) logoutProved(ctx context.Context, client *Client, tb *tbcmd.Client, name string) ([]string, string, bool) {
+func (r *Runner) logoutProved(ctx context.Context, client *Client, tb *tbcmd.Client, name, guid string) ([]string, string, bool) {
 	var lines []string
+	last := ""
 	for send := 1; send <= 2; send++ {
 		l, err := tb.FreeTextLogout(ctx, name)
 		lines = l
 		if err != nil {
 			// A second send can race the character's own logout: a refusal
-			// is no problem when the roster proves it left.
+			// is no problem when the roster and the unit row prove it left.
 			if send > 1 {
-				if online, rerr := r.rosterHas(ctx, client, name); rerr == nil && !online {
-					return lines, "logout sent; the party roster no longer lists " + name, true
+				if ok, why := r.logoutSettled(ctx, client, name, guid); ok {
+					return lines, why, true
 				}
 			}
 			return lines, trimReason(tbErrText(err, l)), false
 		}
-		online, err := r.rosterHas(ctx, client, name)
-		if err != nil {
-			return lines, "logout sent, the party roster is unreadable: " + trimReason(err.Error()), false
+		if guid == "" {
+			// Without the hire's guid there is no second read to prove the
+			// logout; one send and the problem, never a long wait.
+			return lines, "logout sent; the hire has no recorded guid, so a roster drop alone cannot prove it", false
 		}
-		if !online {
-			return lines, "logout sent; the party roster no longer lists " + name, true
-		}
-		if send == 1 {
-			deadline := time.Now().Add(r.logoutWait())
-			for time.Now().Before(deadline) {
-				select {
-				case <-ctx.Done():
-					return lines, "logout sent; the wait ended with " + name + " still in the roster", false
-				case <-time.After(r.logoutPoll()):
-				}
-				online, err := r.rosterHas(ctx, client, name)
-				if err != nil {
-					return lines, "logout sent, the party roster is unreadable: " + trimReason(err.Error()), false
-				}
-				if !online {
-					return lines, "logout sent; the party roster no longer lists " + name, true
-				}
+		deadline := time.Now().Add(r.logoutWait())
+		for {
+			ok, why := r.logoutSettled(ctx, client, name, guid)
+			last = why
+			if ok {
+				return lines, "logout sent; " + why, true
+			}
+			if !time.Now().Before(deadline) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return lines, "logout sent; the wait ended with " + last, false
+			case <-time.After(r.logoutPoll()):
 			}
 		}
 	}
-	return lines, "still in the party roster after two logout sends", false
+	return lines, "still online after two logout sends: " + last, false
+}
+
+// logoutSettled reports whether the hire is proved gone: off the party roster
+// AND the server no longer answers its unit row. A missing guid, an
+// unreadable roster or a unit row that still answers keep it unproved.
+func (r *Runner) logoutSettled(ctx context.Context, client *Client, name, guid string) (bool, string) {
+	if guid == "" {
+		return false, "the hire has no recorded guid"
+	}
+	online, err := r.rosterHas(ctx, client, name)
+	if err != nil {
+		return false, "the party roster is unreadable: " + trimReason(err.Error())
+	}
+	if online {
+		return false, "still in the party roster"
+	}
+	tctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	_, uerr := client.Unit(tctx, guid)
+	cancel()
+	if uerr == nil {
+		return false, "the roster dropped it but the server still answers its unit"
+	}
+	if !isNotInView(uerr) {
+		return false, "the unit read failed: " + trimReason(uerr.Error())
+	}
+	return true, "the party roster dropped it and the server no longer answers its unit"
+}
+
+// isNotInView is the serve's answer for a guid the world no longer holds.
+func isNotInView(err error) bool {
+	t := strings.ToLower(err.Error())
+	return strings.Contains(t, "not in view") || strings.Contains(t, "not found")
 }
 
 // rosterHas reads the party roster and reports whether name is still on it.
