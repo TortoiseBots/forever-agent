@@ -75,7 +75,9 @@ NAME)`).
 `loot_method.method` is one of `free-for-all`, `round-robin`, `master-loot`, `group-loot`, `need-before-greed`,
 `personal-loot` (or its number 0-5; the short forms `ffa`, `round`, `master`, `group`, `need`, `personal` are
 accepted too). `master` names the master looter for master loot. `threshold` is the item quality 2-6
-(uncommon-artifact), default 2.
+(uncommon-artifact), default 2. A call whose settings the roster already holds sends no packet, and a real change is
+paced at three a second: the core counts `CMSG_SET_LOOT_METHOD` on its own three-a-second limit and closes the
+connection on the fourth inside one second.
 
 `mark.icon` is one of `star`, `circle`, `diamond`, `triangle`, `moon`, `square`, `cross`, `skull`. `mark` names the
 unit by `guid` or by a roster member's `name` and sets that icon on it; the method has no way to clear an icon.
@@ -105,6 +107,14 @@ The sub-group packets are paced at 8 a second (130 ms apart), and so are `conver
 core counts in the same ten-a-second bucket: the core closes the connection on the 11th of them inside one second,
 which a raid layout of nineteen moves would reach in a moment. A layout therefore takes a few seconds, and the
 trace's `raid_move` events carry its moves as they go out.
+
+The pace reads the roster while it waits, and `raid_move` re-reads it right before the packet goes out. Another
+assistant can move a member meanwhile, and `CMSG_SWAP_SUB_GROUPS` names no expected subgroup: the core trades
+whatever the two members hold when it arrives, so a swap planned on a roster that moved would land them in subgroups
+the call never asked for. A swap whose two members no longer hold the planned subgroups is refused with
+`raid_move: the roster moved while the packet was paced: ... retry the move` and sends nothing; one whose outcome the
+roster already holds (the two members in each other's planned subgroups) answers without a packet. A plain move and
+`convert_raid` re-check the roster the same way: the member's presence, the target subgroup's room, and the lead.
 
 # Guild
 

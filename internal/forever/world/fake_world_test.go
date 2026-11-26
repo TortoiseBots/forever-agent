@@ -372,11 +372,18 @@ type fakeServer struct {
 	groupSeenLeader    []wire.GUID
 	groupSeenAssistant []fakeAssistSeen
 	groupSeenLoot      []party.LootSettings
+	groupSeenLootAt    []time.Time // when each CMSG_SET_LOOT_METHOD arrived, beside groupSeenLoot
 	groupSeenMark      []fakeMarkSeen
 	groupSeenUninvite  []wire.GUID
 	groupSeenConvert   []bool
 	groupSeenChange    []fakeSubSeen
 	groupSeenSwap      []fakeSwapSeen
+	// fakeLimits turns on the fake's copy of the core's per-opcode packet throttle (WorldSession.cpp:1622-1653,
+	// 1833-1913): throttle holds each capped opcode's counter, and throttleKicks is the packet that went over.
+	// Without it the fake answers any count, the way a POLICY_LOG core would.
+	fakeLimits    bool
+	throttle      map[uint32]*fakePacketCounter
+	throttleKicks []string
 	// What the fake saw, under mu: every selection, every GM line, and the packet/line order ("select" or "say").
 	serveSelections []wire.GUID
 	serveGMLines    []string

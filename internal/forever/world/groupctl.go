@@ -219,8 +219,17 @@ func (s *session) groupAssistant(ctx context.Context, name string, apply bool) e
 		s.opts.logf("group: assistant %s: already %v", chat.SanitiseName(m.Name), apply)
 		return nil
 	}
-	if err := s.paceRaidPacket(ctx); err != nil {
+	if err := s.paceRaidPacket(ctx, what); err != nil {
 		return fmt.Errorf("%s: %w", what, err)
+	}
+	// The wait handled what arrived: the flag may already have come from elsewhere, or the member may have left.
+	cur, ok := s.party.Members[m.GUID]
+	if !ok {
+		return fmt.Errorf("%s: %s left the roster while the packet was paced", what, chat.SanitiseName(m.Name))
+	}
+	if (cur.Flags&assistantFlag != 0) == apply {
+		s.opts.logf("group: assistant %s: already %v", chat.SanitiseName(m.Name), apply)
+		return nil
 	}
 	if err := s.Send(wire.CMSGSetAssistantLeader, party.BuildSetAssistantLeader(m.GUID, apply)); err != nil {
 		return err
@@ -237,7 +246,10 @@ func (s *session) groupAssistant(ctx context.Context, name string, apply bool) e
 
 // groupLootMethod sets the loot method, the master ("" for none) and the threshold (0 means uncommon), and waits for
 // the roster's loot block. The core takes the packet only from the leader, refuses an LFG group and refuses a master
-// loot without a member (GroupHandler.cpp:395-427); the builder refuses the same values before they are sent.
+// loot without a member (GroupHandler.cpp:395-427); the builder refuses the same values before they are sent. A
+// roster that already holds the settings costs no packet, and a real change is paced: the core counts
+// CMSG_SET_LOOT_METHOD on its own three-a-second counter, not the raid bucket (WorldSession.cpp:1875, :1902), and
+// kicks on the fourth inside one second (WorldSession.cpp:1638-1653).
 func (s *session) groupLootMethod(ctx context.Context, method party.LootMethod, master string, threshold int) error {
 	const what = "loot_method"
 	if err := s.groupLeaderRank(what); err != nil {
@@ -261,14 +273,68 @@ func (s *session) groupLootMethod(ctx context.Context, method party.LootMethod, 
 	if err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
+	if s.lootHolds(method, masterGUID, threshold) {
+		s.opts.logf("group: loot %s, threshold %d, master %q: already set", party.LootName(method), threshold, chat.SanitiseName(master))
+		return nil
+	}
+	if err := s.paceLootPacket(ctx, what); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	// The wait handled what arrived, and another member's change may have set the loot already: then this packet
+	// is not needed either.
+	if s.lootHolds(method, masterGUID, threshold) {
+		s.opts.logf("group: loot %s, threshold %d, master %q: already set", party.LootName(method), threshold, chat.SanitiseName(master))
+		return nil
+	}
 	if err := s.Send(wire.CMSGSetLootMethod, payload); err != nil {
 		return err
 	}
 	s.opts.logf("group: loot %s, threshold %d, master %q", party.LootName(method), threshold, chat.SanitiseName(master))
 	return s.waitGroupConfirm(ctx, what, groupConfirmWait, func() bool {
-		return s.party.HasLoot && s.party.Loot.Method == method && int(s.party.Loot.Threshold) == threshold &&
-			(method != party.MasterLoot || s.party.Loot.Master == masterGUID)
+		return s.lootHolds(method, masterGUID, threshold)
 	})
+}
+
+// lootHolds reports whether the roster's loot block already carries the settings: the readback the loot call waits
+// for, and the check that keeps a matching call off the wire.
+func (s *session) lootHolds(method party.LootMethod, master wire.GUID, threshold int) bool {
+	return s.party.HasLoot && s.party.Loot.Method == method && int(s.party.Loot.Threshold) == threshold &&
+		(method != party.MasterLoot || s.party.Loot.Master == master)
+}
+
+// lootStepCap is the core's own limit for CMSG_SET_LOOT_METHOD: three in one second, its own counter rather than the
+// ten-a-second raid bucket (WorldSession.cpp:1875, :1902), and the fourth inside one second kicks under
+// PacketSpoof.Policy = 1 (WorldSession.cpp:1638-1653).
+const lootStepCap = 3
+
+// lootStepWindow is the second the core counts its three loot changes in.
+const lootStepWindow = time.Second
+
+// paceLootPacket holds the session's loot changes to the core's three a second. It keeps the send times of the last
+// three real changes and waits out the oldest's second before the next goes, handling the packets that arrive during
+// the wait. A session that changes the settings once — the FORM step does — never waits.
+func (s *session) paceLootPacket(ctx context.Context, what string) error {
+	for {
+		now := time.Now()
+		kept := s.lootSentAt[:0]
+		for _, at := range s.lootSentAt {
+			if now.Sub(at) < lootStepWindow {
+				kept = append(kept, at)
+			}
+		}
+		s.lootSentAt = kept
+		if len(s.lootSentAt) < lootStepCap {
+			s.lootSentAt = append(s.lootSentAt, now)
+			return nil
+		}
+		wait := lootStepWindow - now.Sub(s.lootSentAt[0])
+		if wait <= 0 {
+			continue
+		}
+		if err := s.pumpFor(ctx, what, wait); err != nil {
+			return err
+		}
+	}
 }
 
 // groupMark sets a raid target icon on a unit, or clears the icon with an empty target, and waits for the icon slot.

@@ -30,6 +30,54 @@ import (
 // serveInviterGUID is the GUID the fake's invite and its accept roster carry.
 var serveInviterGUID = wire.GUID{Low: 0x9001, High: 0x0800000000000000}
 
+// fakePacketCounter is one opcode's entry in the fake's copy of the core's packet throttle: the second the count
+// belongs to and how many arrived in it (WorldSession.cpp:1630-1639).
+type fakePacketCounter struct {
+	second int64
+	count  int
+}
+
+// fakePacketCap is the core's cap for the opcodes the raid and loot tests send: CMSG_CONVERT_RAID,
+// CMSG_CHANGE_SUB_GROUP and CMSG_SET_ASSISTANT_LEADER share ten a second, and CMSG_SET_LOOT_METHOD has three of its
+// own (WorldSession.cpp:1833-1913). Zero is an opcode the fake does not cap.
+func fakePacketCap(op uint32) int {
+	switch op {
+	case wire.CMSGConvertRaid, wire.CMSGChangeSubGroup, wire.CMSGSetAssistantLeader:
+		return 10
+	case wire.CMSGSetLootMethod:
+		return 3
+	}
+	return 0
+}
+
+// countPacketLocked books one packet against the core's throttle and reports whether it is the one over the opcode's
+// cap: the core kicks there (WorldSession.cpp:1638-1653). The counter resets when the second changes, as the core's
+// does, so a client that spaces its packets by a rolling second never trips it.
+func (f *fakeServer) countPacketLocked(op uint32) bool {
+	limit := fakePacketCap(op)
+	if limit == 0 {
+		return false
+	}
+	if f.throttle == nil {
+		f.throttle = make(map[uint32]*fakePacketCounter)
+	}
+	c := f.throttle[op]
+	if c == nil {
+		c = &fakePacketCounter{}
+		f.throttle[op] = c
+	}
+	second := time.Now().Unix()
+	if c.second != second {
+		c.second, c.count = second, 0
+	}
+	c.count++
+	if c.count <= limit {
+		return false
+	}
+	f.throttleKicks = append(f.throttleKicks, fmt.Sprintf("opcode 0x%06X: %d in one second (cap %d)", op, c.count, limit))
+	return true
+}
+
 // serveDaemon answers the packets the serving methods can send. It is deliberately tolerant: this test is about the
 // daemon's dispatch and typed answers, while the opcode translation and the packet layouts are pinned by the
 // one-shot scenarios.
@@ -148,6 +196,15 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 		core := table.TranslateClientWire(code)
 		if hook := f.serveWire; hook != nil {
 			hook(c, table, core, payload)
+		}
+		if f.fakeLimits {
+			f.mu.Lock()
+			kicked := f.countPacketLocked(core)
+			f.mu.Unlock()
+			if kicked {
+				// POLICY_KICK (WorldSession.cpp:1648-1653): the core ends the connection, and so does the fake.
+				return
+			}
 		}
 		switch core {
 		case wire.CMSGTimeSyncResponse, wire.CMSGMoveInitActiveMoverDone, wire.CMSGLoadingScreenNotify:
@@ -464,6 +521,7 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 			}
 			f.mu.Lock()
 			f.groupSeenLoot = append(f.groupSeenLoot, loot)
+			f.groupSeenLootAt = append(f.groupSeenLootAt, time.Now())
 			var frame []byte
 			if !f.groupSilent {
 				f.groupLoot = &loot
@@ -1024,10 +1082,15 @@ func TestServeAreaTriggerRearmIsIdempotent(t *testing.T) {
 	if got := serveAreaCount(f); got != 1 {
 		t.Fatalf("a volume moved off the character sent %d packets, want the one entry\n%s", got, steps.joined())
 	}
-	// Armed back under the character: a real entry from outside, so one more packet.
+	// Armed back under the character: a real entry from outside, so one more packet. The RPC's answer can race the
+	// packet here as it can on the first arm, so the count is waited for.
 	json.Unmarshal(a.mustCall(t, "area_trigger_watch", map[string]any{"id": 78}), &watch)
-	if got := serveAreaCount(f); got != 2 {
-		t.Fatalf("arming the volume back onto the character sent %d packets, want two\n%s", got, steps.joined())
+	deadline = time.Now().Add(3 * time.Second)
+	for serveAreaCount(f) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("arming the volume back onto the character sent %d packets, want two\n%s", serveAreaCount(f), steps.joined())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 	a.stop(t)
 	f.wait(t)

@@ -7,6 +7,7 @@ package world
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -22,27 +23,49 @@ import (
 // POLICY_KICK, WorldSession.cpp:1648-1652, and the live server runs it); a twenty-member raid's layout is nineteen
 // moves, and the live run (2026-11-26) sent them 2 ms apart and lost the leader's socket. 130 ms keep nine packets
 // more than a second apart, whatever the second boundary. CMSG_SWAP_SUB_GROUPS rides the same pace: the core has it
-// in the default bucket, but it is the layout's other half and one pace is easier to hold.
-const raidStepGap = 130 * time.Millisecond
+// in the default bucket, but it is the layout's other half and one pace is easier to hold. A variable so the tests
+// widen it around a roster change they deliver during the wait.
+var raidStepGap = 130 * time.Millisecond
 
 // paceRaidPacket waits until the next raid-setup packet may go out: raidStepGap after the one before. It is the
 // session's own pace, not the caller's, because the serve's raid_move, the player-led raid's layout and the
-// commander's raid watch all end in the same packets. ctx ends the wait with the caller's reason: the packet is then
-// not sent, and the timestamp stays where it was.
-func (s *session) paceRaidPacket(ctx context.Context) error {
+// commander's raid watch all end in the same packets. The wait handles the packets that arrive: another assistant's
+// roster change must be in the model before the packet it could invalidate goes out, so every caller re-reads the
+// roster after the wait (raidMove does, and sends nothing when the change it wanted is already there). ctx ends the
+// wait with the caller's reason: the packet is then not sent, and the timestamp stays where it was.
+func (s *session) paceRaidPacket(ctx context.Context, what string) error {
 	if !s.raidSentAt.IsZero() {
 		if wait := time.Until(s.raidSentAt.Add(raidStepGap)); wait > 0 {
-			t := time.NewTimer(wait)
-			defer t.Stop()
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-t.C:
+			if err := s.pumpFor(ctx, what, wait); err != nil {
+				return err
 			}
 		}
 	}
 	s.raidSentAt = time.Now()
 	return nil
+}
+
+// pumpFor waits out d while handling what the server sends meanwhile. A wait that only slept would leave the model
+// behind: a roster change delivered during a pace would reach it after the packet that change invalidates. The
+// session's own next/handle pair is the same one every readback wait uses.
+func (s *session) pumpFor(ctx context.Context, what string, d time.Duration) error {
+	end := time.Now().Add(d)
+	for {
+		remaining := time.Until(end)
+		if remaining <= 0 {
+			return nil
+		}
+		ev, err := s.nextCtx(ctx, what, remaining)
+		if err != nil {
+			if errors.Is(err, errWaitTimeout) {
+				return nil
+			}
+			return err
+		}
+		if err := s.handle(ctx, ev); err != nil {
+			return err
+		}
+	}
 }
 
 // raidLeader reports whether this character leads the group.
@@ -123,8 +146,16 @@ func (s *session) convertRaid(ctx context.Context) error {
 	if s.party.Raid {
 		return nil
 	}
-	if err := s.paceRaidPacket(ctx); err != nil {
+	if err := s.paceRaidPacket(ctx, what); err != nil {
 		return fmt.Errorf("%s: %w", what, err)
+	}
+	// The wait handled what arrived: a roster that lost the lead or a member is not the group the convert was
+	// planned for.
+	if !s.raidLeader() {
+		return fmt.Errorf("%s: the leader changed while the packet was paced (the leader is %s)", what, chat.SanitiseName(s.party.LeaderName()))
+	}
+	if n := len(s.party.SnapshotOf()); n < 2 {
+		return fmt.Errorf("%s: the group has %d member(s) now: the core converts a group of two or more", what, n)
 	}
 	if err := s.Send(wire.CMSGConvertRaid, party.BuildConvertRaid(true)); err != nil {
 		return err
@@ -170,8 +201,17 @@ func (s *session) raidMove(ctx context.Context, g wire.GUID, name string, subgro
 				what, chat.SanitiseName(o.Name), raidSubgroup(o), subgroup, chat.SanitiseName(m.Name))
 		}
 		from := raidSubgroup(m)
-		if err := s.paceRaidPacket(ctx); err != nil {
+		plan := raidSwapPlan{party: s.party.PartyGUID, mover: m.GUID, partner: o.GUID, from: from, to: subgroup}
+		if err := s.paceRaidPacket(ctx, what); err != nil {
 			return fmt.Errorf("%s: %w", what, err)
+		}
+		done, err := s.checkRaidSwap(what, plan)
+		if err != nil {
+			return err
+		}
+		if done {
+			s.opts.logf("raid: swap %s with %s: already in place", chat.SanitiseName(m.Name), chat.SanitiseName(o.Name))
+			return nil
 		}
 		if err := s.Send(wire.CMSGSwapSubGroups, party.BuildSwapSubGroups(m.GUID, o.GUID)); err != nil {
 			return err
@@ -191,12 +231,66 @@ func (s *session) raidMove(ctx context.Context, g wire.GUID, name string, subgro
 	if err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
-	if err := s.paceRaidPacket(ctx); err != nil {
+	if err := s.paceRaidPacket(ctx, what); err != nil {
 		return fmt.Errorf("%s: %w", what, err)
+	}
+	// The wait handled what arrived: a member that left the roster, reached the subgroup already or filled it is
+	// not the move that was planned.
+	if cur, ok := s.party.Members[m.GUID]; !ok {
+		return fmt.Errorf("%s: %s left the roster while the packet was paced", what, chat.SanitiseName(m.Name))
+	} else if raidSubgroup(*cur) == subgroup {
+		return nil
+	}
+	if n := s.raidOccupancy(subgroup); n >= party.MaxPartyMembers {
+		return fmt.Errorf("%s: subgroup %d filled up while the packet was paced (%d members): pass swap_with to trade places with one of them", what, subgroup, n)
 	}
 	if err := s.Send(wire.CMSGChangeSubGroup, payload); err != nil {
 		return err
 	}
 	s.opts.logf("raid: move %s to subgroup %d", chat.SanitiseName(m.Name), subgroup)
 	return s.waitRaidConfirm(ctx, what, groupConfirmWait, func() bool { return s.raidInSubgroup(m.GUID, subgroup) })
+}
+
+// raidSwapPlan is a swap as the roster held it when the move was planned: the raid it was planned in, the two
+// members and the subgroups they held. CMSG_SWAP_SUB_GROUPS names no expected subgroup — the core trades whatever the
+// two members hold when the packet arrives (GroupHandler.cpp:542-547) — so a plan whose roster moved during the
+// pacing wait must not go out: the server would move the members to subgroups the call never asked for.
+type raidSwapPlan struct {
+	party   wire.GUID
+	mover   wire.GUID
+	partner wire.GUID
+	from    int
+	to      int
+}
+
+// checkRaidSwap re-reads the roster the swapping move was planned from. A plan that no longer describes it is refused
+// before the packet; a plan whose outcome the roster already holds (the two members in each other's planned
+// subgroups) is done, so nothing is sent.
+func (s *session) checkRaidSwap(what string, plan raidSwapPlan) (bool, error) {
+	if err := s.groupRoster(what); err != nil {
+		return false, err
+	}
+	if s.party.PartyGUID != plan.party {
+		return false, fmt.Errorf("%s: the group changed while the packet was paced", what)
+	}
+	if !s.party.Raid {
+		return false, fmt.Errorf("%s: the group is no longer a raid", what)
+	}
+	if !s.raidLeader() && !s.raidAssistant() {
+		return false, fmt.Errorf("%s: the rank changed while the packet was paced: needs the group leader or an assistant", what)
+	}
+	m, okM := s.party.Members[plan.mover]
+	o, okO := s.party.Members[plan.partner]
+	if !okM || !okO {
+		return false, fmt.Errorf("%s: a member left the roster while the packet was paced", what)
+	}
+	from, to := raidSubgroup(*m), raidSubgroup(*o)
+	if from == plan.to && to == plan.from {
+		return true, nil
+	}
+	if from != plan.from || to != plan.to {
+		return false, fmt.Errorf("%s: the roster moved while the packet was paced: %s is in subgroup %d and %s in %d, the swap planned subgroups %d and %d: retry the move",
+			what, chat.SanitiseName(m.Name), from, chat.SanitiseName(o.Name), to, plan.from, plan.to)
+	}
+	return false, nil
 }

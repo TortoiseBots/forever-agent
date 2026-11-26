@@ -543,6 +543,7 @@ func TestServeAssistantInRaid(t *testing.T) {
 func TestServeRaidLayoutPaced(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true
+	f.fakeLimits = true // the fake kicks on the core's own cap for these opcodes
 	// Twenty members: bots 1-5 in subgroup 1, 6-10 in 2, 11-15 in 3, 16-19 in 4, this character in subgroup 4. The
 	// moves below send each band into the subgroup the band before it emptied, so every move is a plain move into a
 	// subgroup with room.
@@ -593,6 +594,129 @@ func TestServeRaidLayoutPaced(t *testing.T) {
 			t.Fatalf("moves %d to %d sent 9 CMSG_CHANGE_SUB_GROUP in %s: the core closes the connection on the 11th in one second (WorldSession.cpp:1833-1857, 1648-1652)",
 				i+1, i+9, span.Round(time.Millisecond))
 		}
+	}
+	// The fake's own ten-a-second counter for these opcodes saw no eleventh packet.
+	f.mu.Lock()
+	kicks := append([]string(nil), f.throttleKicks...)
+	f.mu.Unlock()
+	if len(kicks) != 0 {
+		t.Fatalf("the fake kicked the layout: %v\n%s", kicks, steps.joined())
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeRaidSwapRevalidatesAfterPace is the fix round's HIGH finding: a swap validated its partner's subgroup and
+// then slept for the pace without reading the roster. CMSG_SWAP_SUB_GROUPS names no expected subgroup — the core
+// trades whatever the two hold when it arrives (GroupHandler.cpp:542-547) — so a partner another assistant moved
+// during the wait would land the caller's member in a subgroup the call never asked for. The pace now handles what
+// arrives and the swap re-reads the plan; a roster that moved under it means no packet.
+func TestServeRaidSwapRevalidatesAfterPace(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	raidScene(f)
+	defer f.close()
+	old := raidStepGap
+	raidStepGap = 400 * time.Millisecond
+	t.Cleanup(func() { raidStepGap = old })
+	// The roster change is delivered 150 ms into the swap's pace wait (400 ms wide, and the preceding move's own
+	// readback comes back in a millisecond): Botone leaves subgroup 1 for subgroup 4.
+	var injected bool
+	f.serveWire = func(c *fakeConn, table *wire.OpcodeTable, core uint32, payload []byte) {
+		if core != wire.CMSGChangeSubGroup || injected {
+			return
+		}
+		injected = true
+		go func() {
+			time.Sleep(150 * time.Millisecond)
+			f.mu.Lock()
+			f.groupSubgroup["botone"] = 3 // the 0-based wire subgroup: the raid frame's 4
+			frame := f.groupUpdateLocked()
+			f.mu.Unlock()
+			if frame != nil {
+				c.writeFrame(fakeSMSGPartyUpdate, frame)
+			}
+		}()
+	}
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	awaitGroup(t, a, steps, 10)
+
+	// The preceding raid packet starts the pace: Botnine to subgroup 3.
+	a.mustCall(t, "raid_move", map[string]any{"name": "Botnine", "subgroup": 3})
+	// The swap planned on the roster as it stood: Botsix (subgroup 2) into subgroup 1, Botone (subgroup 1) back to
+	// subgroup 2. Botone moves to subgroup 4 during the wait, so that swap would send Botsix to subgroup 4.
+	rerr := a.mustFail(t, "raid_move", map[string]any{"name": "Botsix", "subgroup": 1, "swap_with": "Botone"},
+		-32003, "the roster moved while the packet was paced")
+	if !strings.Contains(rerr.Message, "Botone in 4") {
+		t.Fatalf("the refusal does not name Botone's new subgroup: %s", rerr.Message)
+	}
+	f.mu.Lock()
+	swaps := len(f.groupSeenSwap)
+	f.mu.Unlock()
+	if swaps != 0 {
+		t.Fatalf("the stale swap went out: the fake saw %d CMSG_SWAP_SUB_GROUPS\n%s", swaps, steps.joined())
+	}
+	var info ServePartyInfo
+	json.Unmarshal(a.mustCall(t, "party", nil), &info)
+	if got := memberSubgroup(info, "Botone"); got != 4 {
+		t.Fatalf("the roster change delivered during the wait was not applied: Botone is in subgroup %d, want 4\n%s", got, steps.joined())
+	}
+	if got := memberSubgroup(info, "Botsix"); got != 2 {
+		t.Fatalf("the refused swap moved Botsix: it is in subgroup %d, want 2", got)
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeLootMethodPaced is the fix round's MEDIUM finding: every loot_method call sent CMSG_SET_LOOT_METHOD, even
+// when the roster already held the requested settings, and the core counts that opcode on its own three-a-second
+// counter and kicks on the fourth inside one second (WorldSession.cpp:1875, :1902, 1638-1653). A matching call costs
+// no packet, and real changes are spaced to the core's cap.
+func TestServeLootMethodPaced(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	f.fakeLimits = true // the fake kicks on the core's own three-a-second cap for CMSG_SET_LOOT_METHOD
+	raidScene(f)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	awaitGroup(t, a, steps, 10)
+
+	a.mustCall(t, "loot_method", map[string]any{"method": "group", "threshold": 3})
+	// The roster holds exactly that now: a second call sends nothing.
+	a.mustCall(t, "loot_method", map[string]any{"method": "group", "threshold": 3})
+	f.mu.Lock()
+	sent := len(f.groupSeenLoot)
+	f.mu.Unlock()
+	if sent != 1 {
+		t.Fatalf("a matching loot call sent a packet: the fake saw %d, want 1\n%s", sent, steps.joined())
+	}
+	// Three real changes in a row: the third of the second goes out at once, the fourth waits out the core's second.
+	for _, threshold := range []int{4, 5, 6} {
+		a.mustCall(t, "loot_method", map[string]any{"method": "group", "threshold": threshold})
+	}
+	f.mu.Lock()
+	at := append([]time.Time(nil), f.groupSeenLootAt...)
+	kicks := append([]string(nil), f.throttleKicks...)
+	f.mu.Unlock()
+	if len(at) != 4 {
+		t.Fatalf("the fake saw %d CMSG_SET_LOOT_METHOD, want 4\n%s", len(at), steps.joined())
+	}
+	for i := 0; i+3 < len(at); i++ {
+		if span := at[i+3].Sub(at[i]); span < time.Second {
+			t.Fatalf("loot changes %d to %d sent 4 CMSG_SET_LOOT_METHOD in %s: the core kicks on the fourth inside one second (WorldSession.cpp:1875, 1902, 1638-1653)",
+				i+1, i+4, span.Round(time.Millisecond))
+		}
+	}
+	if len(kicks) != 0 {
+		t.Fatalf("the fake kicked the loot changes: %v", kicks)
+	}
+	var info ServePartyInfo
+	json.Unmarshal(a.mustCall(t, "party", nil), &info)
+	if info.LootMethod != "group-loot" || info.LootThreshold != 6 {
+		t.Fatalf("the roster's loot block after the changes: method %q, threshold %d, want group-loot, 6\n%s",
+			info.LootMethod, info.LootThreshold, steps.joined())
 	}
 	a.stop(t)
 	f.wait(t)
