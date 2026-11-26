@@ -1,5 +1,9 @@
 # Directory Update Log
 
+## 2026-11-26
+
+* **Update**: Documented in [dungeon plans](dungeons/plans.md) that a patrol's `path` is treated as a closed loop (closing leg included, empty `path` entry-only) in the watch and play drivers alike; `plan-scout --forever --live` level fill keys live units by `UnitSpawnKey` and `serve`'s `los` clears a previous said-aloud answer at the start of each call.
+
 ## 2026-11-25
 
 * **Update**: Checked the last ten dungeon plans against ForeverCore data in [plans](dungeons/plans.md): Maraudon Orange, Lower Blackrock Spire, Blackrock Depths, Scholomance, the three Dire Maul wings, Stratholme Live, Stratholme Undead and Wailing Caverns Extra are `refused`, each `forever_status` and its forever note carrying the exported rows, the missing spawns, the refused fields or the segments that do not walk. The raid plans still say `todo`.

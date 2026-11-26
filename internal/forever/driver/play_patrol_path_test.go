@@ -231,4 +231,13 @@ func TestIsPatrolMemberKeepsTheClaim(t *testing.T) {
 	if r.isPatrolMember(g, 0, units, packClaim{units: make([][]int, 1), of: map[int]int{}}) {
 		t.Error("an unclaimed unit 20 yd off the path is not the patrol")
 	}
+	// Multi-point paths are closed loops: an unclaimed unit on the closing leg (last point back to first) also matches.
+	loop := Group{
+		ID: 0, Entries: []uint32{11318}, Positions: []Vec3{{20, 0, 0}}, Radius: 5,
+		Patrol: &Patrol{Entries: []uint32{11318}, Path: []Vec3{{0, 0, 0}, {60, 0, 0}, {60, 60, 0}, {0, 60, 0}}},
+	}
+	units[0].Pos = Vec3{0, 30, 0}
+	if !r.isPatrolMember(loop, 0, units, packClaim{units: make([][]int, 1), of: map[int]int{}}) {
+		t.Error("an unclaimed unit on a multi-point loop's closing leg is the patrol")
+	}
 }

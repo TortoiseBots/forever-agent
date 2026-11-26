@@ -66,6 +66,9 @@ func (st *serveState) serveLOS(ctx context.Context, p serveLOSParams) (ServeLOS,
 	if _, err := tbcmd.LOSLine(sa, sb, p.Map); err != nil {
 		return ServeLOS{}, &rpc.Error{Code: rpc.CodeInvalidParams, Message: "los: " + err.Error()}
 	}
+	if s := st.session.Load(); s != nil {
+		s.clearSightSaid()
+	}
 	client := tbcmd.NewClient(&serveSightRunner{st: st})
 	rep, err := client.LOS(ctx, p.A, p.B, p.Map)
 	// The line said aloud is the module's answer that this account gets no sight query: it is a refusal of the call,

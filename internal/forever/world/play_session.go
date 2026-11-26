@@ -310,6 +310,13 @@ func (s *session) noteSightSaid() {
 	s.sightMu.Unlock()
 }
 
+// clearSightSaid clears any previous said-aloud sight answer before a serve los call runs.
+func (s *session) clearSightSaid() {
+	s.sightMu.Lock()
+	s.sightSaid = false
+	s.sightMu.Unlock()
+}
+
 // sightWasSaidAloud reports whether a sight query of this run came back as the account's own say chat.
 func (s *session) sightWasSaidAloud() bool {
 	s.sightMu.Lock()

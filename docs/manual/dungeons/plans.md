@@ -4,7 +4,7 @@ title: Dungeon plans
 description: What a dungeon plan file is, every field it can carry, and what its status and forever_status mean.
 tags: [dungeons, plans, reference, format]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T06:48:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T00:18:00Z }
 sources:
   - id: plan-go
     resource: internal/dungeon/plan.go
@@ -139,7 +139,9 @@ party there (any distance, every living member within 10 yd before the run goes 
 A pull group holds `entries` and `positions` (one point per member at most; the first is the one to pull). Extras:
 `ambush` (stealthed: walked through, not pulled), `radius` (yards from a position that still count as a member,
 default 25), `member_radius` (the same for position matching), `team`, `equiv` (a label tying packs that can stand in
-for each other), `patrol` (a loop that walks near the pack: `entries`, `path`, `period_s`, `period_estimate`,
+for each other), `patrol` (a closed loop that walks near the pack — a multi-point `path`'s closing leg from the last
+waypoint back to the first counts as part of the path in the watch and play drivers alike, and an empty `path` keeps
+the entry-only rule: `entries`, `path`, `period_s`, `period_estimate`,
 `source`), `approach` (up to four points the run leader walks before pulling), `hold`, `stand_pull` with `clear_yd`,
 and `max_bodies`.
 
