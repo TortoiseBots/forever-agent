@@ -751,25 +751,16 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 		return nil
 	}
 	// What an earlier trial (or a killed run) left behind is taken back
-	// before the new items go in: the recovery marks first, then the ids
-	// this trial is about to give, so a leftover with no mark cannot fill
-	// the bags. Both clears read `.tb itemscan` by item id (never a `.bot
-	// inv` reply, which the live server truncated); a clear that cannot be
-	// proved fails this row closed instead of giving into unknown bags. Both
-	// stop at the baseline each mark recorded, so copies the hire carried
-	// before the trial stay.
-	known := trialItemIDs(spec)
+	// before the new items go in, but only what the recovery grants prove:
+	// each grant's copies above the carried count read before that give. An
+	// id with no grant is never touched: nothing proves those copies are the
+	// trial's, and a missing baseline is not a floor of zero. A clear that
+	// cannot be proved fails this row closed instead of giving into bags it
+	// cannot certify.
 	clearEv, clearOK := p.ClearGiven(ctx, name)
-	if ev, ok := p.ClearTrialItems(ctx, name, known); !ok {
-		clearOK = false
-		if clearEv != "" {
-			clearEv += "; "
-		}
-		clearEv += ev
-	}
 	if !clearOK {
 		p.Ledger.Add(map[string]any{"kind": "items_clear_failed", "bot": name, "evidence": clearEv})
-		return rowOf("bot_items", false, known, "leftover trial items not cleared: "+clearEv)
+		return rowOf("bot_items", false, itemIDs(spec.Items), "leftover trial items not cleared: "+clearEv)
 	}
 	if spec.Gear != "" {
 		kit := botGearKit(spec.Class, spec.Gear, spec.Level)
@@ -856,8 +847,11 @@ func (p *Provisioner) wearKit(ctx context.Context, spec BotSpec, name string, ki
 			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb equip %s %d (%s): %s %s", name, item.Entry, item.Name, eq.Result, eq.Why))
 		}
 		equipped++
-		// The piece left the bags: its mark is kept as worn, never claimed cleared.
-		p.marks().setWorn(p.Server, name, item.Entry)
+		// The piece left the bags: its grant is marked worn, so a later
+		// clear unequips only a proven slot instead of looking in the bags.
+		if err := p.marks().setWorn(p.Server, name, item.Entry); err != nil {
+			return rowOf("bot_items", false, ids, fmt.Sprintf("recovery mark not updated for the worn item %d (%s): %v", item.Entry, item.Name, err))
+		}
 	}
 	return rowOf("bot_items", true, ids, fmt.Sprintf("%s kit: %d piece(s) scanned exists and equipped", spec.Gear, equipped))
 }

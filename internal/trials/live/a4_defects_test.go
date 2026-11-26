@@ -438,8 +438,8 @@ func TestClearGivenUsesRemoveItemAndReadsBack(t *testing.T) {
 	if !ok || bags.count(1708) != 0 {
 		t.Fatalf("clear must be proved and empty the bags: ok=%v bags=%d %s", ok, bags.count(1708), ev)
 	}
-	if got := bags.seen(".tb removeitem Bheal 1708 20"); len(got) != 1 {
-		t.Fatalf("the removal must be `.tb removeitem Bheal 1708 20`, saw %v", bags.lines)
+	if got := bags.seen(".tb removeitem Bheal 1708 1"); len(got) != 20 {
+		t.Fatalf("each removal must name one copy (20 times), saw %v", bags.lines)
 	}
 	for _, l := range bags.seen(".tb additem") {
 		if strings.Contains(l, " -") {
@@ -563,158 +563,27 @@ func TestMarksAreScopedToTheServer(t *testing.T) {
 	}
 }
 
-// An equipped kit piece is unequipped and destroyed from the `.tb itemscan`
-// record alone: a truncated `.bot inv` reply (the live 2026-11-26 failure,
-// where TBM:INV_END never arrived and the clear saw no worn copy) cannot hide
-// it or block the clear. Before the fix this test failed: ClearGiven required
-// a complete `.bot inv` reply and reported the worn mark UNVERIFIED.
-func TestWornKitClearedWithATruncatedInvReply(t *testing.T) {
+// An unreadable itemscan fails the clear of a marked grant closed: nothing
+// is removed from bags the trial cannot read.
+func TestClearGivenUnreadableItemscanFailsClosed(t *testing.T) {
 	prov, s, bags := bagProv(t)
-	bags.itemSlot[9434] = 4
-	if _, err := prov.giveItem(context.Background(), "Bheal", 9434, 1); err != nil {
-		t.Fatal(err)
-	}
-	bags.set(9434, 0)
-	bags.setWorn(4, 9434) // equipped: out of the bags
-	prov.marks().setWorn("test2", "Bheal", 9434)
-	s.fake.mu.Lock()
-	s.fake.botFn = func(line string) []string {
-		if strings.HasPrefix(line, ".bot inv") {
-			// What the live server sent: the head only, no INV_ITEM, no INV_END.
-			return []string{"TBM:INV_BEGIN|Bheal|0|16|16"}
-		}
-		return bags.botAnswer(line)
-	}
-	s.fake.mu.Unlock()
-	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if !ok || !strings.Contains(ev, "cleared 1") {
-		t.Fatalf("a worn trial item must clear from itemscan alone: ok=%v %q", ok, ev)
-	}
-	if bags.wornAt(4) != 0 || bags.count(9434) != 0 {
-		t.Fatalf("worn/bag copies left: slot4=%d bags=%d", bags.wornAt(4), bags.count(9434))
-	}
-	if len(prov.marks().forBot("test2", "Bheal")) != 0 {
-		t.Fatal("the mark must be dropped after the proved clear")
-	}
-}
-
-// The setup's known-id clear takes a leftover stack out of the bags and a
-// leftover worn kit piece off the bot with the `.bot inv` reply truncated:
-// the ids and the counts come from `.tb itemscan` only.
-func TestClearTrialItemsByIDWithATruncatedInvReply(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	bags.set(1708, 20)    // an earlier trial's Sweet Nectar in the bags
-	bags.setWorn(4, 9434) // an earlier trial's kit piece, still worn
-	bags.itemSlot[9434] = 4
-	s.fake.mu.Lock()
-	s.fake.botFn = func(line string) []string {
-		if strings.HasPrefix(line, ".bot inv") {
-			return []string{"TBM:INV_BEGIN|Bheal|0|16|16"}
-		}
-		return bags.botAnswer(line)
-	}
-	s.fake.mu.Unlock()
-	ev, ok := prov.ClearTrialItems(context.Background(), "Bheal", []uint32{1708, 9434, 9434, 0})
-	if !ok || !strings.Contains(ev, "cleared 21") {
-		t.Fatalf("known trial items must clear by item id: ok=%v %q", ok, ev)
-	}
-	if bags.count(1708) != 0 || bags.wornAt(4) != 0 || bags.count(9434) != 0 {
-		t.Fatalf("leftovers: 1708=%d slot4=%d 9434=%d", bags.count(1708), bags.wornAt(4), bags.count(9434))
-	}
-}
-
-// A trial does not fail setup because an earlier trial left its consumable in
-// the hire's bags with no mark naming it: the setup clears the known ids
-// first, then gives, so the bags end with exactly the trial's own stack.
-func TestSetupClearsKnownTrialItemsBeforeGiving(t *testing.T) {
-	prov, _, bags := bagProv(t)
-	bags.set(1708, 20) // an earlier trial's stack; no recovery mark names it
-	spec := BotSpec{Class: "priest", Level: 40, Items: []TrialItem{{Name: "Sweet Nectar", Count: 20}}}
-	row := prov.ensureBotGear(context.Background(), spec, "Bheal")
-	if row == nil || !rowOK(row) {
-		t.Fatalf("setup must clear the leftover and give: %v", row)
-	}
-	if got := bags.count(1708); got != 20 {
-		t.Fatalf("bags must hold exactly the trial's 20 after the leftover clear, got %d", got)
-	}
-}
-
-// The known-id clear stops at the baseline the mark recorded: the copies the
-// hire carried before the trial stay, and a proved clear keeps the baseline
-// so a later run still keeps them.
-func TestClearTrialItemsKeepsTheHirePreTrialCopies(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	bags.set(1708, 5) // the hire's own stack before the trial
 	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
 		t.Fatal(err)
 	}
-	if got := prov.marks().forBot("test2", "Bheal"); len(got) != 1 || got[0].Base != 5 || got[0].Count != 20 {
-		t.Fatalf("the mark must name the 5 the hire carried: %+v", got)
-	}
-	ev, ok := prov.ClearTrialItems(context.Background(), "Bheal", []uint32{1708})
-	if !ok || !strings.Contains(ev, "cleared 20") {
-		t.Fatalf("the clear must take back the 20 given: ok=%v %q", ok, ev)
-	}
-	if got := bags.count(1708); got != 5 {
-		t.Fatalf("the hire's own 5 must stay, bags=%d", got)
-	}
-	// A proved ClearGiven keeps the baseline for the next run.
-	if _, ok := prov.ClearGiven(context.Background(), "Bheal"); !ok {
-		t.Fatal("the mark must clear")
-	}
-	if got := prov.marks().forBot("test2", "Bheal"); len(got) != 1 || got[0].Count != 0 || got[0].Base != 5 {
-		t.Fatalf("the proved clear must keep the baseline as a zero-count mark: %+v", got)
-	}
-	// A killed run leaves a stack with no mark: the next run clears only what
-	// is above the baseline the earlier give recorded.
-	next := levelProv(s)
-	next.Server, next.RecoveryPath = "test2", prov.RecoveryPath
-	bags.set(1708, 25)
-	ev, ok = next.ClearTrialItems(context.Background(), "Bheal", []uint32{1708})
-	if !ok || !strings.Contains(ev, "cleared 20") {
-		t.Fatalf("the next run must clear the leftover above the baseline: ok=%v %q", ok, ev)
-	}
-	if got := bags.count(1708); got != 5 {
-		t.Fatalf("the next run must keep the pre-trial 5, bags=%d", got)
-	}
-}
-
-// An unreadable itemscan fails the clear closed: nothing is removed from bags
-// the trial cannot read.
-func TestClearTrialItemsUnreadableItemscanFailsClosed(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	bags.set(1708, 20)
-	s.tbFn = fastTypedError // the itemscan answer never arrives
-	ev, ok := prov.ClearTrialItems(context.Background(), "Bheal", []uint32{1708})
+	s.tbFn = fastTypedError // every typed read times out unscripted
+	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
 	if ok || !strings.Contains(ev, "itemscan") {
 		t.Fatalf("an unreadable itemscan must fail closed: ok=%v %q", ok, ev)
 	}
 	if bags.count(1708) != 20 {
 		t.Fatalf("nothing may be removed from an unreadable bag, bags=%d", bags.count(1708))
 	}
-}
-
-// A removal the count does not show leaves the clear unproved: fail closed,
-// never a pass.
-func TestClearTrialItemsUnprovedClearFailsClosed(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	bags.set(1708, 20)
-	s.tbFn = func(line string) []string {
-		if strings.HasPrefix(line, ".tb removeitem") {
-			return []string{"removeitem bot=Bheal item=1708 removed=20 left=0"}
-		}
-		return bags.answer(line)
-	}
-	ev, ok := prov.ClearTrialItems(context.Background(), "Bheal", []uint32{1708})
-	if ok || !strings.Contains(ev, "UNVERIFIED") {
-		t.Fatalf("a removal the count does not show must fail closed: ok=%v %q", ok, ev)
-	}
-	if bags.count(1708) != 20 {
-		t.Fatalf("the bags must be untouched, bags=%d", bags.count(1708))
+	if len(prov.marks().forBot("test2", "Bheal")) != 1 {
+		t.Fatal("the grant must stay marked")
 	}
 }
 
-// The setup row fails closed when the itemscan is unreadable: it never gives
+// The setup row fails closed when the count cannot be read: it never gives
 // into bags it cannot read.
 func TestSetupFailsClosedWhenTheItemScanIsUnreadable(t *testing.T) {
 	prov, s, bags := bagProv(t)
@@ -725,19 +594,19 @@ func TestSetupFailsClosedWhenTheItemScanIsUnreadable(t *testing.T) {
 	if row == nil || rowOK(row) {
 		t.Fatalf("an unreadable bag read must fail the bot_items row: %v", row)
 	}
-	if ev := rowEvidence(row); !strings.Contains(ev, "not cleared") || !strings.Contains(ev, "itemscan") {
-		t.Fatalf("the row must say the clear failed on the itemscan: %q", ev)
+	if ev := rowEvidence(row); !strings.Contains(ev, "unreadable") && !strings.Contains(ev, "itemscan") {
+		t.Fatalf("the row must say the baseline could not be read: %q", ev)
 	}
 	if got := bags.seen(".tb additem"); len(got) != 0 {
 		t.Fatalf("the setup must not give into bags it cannot read: %v", got)
 	}
 }
 
-// The teardown's known-id clear takes a leftover back even when no recovery
-// mark names it (a give whose mark was never written).
-func TestTrialTeardownClearsKnownTrialItemsWithoutAMark(t *testing.T) {
+// The teardown removes only what a recovery grant proves: a leftover with no
+// mark is the hire's own and stays.
+func TestTrialTeardownLeavesUnmarkedItems(t *testing.T) {
 	prov, s, bags := bagProv(t)
-	bags.set(1708, 20) // a killed give's stack; no mark names it
+	bags.set(1708, 20) // no recovery mark names this stack
 	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2"}
 	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal",
 		RecoveryPath: prov.RecoveryPath, TrialID: "t",
@@ -745,11 +614,11 @@ func TestTrialTeardownClearsKnownTrialItemsWithoutAMark(t *testing.T) {
 			"items": []any{map[string]any{"name": "Sweet Nectar", "count": 20}}}}}
 	r.tbRunner = s.runner
 	r.trialTeardown(context.Background(), rep, "t")
-	if got := bags.count(1708); got != 0 {
-		t.Fatalf("the teardown must clear the known id with no mark, bags=%d", got)
+	if got := bags.count(1708); got != 20 {
+		t.Fatalf("the teardown must not touch an unmarked stack, bags=%d", got)
 	}
-	if got := bags.seen(".tb removeitem Bheal 1708 20"); len(got) != 1 {
-		t.Fatalf("the teardown must remove the leftover stack, saw %v", bags.lines)
+	if got := bags.seen(".tb removeitem"); len(got) != 0 {
+		t.Fatalf("the teardown must send no removal for an unmarked stack, saw %v", got)
 	}
 }
 
@@ -812,7 +681,7 @@ func TestTrialTeardownClearsGivenItems(t *testing.T) {
 		}
 		return -1
 	}
-	rm, logout := idx(".tb removeitem Bheal 1708 20"), idx(".tb logout")
+	rm, logout := idx(".tb removeitem Bheal 1708 1"), idx(".tb logout")
 	if rm < 0 || (logout >= 0 && rm > logout) {
 		t.Fatalf("items must be cleared before the logout: %v", seen)
 	}
@@ -865,11 +734,10 @@ func TestClearGivenUnequipsAndDestroysOnlyTrialAddedWornItems(t *testing.T) {
 		t.Fatalf("trial-added items still in bags: 1708=%d 7720=%d 9434=%d 6666=%d",
 			bags.count(1708), bags.count(7720), bags.count(9434), bags.count(6666))
 	}
-	// The pre-existing ring keeps its baseline as a zero-count mark, so the
-	// next run's known-id clear does not take that copy back.
-	left := prov.marks().forBot("test2", "Bheal")
-	if len(left) != 1 || left[0].Item != 6666 || left[0].Count != 0 || left[0].Base != 1 {
-		t.Fatalf("the clear must keep the pre-existing ring's baseline: %+v", left)
+	// The settled grants are retired: the hire's own ring is not marked, so a
+	// later run never treats it as a copy to take back.
+	if left := prov.marks().forBot("test2", "Bheal"); len(left) != 0 {
+		t.Fatalf("a settled grant must be retired, marks: %+v", left)
 	}
 	// Next trial's give+equip must fit in the freed bag slot without bags-full.
 	if _, err := prov.giveItem(context.Background(), "Bheal", 7720, 1); err != nil {
