@@ -134,6 +134,9 @@ func TestSharedPlansKeepTurtleContent(t *testing.T) {
 		// Wailing Caverns Extra refuses the Naralex event's unit waits, gossip and hold; its units are ordinary map-43
 		// spawns.
 		{"wailing_caverns-extra", nil},
+		// Wailing Caverns has no Turtle-only entry: its refused reason is the core's own spawn positions (two Druid
+		// of the Fang 3840 units and the Kresh 3653 boss row) and one pull group look point off the mesh.
+		{"wailing_caverns", nil},
 	}
 	for _, tc := range tests {
 		p, err := Load(filepath.Join(plansDir, tc.plan+".json"))
