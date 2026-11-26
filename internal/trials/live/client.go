@@ -537,7 +537,17 @@ type EquippedRow struct {
 
 // Equip equips one item by entry through the serve's `equip` method.
 func (c *Client) Equip(ctx context.Context, itemEntry int32) (EquippedRow, error) {
+	return c.EquipSlot(ctx, itemEntry, -1)
+}
+
+// EquipSlot equips one item by entry into dst (0-18 when >= 0) so the serve
+// swaps that slot instead of letting AutoEquip touch unrelated equipped items.
+func (c *Client) EquipSlot(ctx context.Context, itemEntry int32, dst int) (EquippedRow, error) {
+	params := map[string]any{"item_entry": itemEntry}
+	if dst >= 0 {
+		params["dst"] = dst
+	}
 	var out EquippedRow
-	err := c.call(ctx, "equip", map[string]any{"item_entry": itemEntry}, &out, 15*time.Second)
+	err := c.call(ctx, "equip", params, &out, 15*time.Second)
 	return out, err
 }

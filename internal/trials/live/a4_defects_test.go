@@ -190,13 +190,18 @@ func TestMain(m *testing.M) {
 // layer sees nothing): a clear that still used it changes nothing and its
 // read-back fails.
 type bagModel struct {
-	mu    sync.Mutex
-	inv   map[uint32]int
-	cap   int
-	lines []string
+	mu       sync.Mutex
+	inv      map[uint32]int
+	worn     map[int]uint32
+	itemSlot map[uint32]int
+	cap      int
+	bagSlots int
+	lines    []string
 }
 
-func newBagModel() *bagModel { return &bagModel{inv: map[uint32]int{}, cap: 1000} }
+func newBagModel() *bagModel {
+	return &bagModel{inv: map[uint32]int{}, worn: map[int]uint32{}, itemSlot: map[uint32]int{}, cap: 1000}
+}
 
 func (b *bagModel) count(item uint32) int {
 	b.mu.Lock()
@@ -204,9 +209,49 @@ func (b *bagModel) count(item uint32) int {
 	return b.inv[item]
 }
 
+func (b *bagModel) wornCountLocked(item uint32) int {
+	n := 0
+	for _, e := range b.worn {
+		if e == item {
+			n++
+		}
+	}
+	return n
+}
+
+func (b *bagModel) wornAt(slot int) uint32 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.worn[slot]
+}
+
+func (b *bagModel) setWorn(slot int, item uint32) {
+	b.mu.Lock()
+	if item == 0 {
+		delete(b.worn, slot)
+	} else {
+		b.worn[slot] = item
+	}
+	b.mu.Unlock()
+}
+
+func (b *bagModel) usedBagSlotsLocked() int {
+	n := 0
+	for _, c := range b.inv {
+		if c > 0 {
+			n++
+		}
+	}
+	return n
+}
+
 func (b *bagModel) set(item uint32, n int) {
 	b.mu.Lock()
-	b.inv[item] = n
+	if n == 0 {
+		delete(b.inv, item)
+	} else {
+		b.inv[item] = n
+	}
 	b.mu.Unlock()
 }
 
@@ -241,14 +286,23 @@ func (b *bagModel) answer(line string) []string {
 	case "itemscan":
 		b.lines = append(b.lines, line)
 		out := []string{"itemscan-begin #T"}
+		canEquip := 0
 		for _, w := range f[3:] {
 			id, err := strconv.Atoi(w)
 			if err != nil {
 				continue
 			}
-			out = append(out, fmt.Sprintf("itemscan bot=%s item=%d exists=yes name=Item%%20%d class=0:5 inv=%d req=0 quality=1 ilvl=5 canequip=no why= #T", f[2], id, id, b.inv[uint32(id)]))
+			// The core's itemscan inv is Player::GetItemCount over
+			// equipment, bags and the reagent bank, so worn copies count.
+			total := b.inv[uint32(id)] + b.wornCountLocked(uint32(id))
+			if slot, ok := b.itemSlot[uint32(id)]; ok {
+				canEquip++
+				out = append(out, fmt.Sprintf("itemscan bot=%s item=%d exists=yes name=Item%%20%d class=4:1 inv=%d req=0 quality=3 ilvl=40 canequip=yes slot=%d why= #T", f[2], id, id, total, slot))
+			} else {
+				out = append(out, fmt.Sprintf("itemscan bot=%s item=%d exists=yes name=Item%%20%d class=0:5 inv=%d req=0 quality=1 ilvl=5 canequip=no why= #T", f[2], id, id, total))
+			}
 		}
-		return append(out, fmt.Sprintf("itemscan-end bot=%s count=%d records=%d exist=%d canequip=0 #T", f[2], len(out)-1, len(out)-1, len(out)-1))
+		return append(out, fmt.Sprintf("itemscan-end bot=%s count=%d records=%d exist=%d canequip=%d #T", f[2], len(out)-1, len(out)-1, len(out)-1, canEquip))
 	case "additem":
 		b.lines = append(b.lines, line)
 		id, ok1 := num(3)
@@ -259,7 +313,7 @@ func (b *bagModel) answer(line string) []string {
 		if !ok1 || n < 1 {
 			return []string{} // usage refusal: names no bot, nothing happens
 		}
-		if b.inv[uint32(id)]+n > b.cap {
+		if b.inv[uint32(id)]+n > b.cap || (b.bagSlots > 0 && b.inv[uint32(id)] == 0 && b.usedBagSlotsLocked() >= b.bagSlots) {
 			return []string{"TortoiseBots: " + f[2] + ": bags full, the item was not stored."}
 		}
 		b.inv[uint32(id)] += n
@@ -275,16 +329,93 @@ func (b *bagModel) answer(line string) []string {
 			n = b.inv[uint32(id)]
 		}
 		b.inv[uint32(id)] -= n
+		if b.inv[uint32(id)] == 0 {
+			delete(b.inv, uint32(id))
+		}
 		return []string{fmt.Sprintf("removeitem bot=%s item=%d removed=%d left=%d", f[2], id, n, b.inv[uint32(id)])}
+	case "equip":
+		b.lines = append(b.lines, line)
+		id, ok1 := num(3)
+		if !ok1 || b.inv[uint32(id)] < 1 {
+			return []string{"equip-begin #T", fmt.Sprintf("equip bot=%s item=%d result=failed why=not_found #T", f[2], id), fmt.Sprintf("equip-end bot=%s count=1 records=1 #T", f[2])}
+		}
+		slot, hasSlot := b.itemSlot[uint32(id)]
+		if !hasSlot {
+			slot = int(id) % 19
+		}
+		prev := b.worn[slot]
+		b.worn[slot] = uint32(id)
+		b.inv[uint32(id)]--
+		if b.inv[uint32(id)] == 0 {
+			delete(b.inv, uint32(id))
+		}
+		if prev != 0 {
+			b.inv[prev]++
+		}
+		return []string{"equip-begin #T", fmt.Sprintf("equip bot=%s item=%d result=equipped slot=%d why= #T", f[2], id, slot), fmt.Sprintf("equip-end bot=%s count=1 records=1 #T", f[2])}
 	}
 	return fastTypedError(line)
 }
 
+func (b *bagModel) botAnswer(line string) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.lines = append(b.lines, line)
+	f := strings.Fields(line)
+	if len(f) >= 3 && f[0] == ".bot" && f[1] == "inv" {
+		bot := f[2]
+		free := 16
+		total := 16
+		if b.bagSlots > 0 {
+			total = b.bagSlots
+			free = b.bagSlots - b.usedBagSlotsLocked()
+			if free < 0 {
+				free = 0
+			}
+		}
+		lines := []string{fmt.Sprintf("TBM:INV_BEGIN|%s|0|%d|%d", bot, free, total)}
+		for slot := 0; slot < 19; slot++ {
+			if e := b.worn[slot]; e != 0 {
+				lines = append(lines, fmt.Sprintf("TBM:INV_EQ|%d|%d|Item %d", slot, e, e))
+			}
+		}
+		idx := 0
+		for e, c := range b.inv {
+			if c > 0 {
+				lines = append(lines, fmt.Sprintf("TBM:INV_ITEM|255|%d|%d|%d|", 23+idx, e, c))
+				idx++
+			}
+		}
+		lines = append(lines, fmt.Sprintf("TBM:INV_END|%s", bot))
+		return lines
+	}
+	if len(f) == 6 && f[0] == ".bot" && f[1] == "item" && f[3] == "unequip" {
+		bot := f[2]
+		bag, err1 := strconv.Atoi(f[4])
+		slot, err2 := strconv.Atoi(f[5])
+		if err1 != nil || err2 != nil || bag != 255 {
+			return []string{"TBM:ACTION_ERR|item unequip|bad-slot|invalid slot"}
+		}
+		item := b.worn[slot]
+		if item == 0 {
+			return []string{"TBM:ACTION_ERR|item unequip|empty|nothing equipped there"}
+		}
+		if b.bagSlots > 0 && b.inv[item] == 0 && b.usedBagSlotsLocked() >= b.bagSlots {
+			return []string{"TBM:ACTION_ERR|item unequip|bags-full|bags full"}
+		}
+		delete(b.worn, slot)
+		b.inv[item]++
+		return []string{fmt.Sprintf("TBM:ACTION_ACK|item unequip|bot:%s|1|%d", bot, item)}
+	}
+	return nil
+}
+
 func bagProv(t *testing.T) (*Provisioner, *setupFake, *bagModel) {
 	t.Helper()
-	s, _ := newSetupFake(t)
+	s, f := newSetupFake(t)
 	bags := newBagModel()
 	s.tbFn = bags.answer
+	f.botFn = bags.botAnswer
 	prov := levelProv(s)
 	prov.Server = "test2"
 	prov.RecoveryPath = filepath.Join(t.TempDir(), "mark.json")
@@ -432,21 +563,22 @@ func TestMarksAreScopedToTheServer(t *testing.T) {
 	}
 }
 
-// An equipped kit piece is not in the bags: it is reported as worn, never as
-// cleared, and its mark stays.
+// An equipped kit piece whose `.bot inv` cannot be read (or whose unequip
+// is refused) fails closed UNVERIFIED and keeps its mark on disk.
 func TestWornKitPieceIsNotClaimedCleared(t *testing.T) {
-	prov, _, bags := bagProv(t)
+	prov, s, bags := bagProv(t)
 	if _, err := prov.giveItem(context.Background(), "Bheal", 9434, 1); err != nil {
 		t.Fatal(err)
 	}
-	bags.set(9434, 0) // equipped: out of the bags
+	bags.set(9434, 0)
+	bags.setWorn(4, 9434) // equipped: out of the bags
 	prov.marks().setWorn("test2", "Bheal", 9434)
+	s.fake.mu.Lock()
+	s.fake.botFn = func(line string) []string { return []string{} } // unreadable .bot inv
+	s.fake.mu.Unlock()
 	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if !ok {
-		t.Fatalf("a worn piece is not a failed clear: %s", ev)
-	}
-	if !strings.Contains(ev, "worn") || strings.Contains(ev, "cleared 1") {
-		t.Fatalf("evidence must say the piece stays worn, not cleared: %q", ev)
+	if ok || !strings.Contains(ev, "UNVERIFIED") || strings.Contains(ev, "cleared 1") {
+		t.Fatalf("an unverified worn clear must fail closed UNVERIFIED: ok=%v %q", ok, ev)
 	}
 	if len(prov.marks().forBot("test2", "Bheal")) != 1 {
 		t.Fatal("the worn mark must stay")
@@ -518,5 +650,58 @@ func TestTrialTeardownClearsGivenItems(t *testing.T) {
 	}
 	if bags.count(1708) != 0 || len(prov.marks().forBot("test2", "Bheal")) != 0 {
 		t.Fatal("the bags and the mark must be empty after the teardown clear")
+	}
+}
+
+// Item (1) of #278: teardown unequips and destroys only the worn items this
+// trial added (leaving pre-existing worn/bag items untouched) and frees bag
+// space first so the next trial's equip does not hit bags full.
+func TestClearGivenUnequipsAndDestroysOnlyTrialAddedWornItems(t *testing.T) {
+	prov, _, bags := bagProv(t)
+	bags.set(9999, 1)      // pre-existing bag item (not given by trial, must stay)
+	bags.setWorn(14, 5555) // pre-existing cloak (must stay)
+	bags.setWorn(10, 6666) // pre-existing ring (duplicate entry also equipped in slot 11 below)
+	bags.itemSlot[7720] = 0
+	bags.itemSlot[9434] = 4
+	bags.itemSlot[6666] = 11
+
+	// Trial gives a consumable (1708) and kit items (7720, 9434, 6666) and equips them.
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range []uint32{7720, 9434, 6666} {
+		if _, err := prov.giveItem(context.Background(), "Bheal", entry, 1); err != nil {
+			t.Fatal(err)
+		}
+		if eq, err := prov.TB.Equip(context.Background(), "Bheal", entry, true); err != nil || eq.Result != "equipped" {
+			t.Fatalf("equip %d failed: %v %+v", entry, err, eq)
+		}
+		prov.marks().setWorn("test2", "Bheal", entry)
+	}
+	// Now enforce tight 2-slot bag capacity: 9999 (untouchable) + 1708 (trial bag item) occupy
+	// all 2 slots, so unequip would fail bags-full unless ClearGiven removes 1708 from bags
+	// before unequipping and destroys each unequipped piece before the next unequip.
+	bags.bagSlots = 2
+
+	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
+	if !ok {
+		t.Fatalf("ClearGiven must unequip and clear worn trial items: ok=%v %s", ok, ev)
+	}
+	if bags.count(9999) != 1 || bags.wornAt(14) != 5555 || bags.wornAt(10) != 6666 {
+		t.Fatalf("pre-existing items touched: bag9999=%d slot14=%d slot10=%d", bags.count(9999), bags.wornAt(14), bags.wornAt(10))
+	}
+	if bags.wornAt(0) != 0 || bags.wornAt(4) != 0 || bags.wornAt(11) != 0 {
+		t.Fatalf("trial-added worn items still equipped: slot0=%d slot4=%d slot11=%d", bags.wornAt(0), bags.wornAt(4), bags.wornAt(11))
+	}
+	if bags.count(1708) != 0 || bags.count(7720) != 0 || bags.count(9434) != 0 || bags.count(6666) != 0 {
+		t.Fatalf("trial-added items still in bags: 1708=%d 7720=%d 9434=%d 6666=%d",
+			bags.count(1708), bags.count(7720), bags.count(9434), bags.count(6666))
+	}
+	if left := prov.marks().forBot("test2", "Bheal"); len(left) != 0 {
+		t.Fatalf("marks must be cleared after unequip+remove: %+v", left)
+	}
+	// Next trial's give+equip must fit in the freed bag slot without bags-full.
+	if _, err := prov.giveItem(context.Background(), "Bheal", 7720, 1); err != nil {
+		t.Fatalf("next trial give hit bags full: %v", err)
 	}
 }

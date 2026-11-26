@@ -195,6 +195,34 @@ func TestServeEquipSendsAutoEquip(t *testing.T) {
 	if len(bagPayload) < 2 || bagPayload[len(bagPayload)-2] != 30 || bagPayload[len(bagPayload)-1] != 0 {
 		t.Fatalf("bag equip payload % X", bagPayload)
 	}
+
+	// Passing dst targets a specific equipment slot via SwapInvItem and never marks
+	// unrelated equipped slots (such as a starter shirt in slot 3) unconfirmed.
+	f3 := newItemWorld(t)
+	shirt := wire.GUID{Low: 0x9999, High: 0x0100}
+	f3.apply(
+		fragmentPlayer(map[int]wire.GUID{3: shirt, 30: itemBag, 35: itemPotion, 36: itemSword2}),
+		fragmentItem(shirt, 38, 1),
+	)
+	var swapCore uint32
+	f3.onSend = func(f *itemWorld, core uint32, payload []byte) {
+		swapCore = core
+	}
+	if _, err := f3.s.serveEquip(context.Background(), serveEquipParams{Slot: testInt(36), Dst: testInt(0)}); err != nil {
+		t.Fatalf("dst equip: %v", err)
+	}
+	if swapCore != wire.CMSGSwapInvItem {
+		t.Fatalf("dst equip sent %s, want CMSGSwapInvItem", wire.ClientName(swapCore))
+	}
+	inv3, err := f3.s.serveInventoryItems(serveInventoryParams{})
+	if err != nil {
+		t.Fatalf("inventory: %v", err)
+	}
+	for _, it := range inv3 {
+		if it.ItemEntry == 38 && it.Unconfirmed {
+			t.Fatalf("unrelated equipped entry 38 became unconfirmed: %+v", it)
+		}
+	}
 }
 
 func TestServeUseItemNeedsSpell(t *testing.T) {
