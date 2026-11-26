@@ -43,6 +43,10 @@ remapping check:
 - **PG 0 `alt_entries`**: added `"alt_entries": {"forever": {"11372": 11371}}` because ForeverCore pools those two spots
   with Razzashi Serpent `11371`; PG 3 and PG 4 already match `11372` within 0.00 yd and needed no override.
 - **PG 10, PG 11, PG 12 radii**: widened `4.6 -> 7`, `1 -> 4`, `5.5 -> 9` to match ForeverCore spawn offsets.
+- **PG 15 radius (KNOWN MISS)**: left at `13`. Seven of the group's ten expected spawns stand inside it; the next
+  three are `14.5`, `15.4` and `24.0` yd (3D) from the pull point, so a radius that reaches them exceeds the +5 yd
+  widening cap (`18`) and the group stays a KNOWN MISS under A4.2. The live PASS allows its `pull_end` to be
+  `stranger`.
 - **Scout coordinate fixes**:
   - Applied `pull_groups[0].approach[0]` from the scout patch (moving clear of the entry pack), clearing step 3's
     aggro failure without regressing Turtle lints.
@@ -66,7 +70,8 @@ Commands executed offline with ForeverCore map `309` exports and mmaps alongside
 | Check | Before | After | Gate |
 | :--- | :--- | :--- | :--- |
 | Turtle `plan-check` | `exit=11`, `849` pts, `0` failed, `853` lints, `162` errs | `exit=11`, `849` pts, `0` failed, `853` lints, `161` errs | Pass (`<= before`) |
-| Forever `plan-scout` (leg 0) | `54` steps: `12 ok, 23 warn, 19 fail` | `54` steps: `13 ok, 24 warn, 17 fail` (`step 3` cleared) | Pass (only `joiners`, 1-body `aggro`, step-17 cut row) |
+| Forever `plan-scout` (leg 0) | `54` steps: `12 ok, 23 warn, 19 fail` | `54` steps: `13 ok, 24 warn, 17 fail` (`step 3` cleared) | Pass (17 fails: 12 `joiners`, 4 single-body `aggro`, the step-17 cut row) |
+| Spawn match, leg 0 | `PG 10`, `11`, `12` short; `PG 15` `7/10` | `PG 10`–`12` reach every spawn; `PG 15` still `7/10`; boss `14517` within `11.7` yd | Pass (`PG 15` is the listed KNOWN MISS) |
 | Forever `plan-check` leg 0 | `50 warn, 19 err`, `0` failed pts | `52 warn, 17 err`, `0` failed pts | Pass (`0` failed pts, allowed err kinds only) |
 | Forever `plan-check` legs 1–8 | `125 err`, `3` failed pts | `694` lints (`569 warn, 125 err`), `3` failed pts | Recorded in `forever_status` |
 | `plan-export --forever --report` | Refused (`kind; raid; phase_entries; summon_open_step`) | Refused (same fields; `alt_entries` accepted) | Pass (player-led reads JSON) |
