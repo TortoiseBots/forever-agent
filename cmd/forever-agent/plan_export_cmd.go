@@ -20,8 +20,8 @@ import (
 )
 
 const planExportUsage = "usage: forever-agent plan-export [--dir dungeons] [--allow-draft] [--drop-companions-loot] [--carrier-chests] [--gm-cross-direct] [--approach-hops] [--floor-aware] [--skip-legs NAME,...] [--with-optional NAME,...] [--with-legs NAME,...] [--mmaps DIR] [--rev SHA] [--stamp YYYYMMDDHHMMSS] [--force] --out FILE|DIR (<plan>... | --all-live)\n" +
-	"       forever-agent plan-export --forever [--report] [--dir dungeons] [--mmaps DIR] [--floor-aware] [--approach-hops] [--skip-legs NAME,...] [--with-optional NAME,...] [--with-legs NAME,...] [--rev SHA] [--force] --out DIR|FILE (<plan>... | --all-live)\n" +
-	"       forever-agent plan-export --forever --report [--dir dungeons] [<plan>...]"
+	"       forever-agent plan-export --forever [--report] [--dir dungeons] [--mmaps DIR] [--last-leg NAME] [--floor-aware] [--approach-hops] [--skip-legs NAME,...] [--with-optional NAME,...] [--with-legs NAME,...] [--rev SHA] [--force] --out DIR|FILE (<plan>... | --all-live)\n" +
+	"       forever-agent plan-export --forever --report [--dir dungeons] [--last-leg NAME] [<plan>...]"
 
 // migrationName is what a TortoiseBots world migration is called (data/sql/world/).
 var migrationName = regexp.MustCompile(`^\d{14}_world\.sql$`)
@@ -47,6 +47,7 @@ func planExportCmd(args []string, stdout, stderr io.Writer) int {
 	skipLegs := fs.String("skip-legs", "", "leg names (comma list) left out of the rows, each with a warning; the later legs close up. An unknown name is refused")
 	withOptional := fs.String("with-optional", "", "optional leg names (comma list) written into the rows anyway (Zul'Farrak's gahzrilla), each with a warning: the item the leg needs is the operator's to give to the lead bot before .bot run start (a GM .additem); a name that is no optional leg is refused")
 	withLegs := fs.String("with-legs", "", "skip_export leg names (comma list) written into the rows anyway (Zul'Farrak's farraki_arena, zeljeb), each with a warning; a name that is no skip_export leg is refused")
+	lastLeg := fs.String("last-leg", "", "with --forever: write only this leg and the ones before it (the leg's name in the plan); a raid plan needs it, and every leg it writes must be forever_checked")
 	force := fs.Bool("force", false, "let --out replace an existing file (never edit a migration that is applied)")
 	forever := fs.Bool("forever", false, "write the rows a server module that runs dungeon plans reads: the plan tables, one ai_dungeon_step_unit row per pack member, boss, boss.first add and patrol unit, the boss rows, and the plan's object steps (open, open_proof, use_on, loot, wait_object, wait_clear rows) with this server's object entries (the plan's alt_entries, keyed forever); a plan field the format cannot carry is refused by name")
 	report := fs.Bool("report", false, "with --forever: print one record per plan file (exported, or refused and why) and write nothing")
@@ -71,7 +72,7 @@ func planExportCmd(args []string, stdout, stderr io.Writer) int {
 			}
 		}
 		return planExportForever(planExportForeverArgs{
-			dir: *dir, out: *out, mmaps: *mmaps, rev: *rev, stamp: *stamp,
+			dir: *dir, out: *out, mmaps: *mmaps, rev: *rev, stamp: *stamp, lastLeg: *lastLeg,
 			allLive: *allLive, allowDraft: *allowDraft, force: *force, report: *report,
 			floorAware: *floorAware, approachHops: *approach,
 			skipLegs: skip, withOptional: optional, withLegs: extra, names: fs.Args(),
@@ -95,6 +96,8 @@ func planExportCmd(args []string, stdout, stderr io.Writer) int {
 	case *carrierChests && !*dropLoot:
 		fmt.Fprintln(stderr, planExportUsage)
 		return fail("--carrier-chests needs --drop-companions-loot (the companions_loot-false leg's chest rows are not exported without it)")
+	case *lastLeg != "":
+		return fail("--last-leg is the --forever mode's (one plan's rows up to a leg): the run-leader export writes every leg")
 	}
 	if *allLive {
 		m, err := filepath.Glob(filepath.Join(*dir, "*.json"))

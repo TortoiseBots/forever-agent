@@ -89,10 +89,11 @@ pass.
 | `live-checked` | The plan was run live by a party. |
 
 `forever_status` is a separate axis: `n/a` (Turtle-custom content a Forever server does not have), `todo` (not
-exported for a Forever server yet), `exported` (`tools/dungeongen` wrote the plan's run-leader rows for one and its
-spawns were checked against a Forever world export), `refused` (it was checked against ForeverCore data and cannot
-be cleared for a Forever run: the free text names the refused field, or the spawns or the route the server does not
-have) or `live-checked` (it was run on a Forever server). `plan-list` prints the whole value, free text included.
+fully cleared for a Forever server: legs or fields a Forever check has not reached), `exported` (`tools/dungeongen`
+wrote the plan's run-leader rows for one and its spawns were checked against a Forever world export), `refused` (it
+was checked against ForeverCore data and cannot be cleared for a Forever run: the free text names the refused field,
+or the spawns or the route the server does not have) or `live-checked` (it was run on a Forever server). `plan-list`
+prints the whole value, free text included.
 
 The check runs in batches (issue #223); a plan's own `forever_status` and `notes` carry the numbers. Of the classic
 dungeons, `stormwind_stockade` and `ragefire_chasm` are `exported`, and `deadmines`, `shadowfang_keep`,
@@ -101,10 +102,11 @@ dungeons, `stormwind_stockade` and `ragefire_chasm` are `exported`, and `deadmin
 `zulfarrak`, `maraudon_purple`, `maraudon_orange`, `lower_blackrock_spire`, `blackrock_depths`, `scholomance`, the
 three Dire Maul wings (`dire_maul_east`, `dire_maul_north`, `dire_maul_west`), `stratholme_live`,
 `stratholme_undead` and `wailing_caverns-extra` are `refused`, each with the field, the spawns or the segments its
-value names. `zul_gurub` is `todo (offline-checked ...)` on leg 0 (`high_priestess_jeklik`; raid rows are not exported,
-so a player-led run reads the plan directly), while `wailing_caverns`, `molten_core`, `onyxias_lair` and
-`ruins_of_ahnqiraj` remain `todo` (`molten_core` and `onyxias_lair` carry Turtle-only entries and would be refused on
-ForeverCore data).
+value names. `zul_gurub` is `todo (offline-checked ...)` on leg 0 (`high_priestess_jeklik`, the leg marked
+`forever_checked`; `plan-export --forever --last-leg high_priestess_jeklik` writes its module plan rows, while legs
+1-8 are not remapped and a player-led run reads them from the plan), while `wailing_caverns`, `molten_core`,
+`onyxias_lair` and `ruins_of_ahnqiraj` remain `todo` (`molten_core` and `onyxias_lair` carry Turtle-only entries and
+would be refused on ForeverCore data).
 
 A naming rule that bites: `plan-export` refuses a `draft` plan unless `--allow-draft` is passed, and
 `--all-live` exports only `live-checked` plans. The plan check does not care about the status: it walks the file as
@@ -128,6 +130,7 @@ Every part is optional, but a leg must hold at least a pull group, a step, a bos
 | `after_boss` | Steps done once the boss is dead. Same kinds as `steps`. |
 | `optional` | `{"item":N,"name":"..."}`: the leg is skipped, not failed, when neither the lead bot nor the carrier carries that item. |
 | `skip_export` | Keeps the leg out of the run-leader rows unless `plan-export --with-legs` names it. Never with `optional`. |
+| `forever_checked` | `false`: the leg's points and packs were checked against ForeverCore data (plan-scout and plan-check `--forever`) and remapped where they differed. `plan-export --forever` writes a raid plan only up to its last checked leg and refuses a `--last-leg` that reaches an unchecked one. |
 | `companions_loot` | `false` orders the party's corpse and object looting off for the whole leg. |
 | `leftover_entries` | Summoned creatures a step leaves idle; the driver sweeps them before the next batch. |
 | `needs_walk` | The `to` point is not on the navmesh; the mapping walk must find the real waypoint. |

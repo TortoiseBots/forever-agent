@@ -3,7 +3,7 @@
   "name": "zul_gurub",
   "kind": "raid",
   "status": "mapped (live-walked in ZG walks 31-34: Jeklik, Venoxis, Mar'li, Thekal and Mandokir killed; Arlokk via the gong step; Hakkar pending)",
-  "forever_status": "todo (2026-11-26 offline-checked on ForeverCore data: leg 0 passes plan-scout and plan-check with 17 allowed joiners, one-body aggro and step-17 cut-row findings and 52 warnings; legs 1-8: 694 lints (125 errors, 569 warnings) and 3 failed points; raid rows are not exported, a player-led run reads the plan)",
+  "forever_status": "todo (2026-11-26 offline-checked on ForeverCore data: leg 0 passes plan-scout and plan-check with 17 allowed joiners, one-body aggro and step-17 cut-row findings and 52 warnings; legs 1-8: 694 lints (125 errors, 569 warnings) and 3 failed points; leg 0's module plan rows are exported (plan-export --forever --last-leg high_priestess_jeklik), legs 1-8 are not remapped)",
   "map": 309,
   "entrance": {"x": -11916.6, "y": -1243.52, "z": 92.5338},
   "entrance_trigger": 3928,
@@ -405,6 +405,7 @@
         }
       ],
       "skip": [14758, 15091],
+      "forever_checked": true,
       "boss": {
         "entry": 14517,
         "position": {"x": -12289.1, "y": -1384.13, "z": 134.27},

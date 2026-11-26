@@ -4,7 +4,7 @@ title: Plan tools
 description: Check, lint, probe, stage, export, scout and compare a dungeon plan offline, before it costs a run.
 tags: [dungeons, tools, checks, export]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T19:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T16:00:00Z }
 sources:
   - id: plan-check
     resource: cmd/forever-agent/plan_check_cmd.go
@@ -209,7 +209,8 @@ forever-agent plan-export [--dir dungeons] [--allow-draft] [--drop-companions-lo
     [--gm-cross-direct] [--approach-hops] [--floor-aware] [--skip-legs NAME,...] [--with-optional NAME,...] \
     [--with-legs NAME,...] [--mmaps DIR] [--rev SHA] [--stamp YYYYMMDDHHMMSS] [--force] --out FILE|DIR (<plan>... | --all-live)
 forever-agent plan-export --forever ... --out DIR|FILE (<plan>... | --all-live)
-forever-agent plan-export --forever --report [--dir dungeons] [<plan>...]
+forever-agent plan-export --forever --last-leg NAME ... --out DIR|FILE <plan>...
+forever-agent plan-export --forever --report [--dir dungeons] [--last-leg NAME] [<plan>...]
 ```
 
 | Flag | Default | Meaning |
@@ -227,6 +228,7 @@ forever-agent plan-export --forever --report [--dir dungeons] [<plan>...]
 | `--stamp` | now, UTC | The migration's timestamp. |
 | `--force` | off | Replace an existing file; never edit a migration that is applied. |
 | `--forever` | off | Write the rows a ForeverCore server module reads (its own object entries from `alt_entries`, one unit row per pack member), and refuse a plan field the format cannot carry. |
+| `--last-leg` | none | With `--forever`: write that leg and the ones before it and leave the rest out; a name the plan does not hold is refused. A raid plan needs it, and every leg the selection writes must carry `forever_checked`: a leg a Forever check has not remapped may name spawns the server does not have. |
 | `--report` | off | With `--forever`: print one record per plan file (exported, or refused and why) and write nothing; it cannot be combined with `--out`. |
 
 A file whose base name is not `YYYYMMDDHHMMSS_world.sql` gets a note: the server's updater will not take it. The

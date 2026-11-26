@@ -4,7 +4,7 @@ title: Plan tools troubleshooting
 description: The errors the plan check, export, probe, scout, oracle and route-edit tools print, what they mean, and the fix.
 tags: [dungeons, plans, troubleshooting]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-24T21:48:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T16:00:00Z }
 sources:
   - id: plan-check
     resource: cmd/forever-agent/plan_check_cmd.go
@@ -49,6 +49,9 @@ flags and outputs are in [Plan tools](plan-tools.md); the plan fields are in [Pl
 | `plan <name>: ... is a draft ... --allow-draft` | A draft plan is refused without opting in. Pass `--allow-draft` for a named plan, or finish the mapping walk and mark it mapped first. With `--all-live`, drafts are skipped with a note. |
 | `plan <name>: companions_loot is false ... plan not exported` | The rows cannot carry a leg that turns looting off. Pass `--drop-companions-loot` and turn the bots' looting off in the run setup; add `--carrier-chests` to export that leg's chests as carrier rows. |
 | `plan <name>: skip-legs names "X", which is no leg of the plan` (and the `with-optional` and `with-legs` forms) | A name in one of the leg filters matches no leg, or the wrong kind: `--with-optional` needs an `optional` leg, `--with-legs` a `skip_export` leg. Check the spelling against the leg names. |
+| `plan <name>: --last-leg "X" is not a leg of the plan (legs: ...)` | The name is not one of the plan's legs. Check the spelling against the listed names. |
+| `plan <name>: a raid plan exports only the legs remapped for ForeverCore; pass --last-leg <name>` | A raid plan's rows are written only up to a leg a Forever check has marked `forever_checked`; name that leg (the message names the last one). Exporting no leg of an unchecked raid is refused. |
+| `plan <name>: --last-leg <name>: leg <i> (<leg>) is not remapped for ForeverCore (forever_checked)` | The selection reaches a leg no Forever check has remapped. Stop the selection at the leg the message names as the last remapped one, or check that leg against ForeverCore data first (plan-scout and plan-check `--forever`) and mark it. |
 | `... exists: a migration that is applied is never edited` | `--out` refuses to replace a file. Export a new timestamped name, or pass `--force` when the file was never applied. |
 | `plan-export: a step the run leader cannot do` / a `CUT:` line | An agent-only step (an agent gossip, a `unit` wait without a hold, an agent area trigger) cut the export at its leg. Give the step a run leader form (a `hold`), or accept the cut: everything before it was exported. A plan whose first leg holds such a step is refused. |
 | The migration's base name is not `YYYYMMDDHHMMSS_world.sql` | The server's updater will not take it. Rename it with a timestamp. |

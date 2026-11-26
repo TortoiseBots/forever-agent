@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -247,12 +248,8 @@ func TestForeverRefusals(t *testing.T) {
 		{"gm cross", func(p *dungeon.Plan) {
 			p.Legs[0].Via = []dungeon.Waypoint{{Point: dungeon.Point{X: 2}, GMCross: true}}
 		}, "legs[0].via[0].gm_cross"},
-		{"raid kind", func(p *dungeon.Plan) {
-			p.Kind = dungeon.KindRaid
-		}, "kind"},
-		{"raid block", func(p *dungeon.Plan) {
-			p.Raid = &dungeon.RaidSpec{Size: 10}
-		}, "raid"},
+		// A raid plan's kind and raid block are not refused fields: BuildForever refuses it without a --last-leg selection and
+		// drops the block with a note once one is given (TestForeverRaidLegSelection).
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -886,5 +883,151 @@ func TestExportPullAltEntriesForever(t *testing.T) {
 	}
 	if turtlePull == nil || fmt.Sprint(turtlePull.Entries) != "[11372 11350]" {
 		t.Fatalf("turtle pull row = %+v; want entries [11372 11350]", turtlePull)
+	}
+}
+
+func loadZG(t *testing.T) *dungeon.Plan {
+	t.Helper()
+	p, err := dungeon.Load("../../dungeons/zul_gurub.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestForeverZulGurubLeg0: the raid's first leg is the one a Forever check reached, and --last-leg exports exactly it: the leg's
+// 16 packs (the ForeverCore pack at pull group 0 in place of the plan's serpent), its radius columns, its boss and its boss row,
+// with no leg 1-8 row. The export reads back as it was built.
+func TestForeverZulGurubLeg0(t *testing.T) {
+	p := loadZG(t)
+	if !p.Legs[0].ForeverChecked {
+		t.Fatal("zul_gurub leg 0 (high_priestess_jeklik) is the leg remapped on ForeverCore data (#279) and must be forever_checked")
+	}
+	rep, err := BuildForever(p, Options{LastLeg: "high_priestess_jeklik", Source: "forever-agent dungeons/zul_gurub.json"})
+	if err != nil {
+		t.Fatalf("BuildForever: %v", err)
+	}
+	if len(rep.Rows.Legs) != 1 || rep.Rows.Legs[0].Name != "high_priestess_jeklik" || rep.Rows.Legs[0].Leg != 0 {
+		t.Fatalf("legs = %+v; want only high_priestess_jeklik as leg 0", rep.Rows.Legs)
+	}
+	pulls := 0
+	for _, s := range rep.Rows.Steps {
+		if s.Leg != 0 {
+			t.Fatalf("step %d is in leg %d; the export stops after leg 0", s.Seq, s.Leg)
+		}
+		if s.Kind == KindPull {
+			pulls++
+		}
+	}
+	if pulls != len(p.Legs[0].PullGroups) {
+		t.Fatalf("%d pull rows; want the leg's %d groups", pulls, len(p.Legs[0].PullGroups))
+	}
+	// Pull group 0: the ForeverCore serpent (11371) for both plan members, and the widened radius in the row.
+	var row *StepRow
+	for i := range rep.Rows.Steps {
+		if rep.Rows.Steps[i].Kind == KindPull {
+			row = &rep.Rows.Steps[i]
+			break
+		}
+	}
+	if row == nil {
+		t.Fatal("no pull row")
+	}
+	if fmt.Sprint(row.Entries) != "[11371]" || row.Radius != 11 {
+		t.Fatalf("pull group 0 row = entries %v radius %v; want the ForeverCore serpent [11371] and radius 11", row.Entries, row.Radius)
+	}
+	var units []UnitRow
+	for _, u := range rep.Units {
+		if u.Seq == row.Seq && u.Role == UnitPack {
+			units = append(units, u)
+		}
+	}
+	if len(units) != 2 || units[0].Entry != 11371 || units[1].Entry != 11371 ||
+		units[0].X != p.Legs[0].PullGroups[0].Positions[0].X || units[0].Y != p.Legs[0].PullGroups[0].Positions[0].Y {
+		t.Fatalf("pull group 0 unit rows = %+v; want the two 11371 pack members at the plan's positions", units)
+	}
+	if len(rep.Bosses) != 1 || rep.Bosses[0].Entry != 14517 || rep.Bosses[0].Map != 309 {
+		t.Fatalf("boss rows = %+v; want Jeklik (14517) on map 309", rep.Bosses)
+	}
+	if len(rep.Refused) != 0 {
+		t.Fatalf("refused fields %v", rep.Refused)
+	}
+	kindCarried := false
+	for _, c := range rep.Carried {
+		if c == "kind" {
+			kindCarried = true
+		}
+	}
+	if !kindCarried {
+		t.Fatal("kind is not carried for the selected raid export")
+	}
+	sql := WriteForeverSQL([]ForeverReport{rep})
+	back, err := ParseForever(sql)
+	if err != nil {
+		t.Fatalf("the export does not read back: %v", err)
+	}
+	if err := EqualForever([]ForeverReport{rep}, back); err != nil {
+		t.Fatalf("the export does not read back as its rows: %v", err)
+	}
+}
+
+// TestForeverRaidLegSelection: a raid plan needs --last-leg, and every leg the selection writes must be forever_checked; a leg the
+// plan has not remapped refuses the export by name instead of writing rows the server may not have spawns for.
+func TestForeverRaidLegSelection(t *testing.T) {
+	p := loadZG(t)
+	if _, err := BuildForever(p, Options{}); err == nil || !strings.Contains(err.Error(), "--last-leg") {
+		t.Fatalf("no selection: err = %v; want a refusal that names --last-leg", err)
+	}
+	_, err := BuildForever(p, Options{LastLeg: "high_priest_venoxis"})
+	if err == nil || !strings.Contains(err.Error(), "leg 1 (high_priest_venoxis)") || !strings.Contains(err.Error(), "forever_checked") {
+		t.Fatalf("--last-leg high_priest_venoxis: err = %v; want a refusal of leg 1, not remapped", err)
+	}
+	if _, err := BuildForever(p, Options{LastLeg: "nowhere"}); err == nil || !strings.Contains(err.Error(), "not a leg of the plan") {
+		t.Fatalf("--last-leg nowhere: err = %v; want an unknown-leg refusal", err)
+	}
+	// A leg that names itself checked is exported; the check is the plan's, so clearing it refuses the export.
+	q := *p
+	q.Legs = slices.Clone(p.Legs)
+	q.Legs[0].ForeverChecked = false
+	if _, err := BuildForever(&q, Options{LastLeg: "high_priestess_jeklik"}); err == nil || !strings.Contains(err.Error(), "no leg is remapped") {
+		t.Fatalf("no checked leg: err = %v; want a refusal that names forever_checked", err)
+	}
+
+	// With the selection, the plan-level raid fields no longer refuse: kind is carried and the raid block is dropped with a
+	// note, because the module's plan table has no raid column.
+	rp := parsePlan(t, `{"version":1,"name":"raidcave","kind":"raid","status":"live-checked","map":309,
+ "entrance":{"x":0,"y":0,"z":0},"raid":{"size":20,"tanks":3,"healers":5,"dps":12},
+ "legs":[{"name":"a","forever_checked":true,"to":{"x":1,"y":0,"z":0},
+          "pull_groups":[{"entries":[11371],"positions":[{"x":1,"y":0,"z":0}]}]}]}`)
+	got, err := BuildForever(rp, Options{LastLeg: "a"})
+	if err != nil {
+		t.Fatalf("a selected, checked raid leg must export: %v", err)
+	}
+	if len(got.Refused) != 0 {
+		t.Fatalf("refused %v", got.Refused)
+	}
+	raidDropped := false
+	for _, d := range got.Dropped {
+		if d.Field == "raid" {
+			raidDropped = true
+		}
+	}
+	if !raidDropped {
+		t.Fatalf("the raid block is not dropped with a note: %+v", got.Dropped)
+	}
+}
+
+// TestExportedLegsLastLeg: --last-leg numbers the legs it writes from 0 and leaves the rest out, with the skip rules as before.
+func TestExportedLegsLastLeg(t *testing.T) {
+	p := parsePlan(t, `{"version":1,"name":"three","status":"live-checked","map":1,"entrance":{"x":0,"y":0,"z":0},
+ "legs":[{"name":"a","to":{"x":1,"y":0,"z":0},"pull_groups":[{"entries":[1],"positions":[{"x":1,"y":0,"z":0}]}]},
+         {"name":"b","to":{"x":2,"y":0,"z":0},"pull_groups":[{"entries":[2],"positions":[{"x":2,"y":0,"z":0}]}]},
+         {"name":"c","to":{"x":3,"y":0,"z":0},"pull_groups":[{"entries":[3],"positions":[{"x":3,"y":0,"z":0}]}]}]}`)
+	m := ExportedLegs(p, Options{LastLeg: "b"})
+	if len(m) != 2 || m[0] != 0 || m[1] != 1 {
+		t.Fatalf("ExportedLegs = %v; want legs 0 and 1", m)
+	}
+	if _, ok := m[2]; ok {
+		t.Fatal("leg 2 is in the map; --last-leg b stops before it")
 	}
 }
