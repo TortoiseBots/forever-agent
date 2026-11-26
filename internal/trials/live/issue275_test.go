@@ -236,12 +236,55 @@ func TestTrialTeardownDoesNotProveALogoutFromTheRosterAlone(t *testing.T) {
 	}
 }
 
+// TestTrialTeardownUnitReadErrorIsNoProof pins the narrow not-in-view match: a
+// daemon without the unit method answers method-not-found, which says nothing
+// about the character; the logout stays unproved.
+func TestTrialTeardownUnitReadErrorIsNoProof(t *testing.T) {
+	s, f := newSetupFake(t)
+	f.units = []map[string]any{{"guid": gHire, "name": "Bheal", "type": "player", "level": 40,
+		"health": 1500, "max_health": 1500, "auras": []any{}}}
+	f.mu.Lock()
+	f.errCodes["unit"] = []int{-32601, -32601, -32601, -32601, -32601, -32601, -32601, -32601}
+	f.errMsg["unit"] = "method not found: unit"
+	f.mu.Unlock()
+	for range 20 {
+		s.scriptParty("Atank")
+	}
+	s.tbFn = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb logout"):
+			return []string{"TortoiseBots: Bheal is logging out."}
+		case strings.HasPrefix(line, ".tb role clear"):
+			return []string{"role-begin #T", "role bot=Acmd role= seq=8 status=queued #T",
+				"role-end role= target=Acmd count=1 records=1 queued=1 #T"}
+		}
+		return nil
+	}
+	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2",
+		TeardownPoll: time.Millisecond, LogoutWait: time.Millisecond}
+	r.tbRunner = s.runner
+	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal", TrialID: "t",
+		Guids: Guids{Bot: gHire}}
+	problems := r.trialTeardown(context.Background(), rep, "t")
+	found := false
+	for _, p := range problems {
+		if strings.Contains(p, "logout of Bheal") && strings.Contains(p, "unit read failed") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a method-not-found unit read is no proof of a logout: %v", problems)
+	}
+}
+
 // TestTalentKitAbsentOnForeverIsSkipped pins item 6: rogue combat's copied
-// marker kit is 52507 (Blade Rush), which the Forever spell table does not
-// hold. The trial must be SKIPPED with needs=bot_spec, not sent a learn the
-// server can only answer `unknown`.
+// marker kit is 52507 (Blade Rush), which the server answers `unknown` for.
+// The trial must be SKIPPED with needs=bot_spec, never INVALID from the learn.
 func TestTalentKitAbsentOnForeverIsSkipped(t *testing.T) {
 	s, _ := newSetupFake(t)
+	s.scriptTB(".tb learn Bnrog 52507", "learn-begin #T",
+		"learn bot=Bnrog spell=52507 result=unknown name=Blade%20Rush #T",
+		"learn-end bot=Bnrog count=1 records=1 learned=0 #T")
 	prov := levelProv(s)
 	prov.TB = tbcmd.NewClient(s.runner)
 	row := prov.ensureTalents(context.Background(), BotSpec{Class: "rogue", Spec: "combat"}, "Bnrog")
@@ -255,7 +298,22 @@ func TestTalentKitAbsentOnForeverIsSkipped(t *testing.T) {
 	if needs := skippedIn(ev); needs != "bot_spec" {
 		t.Fatalf("want SKIPPED needs=bot_spec, got %q", ev)
 	}
-	if !strings.Contains(ev, "52507") {
-		t.Fatalf("the skip must name the missing id: %q", ev)
+	if !strings.Contains(ev, "52507") || !strings.Contains(ev, "unknown") {
+		t.Fatalf("the skip must name the missing id and the server's answer: %q", ev)
+	}
+}
+
+// TestTalentKitInvalidIsStillAFailure keeps the other learn answers a failure:
+// the server knows the spell and refused it, which is not a server gap.
+func TestTalentKitInvalidIsStillAFailure(t *testing.T) {
+	s, _ := newSetupFake(t)
+	s.scriptTB(".tb learn Bnrog 52507", "learn-begin #T",
+		"learn bot=Bnrog spell=52507 result=not-learned name=Blade%20Rush #T",
+		"learn-end bot=Bnrog count=1 records=1 learned=0 #T")
+	prov := levelProv(s)
+	prov.TB = tbcmd.NewClient(s.runner)
+	row := prov.ensureTalents(context.Background(), BotSpec{Class: "rogue", Spec: "combat"}, "Bnrog")
+	if rowOK(row) || skippedIn(rowEvidence(row)) != "" {
+		t.Fatalf("not-learned is a failed row, not a SKIP: %v", row)
 	}
 }

@@ -16,6 +16,7 @@ package live
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -553,10 +554,16 @@ func (r *Runner) logoutSettled(ctx context.Context, client *Client, name, guid s
 	return true, "the party roster dropped it and the server no longer answers its unit"
 }
 
-// isNotInView is the serve's answer for a guid the world no longer holds.
+// isNotInView is the serve's exact answer for a guid the world no longer
+// holds: an RPC error -32003 whose message says the unit is not in view.
+// Anything else (a method-not-found from a skewed daemon, a transport error)
+// is not evidence the character left.
 func isNotInView(err error) bool {
-	t := strings.ToLower(err.Error())
-	return strings.Contains(t, "not in view") || strings.Contains(t, "not found")
+	var rpc *RPCError
+	if errors.As(err, &rpc) {
+		return rpc.Code == -32003 && strings.Contains(strings.ToLower(rpc.Message), "not in view")
+	}
+	return false
 }
 
 // rosterHas reads the party roster and reports whether name is still on it.

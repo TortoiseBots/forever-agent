@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
-	"github.com/pjerra/forever-agent/internal/foreverspells"
 	"github.com/pjerra/forever-agent/internal/trials/data"
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
 )
@@ -644,16 +643,6 @@ func (p *Provisioner) ensureTalents(ctx context.Context, spec BotSpec, name stri
 	if len(ids) == 0 {
 		return rowOf("bot_spec", false, spec.Spec, "no talent kit for "+spec.Class+"/"+spec.Spec+" (specs.json): the build cannot be proven")
 	}
-	// A kit the Forever spell table does not hold cannot be learned: the
-	// module answers `unknown` for every such id (2026-11-25: rogue combat's
-	// copied 52507). That is the server's gap, not a trial failure, so the
-	// row is a SKIP that names the ids; never a learn the server can only
-	// refuse. A build with no Forever spell data keeps the old path.
-	if missing := spellsMissingOnForever(ids); len(missing) > 0 {
-		return rowOf("bot_spec", false, spec.Spec, fmt.Sprintf(
-			"SKIPPED needs=bot_spec: spell(s) %s of the %s/%s kit are not in the Forever spell table, so the build cannot be proven",
-			joinUint32s(missing), spec.Class, spec.Spec))
-	}
 	tctx, cancel := p.ctxOf(ctx)
 	defer cancel()
 	rep, err := p.TB.Learn(tctx, name, ids...)
@@ -664,44 +653,27 @@ func (p *Provisioner) ensureTalents(ctx context.Context, spec BotSpec, name stri
 		}
 		return rowOf("bot_spec", false, spec.Spec, ".tb learn "+name+": "+err.Error())
 	}
+	// The server's own learn record is the evidence: a spell it answers
+	// `unknown` for is one it cannot hold (2026-11-25: rogue combat's copied
+	// 52507), so the row is a SKIP that names the ids. `invalid` and
+	// `not-learned` stay failures: the server knows the spell and refused it.
+	var unknown []uint32
 	for _, r := range rep.Results {
 		switch r.Result {
 		case "learned", "known":
+		case "unknown":
+			unknown = append(unknown, r.Spell)
 		default:
 			return rowOf("bot_spec", false, spec.Spec, fmt.Sprintf(".tb learn %s: spell %d result %s", name, r.Spell, r.Result))
 		}
 	}
+	if len(unknown) > 0 {
+		return rowOf("bot_spec", false, spec.Spec, fmt.Sprintf(
+			"SKIPPED needs=bot_spec: .tb learn answered unknown for spell(s) %s of the %s/%s kit; this server cannot learn them",
+			joinUint32s(unknown), spec.Class, spec.Spec))
+	}
 	return rowOf("bot_spec", true, spec.Spec, fmt.Sprintf(".tb learn %s: %d spell(s) learned|known", name, len(rep.Results)))
 }
-
-// spellsMissingOnForever names the kit ids the Forever spell table does not
-// hold. A build without the table data returns nil (nothing is skipped): the
-// check exists only where the server's own spell data proves the gap.
-func spellsMissingOnForever(ids []uint32) []uint32 {
-	table := foreverSpellTable()
-	if !table.Loaded() {
-		return nil
-	}
-	var out []uint32
-	for _, id := range ids {
-		if _, ok := table.Lookup(id); !ok {
-			out = append(out, id)
-		}
-	}
-	return out
-}
-
-// foreverSpellTable is the embedded Forever spell table, parsed once per
-// process (Default parses on every call).
-func foreverSpellTable() *foreverspells.Table {
-	foreverTableOnce.Do(func() { foreverTable = foreverspells.Default() })
-	return foreverTable
-}
-
-var (
-	foreverTableOnce sync.Once
-	foreverTable     *foreverspells.Table
-)
 
 // joinUint32s renders ids as "a, b" for a row's evidence.
 func joinUint32s(ids []uint32) string {

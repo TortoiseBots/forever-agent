@@ -141,7 +141,7 @@ the same slot is refused `held by <holder>` (exit `15`) while the serve runs. Ru
 
 # Setup read-backs and server gaps
 
-Every setup row is a read-back of the server, so a server capability the bench cannot read is never turned into a `PASS`: the row is `SKIPPED needs=<check>` and the trial ends `SKIPPED`. The spec kit is the current example: the kit's ids come from `specs.json` and the Forever overlay, and an id the server's own spell table does not hold is `SKIPPED needs=bot_spec` with the ids in the evidence, instead of a `.tb learn` the module can only answer `unknown`.
+Every setup row is a read-back of the server, so a server capability the bench cannot read is never turned into a `PASS`: the row is `SKIPPED needs=<check>` and the trial ends `SKIPPED`. The spec kit is the current example: the kit's ids come from `specs.json` and the Forever overlay, and when the server's own `.tb learn` answers `unknown` for an id, the row is `SKIPPED needs=bot_spec` with the ids, instead of an `INVALID` from a learn this server cannot hold.
 
 Two reads are taken so that a live server's snapshots cannot fail a good setup or pass a bad one. The player's level is read from the server's own unit row (`status` is no fallback: a core can keep the login level there after `.levelup`, so a stale status that happens to equal the target is no proof), and the power set is polled in the units model for a moment before it is judged. Teardown sends `.tb logout` and waits until the hire is off the party roster **and** the server no longer answers its unit row, so neither a slow logout nor a bot that merely left the party can pass for one.
 
