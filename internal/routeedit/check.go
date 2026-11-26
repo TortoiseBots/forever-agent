@@ -34,13 +34,18 @@ type CheckResult struct {
 
 // Evaluate checks the edited plan, and the base plan to tell the issues the edit makes from the ones the plan had.
 func Evaluate(base, edited *dungeon.Plan, nav dungeon.Navmesh) CheckResult {
+	before, err := dungeon.CheckPlan(base, nav, 0)
+	if err != nil {
+		return CheckResult{Issues: []Issue{}, Warnings: []dungeon.PlanIssue{}, Exempt: []dungeon.PlanIssue{}, Skipped: err.Error()}
+	}
+	return EvaluateAgainst(before, edited, nav)
+}
+
+// EvaluateAgainst checks the edited plan against a base plan that was already checked (dungeon.CheckPlan), so the base plan
+// is checked once for many edits: ApplyFixes judges each fix against the one base check.
+func EvaluateAgainst(before *dungeon.PlanCheck, edited *dungeon.Plan, nav dungeon.Navmesh) CheckResult {
 	res := CheckResult{Issues: []Issue{}, Warnings: []dungeon.PlanIssue{}, Exempt: []dungeon.PlanIssue{}}
 	after, err := dungeon.CheckPlan(edited, nav, 0)
-	if err != nil {
-		res.Skipped = err.Error()
-		return res
-	}
-	before, err := dungeon.CheckPlan(base, nav, 0)
 	if err != nil {
 		res.Skipped = err.Error()
 		return res

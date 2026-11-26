@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
@@ -195,6 +196,108 @@ func TestApplyFixesDropsApproachOverFour(t *testing.T) {
 	}
 	if got := edited.Legs[0].PullGroups[1].Approach[0].X; got != 42 {
 		t.Fatalf("group 1 stand X = %v; want 42", got)
+	}
+}
+
+// TestSetStandMovesTheRowItNamesWithoutABoss: a move_stand fix edits the plan element its row names (the leg's to point, a
+// via, a pull group's approach point or stand, a step's stand). Only a boss row needs the leg's boss: a leg that has none
+// still takes every other stand move.
+func TestSetStandMovesTheRowItNamesWithoutABoss(t *testing.T) {
+	pt := dungeon.Point{X: 77, Y: 1, Z: 2}
+	plan := func() *dungeon.Plan {
+		return &dungeon.Plan{Version: 1, Name: "t", Map: 1, Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 10},
+			Via:  []dungeon.Waypoint{{Point: dungeon.Point{X: 5}}},
+			PullGroups: []dungeon.PullGroup{
+				{Entries: []uint32{1}, Positions: []dungeon.Point{{X: 20}}, Approach: []dungeon.Point{{X: 15}, {X: 16}}},
+			},
+			Steps: []dungeon.Step{stepStand(30)},
+		}}}
+	}
+	cases := []struct {
+		name string
+		ref  planexport.RowOrigin
+		got  func(*dungeon.Leg) dungeon.Point
+	}{
+		{"to", planexport.RowOrigin{Leg: 0, Part: "to", Group: -1}, func(l *dungeon.Leg) dungeon.Point { return l.To }},
+		{"via", planexport.RowOrigin{Leg: 0, Part: "via", Group: -1, Index: 0}, func(l *dungeon.Leg) dungeon.Point { return l.Via[0].Point }},
+		{"approach index 0", planexport.RowOrigin{Leg: 0, Part: "approach", Group: 0, Index: 0}, func(l *dungeon.Leg) dungeon.Point { return l.PullGroups[0].Approach[0] }},
+		{"pull (the stand)", planexport.RowOrigin{Leg: 0, Part: "pull", Group: 0}, func(l *dungeon.Leg) dungeon.Point { return l.PullGroups[0].Approach[1] }},
+		{"step", planexport.RowOrigin{Leg: 0, Part: "step", Group: -1, Index: 0}, func(l *dungeon.Leg) dungeon.Point { return l.Steps[0].AreaTrigger.Stand }},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			p := plan()
+			if err := setStand(p, c.ref, pt); err != nil {
+				t.Fatalf("setStand %+v: %v", c.ref, err)
+			}
+			if got := c.got(&p.Legs[0]); got != pt {
+				t.Fatalf("the %s point = %+v; want %+v", c.name, got, pt)
+			}
+		})
+	}
+	// A row that names the boss itself still needs one.
+	p := plan()
+	if err := setStand(p, planexport.RowOrigin{Leg: 0, Part: "boss", Group: -1}, pt); err == nil || err.Error() != "the leg has no boss" {
+		t.Fatalf("a boss row on a leg without a boss: err = %v; want %q", err, "the leg has no boss")
+	}
+}
+
+// holedPlanNet is fakePlanNet with a square off the mesh: every point with an X inside [x0, x1] is off the floor.
+type holedPlanNet struct{ x0, x1 float32 }
+
+func (holedPlanNet) Plan(_ uint32, from, to navmesh.Vec3) (navmesh.Path, error) {
+	return straight(from, to), nil
+}
+
+func (holedPlanNet) Raycast(uint32, navmesh.Vec3, navmesh.Vec3) (navmesh.Ray, error) {
+	return navmesh.Ray{Known: true, Clear: true}, nil
+}
+
+func (n holedPlanNet) Nearest(_ uint32, p navmesh.Vec3) (navmesh.Vec3, bool, error) {
+	if p[0] >= n.x0 && p[0] <= n.x1 {
+		return navmesh.Vec3{}, false, nil
+	}
+	return p, true, nil
+}
+
+// TestApplyFixesDropsTheFixesThatAddAPlanCheckIssue: the remap spec's A3 rule: an applicable fix that adds no plan-check
+// issue stays, one that adds an issue is dropped alone with the issue named in its reason, and the rest of the copy is
+// written.
+func TestApplyFixesDropsTheFixesThatAddAPlanCheckIssue(t *testing.T) {
+	base := func() *dungeon.Plan {
+		return &dungeon.Plan{Version: 1, Name: "t", Map: 1, Entrance: dungeon.Point{}, Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 10},
+			PullGroups: []dungeon.PullGroup{
+				{Entries: []uint32{100}, Positions: []dungeon.Point{{X: 100}}, Approach: []dungeon.Point{{X: 80}}},
+				{Entries: []uint32{101}, Positions: []dungeon.Point{{X: 200}}, Approach: []dungeon.Point{{X: 180}}},
+			},
+		}}}
+	}
+	bad := Fix{ID: 1, Step: 3, Kind: FixMoveStand, Apply: true,
+		Ref: &planexport.RowOrigin{Leg: 0, Part: "pull", Group: 0}, Stand: &FixStand{X: 450}}
+	good := Fix{ID: 2, Step: 5, Kind: FixMoveStand, Apply: true,
+		Ref: &planexport.RowOrigin{Leg: 0, Part: "pull", Group: 1}, Stand: &FixStand{X: 190}}
+	edited, res, dropped, err := ApplyFixes(base(), []Fix{bad, good}, holedPlanNet{x0: 400, x1: 500})
+	if err != nil {
+		t.Fatalf("ApplyFixes: %v", err)
+	}
+	if !res.Checked || res.NewIssues != 0 {
+		t.Fatalf("the copy's check: checked %v, %d new issue(s)", res.Checked, res.NewIssues)
+	}
+	if len(dropped) != 1 || dropped[0].ID != 1 || dropped[0].Step != 3 || dropped[0].Kind != FixMoveStand {
+		t.Fatalf("dropped = %+v; want fix 1 only", dropped)
+	}
+	if !strings.Contains(dropped[0].Reason, "off the mesh") {
+		t.Errorf("dropped reason %q; want the issue it adds (off the mesh)", dropped[0].Reason)
+	}
+	if got := edited.Legs[0].PullGroups[0].Approach[0].X; got != 80 {
+		t.Errorf("group 0 stand X = %v; want 80 (the dropped fix left it)", got)
+	}
+	if got := edited.Legs[0].PullGroups[1].Approach[0].X; got != 190 {
+		t.Errorf("group 1 stand X = %v; want 190", got)
 	}
 }
 

@@ -312,19 +312,19 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 		noteStops = true
 		data.Notes = append(data.Notes, fmt.Sprintf("live stops: %d of %d read", readStops, len(stops)))
 	}
-	// partialWalks counts the stands whose walk the server planned no full route for: each is recorded with the
+	// noRouteWalks counts the stands whose walk the server planned no full route for: each is recorded with the
 	// distance it reached and the pass goes on, and the one note says how many there were.
-	partialWalks, partialNoted := 0, false
-	notePartialWalks := func() {
-		if partialWalks == 0 || partialNoted {
+	noRouteWalks, noRouteNoted := 0, false
+	noteNoRouteWalks := func() {
+		if noRouteWalks == 0 || noRouteNoted {
 			return
 		}
-		partialNoted = true
-		data.Notes = append(data.Notes, fmt.Sprintf("live walks: %d stand(s) partial (walk_path had no full route; each recorded with the distance reached and the pass went on)", partialWalks))
+		noRouteNoted = true
+		data.Notes = append(data.Notes, fmt.Sprintf("live walks: %d stand(s) without a full route (walk_path had no full route; each recorded with the distance reached and the pass went on)", noRouteWalks))
 	}
 	abort := func(reason string) (planscout.LiveData, int, string) {
 		noteStopCount()
-		notePartialWalks()
+		noteNoRouteWalks()
 		data.Aborted = true
 		data.AbortReason = reason
 		return data, exitPlanScoutLiveAborted, reason
@@ -508,23 +508,23 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 				data.Walks[hop.Step] = planscout.WalkResult{Skipped: "walk budget"}
 				continue
 			}
-			if scoutPartialWalk(walkErr) {
-				// The server planned no full route, so the walk never started: that stand is partial, not the end of
-				// the pass. Record where the session stands and how far that is from the hop's origin, then go on to
-				// the next stand.
+			if scoutNoFullRoute(walkErr) {
+				// The server planned no full route, so the walk never started: that stand is a finding, not the end
+				// of the pass. Record where the session stands and how far that is from the hop's origin, then go on
+				// to the next stand.
 				st, serr := client.Status(ctx)
 				if serr != nil {
 					if r := ceiling(); r != "" {
 						return abort(r)
 					}
-					return abort(fmt.Sprintf("status after the partial route to %.1f %.1f %.1f: %v",
+					return abort(fmt.Sprintf("status after the no-full-route walk to %.1f %.1f %.1f: %v",
 						hop.Point.X, hop.Point.Y, hop.Point.Z, serr))
 				}
-				partialWalks++
+				noRouteWalks++
 				data.Walks[hop.Step] = planscout.WalkResult{
 					Stop:    dungeon.Point{X: st.X, Y: st.Y, Z: st.Z},
 					Reached: foreverDist2D(hop.From.X, hop.From.Y, st.X, st.Y),
-					Partial: true,
+					NoRoute: true,
 				}
 				continue
 			}
@@ -544,7 +544,7 @@ func runScoutForeverLive(ctx context.Context, o *planScoutOptions, in planscout.
 		}
 		data.Walks[hop.Step] = planscout.WalkResult{Stop: dungeon.Point{X: st.X, Y: st.Y, Z: st.Z}, Length: float64(walked.Length)}
 	}
-	notePartialWalks()
+	noteNoRouteWalks()
 	return data, exitOK, ""
 }
 
@@ -859,15 +859,18 @@ func scoutTeleportUnconfirmed(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "the teleport is not confirmed")
 }
 
-// scoutPartialWalk reports the serve's own no-full-route answer for a partial route: the walk never starts, and the
-// pass records that stand as partial and goes on to the next one. The answer is the serve's documented text, read
-// here because the error crosses the RPC as the method's own message.
-func scoutPartialWalk(err error) bool {
+// scoutNoFullRoute reports the serve's own no-full-route answer, for a partial route and for a route it finds none of:
+// in both the walk never starts, and the pass records that stand and goes on to the next one. The answer is the serve's
+// documented text, read here because the error crosses the RPC as the method's own message.
+func scoutNoFullRoute(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := err.Error()
-	return strings.Contains(msg, "walk_path: no full route") && strings.Contains(msg, "(partial)")
+	if !strings.Contains(msg, "walk_path: no full route") {
+		return false
+	}
+	return strings.Contains(msg, "(partial)") || strings.Contains(msg, "(none)")
 }
 
 // scoutTeleportAttempts is how many times a stand sends its `.go xyz`: the first line can be the one the core dropped

@@ -3,13 +3,15 @@ package planscout
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/routeedit"
 )
 
-// DroppedFix is an applicable fix that ApplyFixes undid because the edited plan failed dungeon.Parse.
+// DroppedFix is an applicable fix that ApplyFixes undid: the edited plan failed dungeon.Parse, or the fix added a plan-check
+// issue.
 type DroppedFix struct {
 	ID     int    `json:"id"`
 	Step   int    `json:"step"`
@@ -17,13 +19,19 @@ type DroppedFix struct {
 	Reason string `json:"reason"`
 }
 
-// ApplyFixes applies the applicable fixes to a copy of the plan (routeedit.Clone), then checks the copy: a fix set that adds a
-// plan-check issue is refused as a whole, with nothing returned. Any fix after which dungeon.Parse fails is undone and
-// dropped; if every applicable fix is dropped, an error is returned. The base plan is never changed.
+// ApplyFixes applies the applicable fixes to a copy of the plan (routeedit.Clone) one at a time, each on the plan the fixes
+// before it left: a fix after which dungeon.Parse fails, or that adds a plan-check issue against the base plan, is undone and
+// dropped with its reason (the remap spec's A3 rule); a fix that adds none stays. If every applicable fix is dropped, an error
+// is returned. The base plan is never changed.
 func ApplyFixes(p *dungeon.Plan, fixes []Fix, nav dungeon.Navmesh) (*dungeon.Plan, routeedit.CheckResult, []DroppedFix, error) {
 	good, err := routeedit.Clone(p)
 	if err != nil {
 		return nil, routeedit.CheckResult{}, nil, err
+	}
+	// The base plan's own issues are what a fix's issues are told from: the check runs once for the whole list.
+	base, err := dungeon.CheckPlan(p, nav, 0)
+	if err != nil {
+		return nil, routeedit.CheckResult{Skipped: err.Error()}, nil, fmt.Errorf("the plan check of the plan could not run: %s", err)
 	}
 	var todo []Fix
 	for _, f := range fixes {
@@ -55,13 +63,22 @@ func ApplyFixes(p *dungeon.Plan, fixes []Fix, nav dungeon.Navmesh) (*dungeon.Pla
 			dropped = append(dropped, DroppedFix{ID: f.ID, Step: f.Step, Kind: f.Kind, Reason: err.Error()})
 			continue
 		}
+		res := routeedit.EvaluateAgainst(base, cand, nav)
+		if !res.Checked {
+			return nil, res, dropped, fmt.Errorf("the plan check of the edited plan could not run: %s", res.Skipped)
+		}
+		if res.NewIssues > 0 {
+			dropped = append(dropped, DroppedFix{ID: f.ID, Step: f.Step, Kind: f.Kind, Reason: planCheckDrop(res)})
+			continue
+		}
 		good = cand
 		applied++
 	}
 	if len(todo) > 0 && applied == 0 {
-		return nil, routeedit.CheckResult{}, dropped, fmt.Errorf("every applicable fix (%d) failed plan validation and was dropped", len(dropped))
+		return nil, routeedit.CheckResult{}, dropped, fmt.Errorf("every applicable fix (%d) was dropped (the plan loader or the plan check refused each one)", len(todo))
 	}
-	res := routeedit.Evaluate(p, good, nav)
+	// Every accepted fix passed this check, so the copy adds no issue; the check is run once more for its counts and issues.
+	res := routeedit.EvaluateAgainst(base, good, nav)
 	if !res.Checked {
 		return nil, res, dropped, fmt.Errorf("the plan check of the edited plan could not run: %s", res.Skipped)
 	}
@@ -69,6 +86,18 @@ func ApplyFixes(p *dungeon.Plan, fixes []Fix, nav dungeon.Navmesh) (*dungeon.Pla
 		return nil, res, dropped, fmt.Errorf("the fixes add %d plan-check issue(s): %s", res.NewIssues, res.Refusal())
 	}
 	return good, res, dropped, nil
+}
+
+// planCheckDrop is a dropped fix's reason when the plan check refused it: the issues the fix adds, by name and point, so
+// dropped.json says what the fix broke.
+func planCheckDrop(res routeedit.CheckResult) string {
+	var texts []string
+	for _, is := range res.Issues {
+		if is.New {
+			texts = append(texts, is.Text)
+		}
+	}
+	return fmt.Sprintf("the fix adds %d plan-check issue(s): %s", res.NewIssues, strings.Join(texts, "; "))
 }
 
 func applyFix(p *dungeon.Plan, f Fix) error {
@@ -268,22 +297,17 @@ func setPoint(p *dungeon.Plan, ref planexport.RowOrigin, pt dungeon.Point) error
 	return fmt.Errorf("a %q row has no plan element to move", ref.Part)
 }
 
+// setStand moves the stand a row names to pt. A pull row names its group's stand, the last approach point (one is created
+// when the group has none); every other row names the plan element it sits on (the leg's to point, a via, an approach
+// point or a step's stand), so its stand move is a move of that element: only a row of the boss itself needs the leg to
+// have one.
 func setStand(p *dungeon.Plan, ref planexport.RowOrigin, pt dungeon.Point) error {
+	if ref.Part != "pull" {
+		return setPoint(p, ref, pt)
+	}
 	leg := &p.Legs[ref.Leg]
 	group := ref.Group
-	if group < 0 {
-		// A boss row.
-		if leg.Boss == nil {
-			return fmt.Errorf("the leg has no boss")
-		}
-		if n := len(leg.Boss.Approach); n > 0 {
-			leg.Boss.Approach[n-1] = pt
-		} else {
-			leg.Boss.Approach = []dungeon.Point{pt}
-		}
-		return nil
-	}
-	if group >= len(leg.PullGroups) {
+	if group < 0 || group >= len(leg.PullGroups) {
 		return fmt.Errorf("pull group %d is outside the leg", group)
 	}
 	g := &leg.PullGroups[group]
