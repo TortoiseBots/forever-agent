@@ -22,8 +22,9 @@ type DroppedFix struct {
 // ApplyFixes applies the applicable fixes to a copy of the plan (routeedit.Clone) one at a time, each on the plan the fixes
 // before it left: a fix after which dungeon.Parse fails, or that adds a plan-check issue against the base plan, is undone and
 // dropped with its reason (the remap spec's A3 rule); a fix that adds none stays. Point moves run first and insertions after
-// them (back to front), so an insertion never shifts the element a point move names. If every applicable fix is dropped, an
-// error is returned. The base plan is never changed.
+// them (back to front), so an insertion never shifts the element a point move names; an insertion into a stand-pull row's
+// approach list lands before the list's stand, so it never becomes the stand a move_stand just repaired. If every
+// applicable fix is dropped, an error is returned. The base plan is never changed.
 func ApplyFixes(p *dungeon.Plan, fixes []Fix, nav dungeon.Navmesh) (*dungeon.Plan, routeedit.CheckResult, []DroppedFix, error) {
 	good, err := routeedit.Clone(p)
 	if err != nil {
@@ -175,12 +176,6 @@ func applyFix(p *dungeon.Plan, f Fix) error {
 // element is where a fix writes: the via list it inserts into, or the point it moves.
 func insertVias(p *dungeon.Plan, ref planexport.RowOrigin, vias []dungeon.Point) error {
 	leg := &p.Legs[ref.Leg]
-	add := func(points []dungeon.Point) []dungeon.Point {
-		out := make([]dungeon.Point, 0, len(points)+len(vias))
-		out = append(out, points...)
-		out = append(out, vias...)
-		return out
-	}
 	switch ref.Part {
 	case "to":
 		for _, v := range vias {
@@ -204,44 +199,56 @@ func insertVias(p *dungeon.Plan, ref planexport.RowOrigin, vias []dungeon.Point)
 			if leg.Boss == nil {
 				return fmt.Errorf("the leg has no boss")
 			}
-			ap := leg.Boss.Approach
-			if ref.Index < 0 || ref.Index > len(ap) {
-				return fmt.Errorf("approach index %d is outside the group", ref.Index)
-			}
-			var out []dungeon.Point
-			out = append(out, ap[:ref.Index]...)
-			out = append(out, vias...)
-			out = append(out, ap[ref.Index:]...)
-			leg.Boss.Approach = out
-			return nil
+			return addApproach(&leg.Boss.Approach, ref.Index, vias, leg.Boss.StandPull)
 		}
 		if ref.Group >= len(leg.PullGroups) {
 			return fmt.Errorf("pull group %d is outside the leg", ref.Group)
 		}
-		ap := leg.PullGroups[ref.Group].Approach
-		if ref.Index < 0 || ref.Index > len(ap) {
-			return fmt.Errorf("approach index %d is outside the group", ref.Index)
-		}
-		var out []dungeon.Point
-		out = append(out, ap[:ref.Index]...)
-		out = append(out, vias...)
-		out = append(out, ap[ref.Index:]...)
-		leg.PullGroups[ref.Group].Approach = out
-		return nil
+		g := &leg.PullGroups[ref.Group]
+		return addApproach(&g.Approach, ref.Index, vias, g.StandPull)
 	case "pull", "hold":
 		if ref.Group < 0 || ref.Group >= len(leg.PullGroups) {
 			return fmt.Errorf("pull group %d is outside the leg", ref.Group)
 		}
-		leg.PullGroups[ref.Group].Approach = add(leg.PullGroups[ref.Group].Approach)
-		return nil
+		g := &leg.PullGroups[ref.Group]
+		return addApproach(&g.Approach, len(g.Approach), vias, g.StandPull)
 	case "boss":
 		if leg.Boss == nil {
 			return fmt.Errorf("the leg has no boss")
 		}
-		leg.Boss.Approach = add(leg.Boss.Approach)
-		return nil
+		return addApproach(&leg.Boss.Approach, len(leg.Boss.Approach), vias, leg.Boss.StandPull)
 	}
 	return fmt.Errorf("a %q row has no plan element to insert vias into", ref.Part)
+}
+
+// addApproach inserts vias into an approach list at index (len(ap) appends). A stand-pull list ends in the party's stand,
+// so the insertion stays before that last point: an insertion after it would become the stand.
+func addApproach(ap *[]dungeon.Point, index int, vias []dungeon.Point, standPull bool) error {
+	if index < 0 || index > len(*ap) {
+		return fmt.Errorf("approach index %d is outside the group", index)
+	}
+	if standPull && index > standSlot(len(*ap)) {
+		index = standSlot(len(*ap))
+	}
+	*ap = insertAt(*ap, index, vias)
+	return nil
+}
+
+// standSlot is the last slot before an approach list's stand: where an insertion into a stand-pull list goes.
+func standSlot(n int) int {
+	if n > 0 {
+		return n - 1
+	}
+	return 0
+}
+
+// insertAt returns the points with the vias inserted before the point at index.
+func insertAt(points []dungeon.Point, index int, vias []dungeon.Point) []dungeon.Point {
+	out := make([]dungeon.Point, 0, len(points)+len(vias))
+	out = append(out, points[:index]...)
+	out = append(out, vias...)
+	out = append(out, points[index:]...)
+	return out
 }
 
 // setPoint moves the plan element a row names to pt.
@@ -303,6 +310,11 @@ func setPoint(p *dungeon.Plan, ref planexport.RowOrigin, pt dungeon.Point) error
 		if leg.Boss == nil {
 			return fmt.Errorf("the leg has no boss")
 		}
+		if leg.Boss.Hold != nil {
+			// The row is the boss's hold: its coordinates are the hold's spot (the hold walks the party there).
+			leg.Boss.Hold.Spot = pt
+			return nil
+		}
 		if leg.Boss.StandPull && len(leg.Boss.Approach) > 0 {
 			leg.Boss.Approach[len(leg.Boss.Approach)-1] = pt
 			return nil
@@ -340,15 +352,20 @@ func setPoint(p *dungeon.Plan, ref planexport.RowOrigin, pt dungeon.Point) error
 
 // setStand moves the stand a row names to pt. A pull row names its group's stand, the last approach point (one is created
 // when the group has none); a boss row names the party's stand, the last approach point before the boss (also created when
-// the leg has none) — never the boss's own position, which is where the boss stands, not where the party does. Every other
-// row names the plan element it sits on (the leg's to point, a via, an approach point or a step's stand), so its stand move
-// is a move of that element.
+// the leg has none) — never the boss's own position, which is where the boss stands, not where the party does. A boss
+// row whose boss has a hold is the hold, though: its coordinates are the hold's spot, which the hold walks the party to,
+// so its stand move is a move of that spot. Every other row names the plan element it sits on (the leg's to point, a
+// via, an approach point or a step's stand), so its stand move is a move of that element.
 func setStand(p *dungeon.Plan, ref planexport.RowOrigin, pt dungeon.Point) error {
 	leg := &p.Legs[ref.Leg]
 	if ref.Part == "boss" || (ref.Part == "pull" && ref.Group < 0) {
 		// A boss row (an older fix file names it part "pull" with group -1).
 		if leg.Boss == nil {
 			return fmt.Errorf("the leg has no boss")
+		}
+		if leg.Boss.Hold != nil {
+			leg.Boss.Hold.Spot = pt
+			return nil
 		}
 		if n := len(leg.Boss.Approach); n > 0 {
 			leg.Boss.Approach[n-1] = pt

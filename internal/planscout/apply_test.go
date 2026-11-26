@@ -461,3 +461,139 @@ func TestSetStandBossRowMovesThePartyStand(t *testing.T) {
 		})
 	}
 }
+
+// TestApplyFixesKeepsTheRepairedStandUnderAnInsertion: an insertion into a stand-pull row's approach list runs after the
+// row's move_stand (point moves first), so it must land before the stand. An insertion after it would become the stand the
+// exporter reads (the last approach point), and the party would fight from the via, losing the clearance the stand move
+// was chosen for — while both fixes report as accepted.
+func TestApplyFixesKeepsTheRepairedStandUnderAnInsertion(t *testing.T) {
+	base := func() *dungeon.Plan {
+		return &dungeon.Plan{Version: 1, Name: "t", Map: 1, Entrance: dungeon.Point{}, Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 10},
+			PullGroups: []dungeon.PullGroup{{
+				Entries: []uint32{100}, Positions: []dungeon.Point{{X: 40}}, Approach: []dungeon.Point{{X: 35}}, StandPull: true,
+			}},
+			Boss: &dungeon.Boss{Entry: 200, Position: dungeon.Point{X: 60}, Approach: []dungeon.Point{{X: 50}}, StandPull: true},
+		}}}
+	}
+	group := planexport.RowOrigin{Leg: 0, Part: "pull", Group: 0}
+	boss := planexport.RowOrigin{Leg: 0, Part: "boss", Group: -1}
+	fixes := []Fix{
+		{ID: 1, Step: 2, Kind: FixInsertVia, Apply: true, Ref: &group, Vias: []dungeon.Point{{X: 36}}},
+		{ID: 2, Step: 2, Kind: FixMoveStand, Apply: true, Ref: &group, Stand: &FixStand{X: 33}},
+		{ID: 3, Step: 4, Kind: FixInsertVia, Apply: true, Ref: &boss, Vias: []dungeon.Point{{X: 51}}},
+		{ID: 4, Step: 4, Kind: FixMoveStand, Apply: true, Ref: &boss, Stand: &FixStand{X: 52}},
+	}
+	edited, _, dropped, err := ApplyFixes(base(), fixes, fakePlanNet{})
+	if err != nil {
+		t.Fatalf("ApplyFixes: %v", err)
+	}
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %+v; want every fix kept", dropped)
+	}
+	res, err := planexport.Build(edited, planexport.Options{Source: "test"})
+	if err != nil {
+		t.Fatalf("the edited plan does not export: %v", err)
+	}
+	standOf := func(kind string) planexport.StepRow {
+		t.Helper()
+		for i, s := range res.Rows.Steps {
+			if s.Kind == kind {
+				if i == 0 {
+					t.Fatalf("the %s row is first: no stand row before it", kind)
+				}
+				return res.Rows.Steps[i-1]
+			}
+		}
+		t.Fatalf("no %s row in the export", kind)
+		return planexport.StepRow{}
+	}
+	stand := standOf(planexport.KindPull)
+	if stand.Kind != planexport.KindMove || stand.X != 33 {
+		t.Errorf("the pull row's stand row = %+v; want the move to the repaired stand X 33, the insertion before it", stand)
+	}
+	if got := edited.Legs[0].PullGroups[0].Approach; len(got) != 2 || got[0].X != 36 || got[1].X != 33 {
+		t.Errorf("the group's approach = %+v; want the inserted via (36) before the repaired stand (33)", got)
+	}
+	stand = standOf(planexport.KindBoss)
+	if stand.Kind != planexport.KindMove || stand.X != 52 {
+		t.Errorf("the boss row's stand row = %+v; want the move to the repaired stand X 52, the insertion before it", stand)
+	}
+	if got := edited.Legs[0].Boss.Approach; len(got) != 2 || got[0].X != 51 || got[1].X != 52 {
+		t.Errorf("the boss's approach = %+v; want the inserted via (51) before the repaired stand (52)", got)
+	}
+}
+
+// TestSetStandBossHoldRowMovesTheHoldSpot: a boss hold row's coordinates are the hold's spot (Boss.Hold.Spot), which the
+// hold's own walk takes the party to: a move_stand on that row must move the spot, not the approach points the party
+// would then walk to and hold from, and never the boss's position. The export proves the moved spot is the row's.
+func TestSetStandBossHoldRowMovesTheHoldSpot(t *testing.T) {
+	base := func() *dungeon.Plan {
+		return &dungeon.Plan{Version: 1, Name: "t", Map: 1, Entrance: dungeon.Point{}, Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 10},
+			Boss: &dungeon.Boss{Entry: 200, Position: dungeon.Point{X: 60},
+				Approach: []dungeon.Point{{X: 25}},
+				Hold:     &dungeon.Hold{Spot: dungeon.Point{X: 28}, Radius: 20, TimeoutS: 300}},
+		}}}
+	}
+	pt := dungeon.Point{X: 22, Y: 0, Z: 0}
+	ref := planexport.RowOrigin{Leg: 0, Part: "boss", Group: -1}
+	for _, c := range []struct {
+		name string
+		ref  planexport.RowOrigin
+	}{
+		{"boss hold row", ref},
+		{"older fix file's boss row", planexport.RowOrigin{Leg: 0, Part: "pull", Group: -1}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p := base()
+			if err := setStand(p, c.ref, pt); err != nil {
+				t.Fatalf("setStand %+v: %v", c.ref, err)
+			}
+			if got := p.Legs[0].Boss.Hold.Spot; got != pt {
+				t.Errorf("the hold's spot = %+v; want the moved spot %+v", got, pt)
+			}
+			if got := p.Legs[0].Boss.Approach[0]; got != (dungeon.Point{X: 25}) {
+				t.Errorf("the approach point = %+v; a hold row's stand move must leave the approach alone", got)
+			}
+			if got := p.Legs[0].Boss.Position; got != (dungeon.Point{X: 60}) {
+				t.Errorf("the boss's position = %+v; a stand move must not move the boss", got)
+			}
+		})
+	}
+	// A snap of the row (its point moves, not its stand) names the same spot.
+	p := base()
+	if err := setPoint(p, ref, pt); err != nil {
+		t.Fatalf("setPoint %+v: %v", ref, err)
+	}
+	if got := p.Legs[0].Boss.Hold.Spot; got != pt {
+		t.Errorf("the hold's spot after a point move = %+v; want %+v", got, pt)
+	}
+	if got := p.Legs[0].Boss.Position; got != (dungeon.Point{X: 60}) {
+		t.Errorf("the boss's position after a point move = %+v; want it unmoved", got)
+	}
+	// Through ApplyFixes: the export's hold row carries the moved spot.
+	edited, _, dropped, err := ApplyFixes(base(), []Fix{{ID: 1, Step: 3, Kind: FixMoveStand, Apply: true,
+		Ref: &ref, Stand: &FixStand{X: 22}}}, fakePlanNet{})
+	if err != nil {
+		t.Fatalf("ApplyFixes: %v", err)
+	}
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %+v; want the fix kept", dropped)
+	}
+	res, err := planexport.Build(edited, planexport.Options{Source: "test"})
+	if err != nil {
+		t.Fatalf("the edited plan does not export: %v", err)
+	}
+	for _, s := range res.Rows.Steps {
+		if s.Kind == planexport.KindHold {
+			if s.X != 22 {
+				t.Fatalf("the exported hold row sits at X %v; want the moved spot 22", s.X)
+			}
+			return
+		}
+	}
+	t.Fatalf("no hold row in the export")
+}

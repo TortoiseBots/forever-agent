@@ -255,7 +255,9 @@ forever-agent plan-scout <plan> [--dir dungeons] [--sql FILE] [--mmaps DIR] [--s
   the file was made for this plan's own exported rows (format and version, plan and map, the rows' sha256) and refuses
   one that was not. A replay then checks each applicable fix before applying it: its target must be the plan element its
   step's row names in this export (the target is taken from the export, not from the file), and every destination must be
-  a point the file records whole and the map's mesh holds — a missing coordinate is never read as zero. A fix that fails
+  a point the file records whole and the map's mesh holds by the walk rule — the nearest floor within 2.5 yd sideways and
+  3 yd up or down of the recorded point, not any floor a wider lookup window finds — and a missing coordinate is never
+  read as zero. A fix that fails
   is dropped with the reason in the report notes, `dropped.json` and stderr, and the rest still land; a list the replay
   refuses whole writes no copy and exits 27 when it is applied. It cannot be combined with `--live`: a live pass merges
   the fixes it finds.
@@ -264,11 +266,13 @@ forever-agent plan-scout <plan> [--dir dungeons] [--sql FILE] [--mmaps DIR] [--s
   applicable fix is applied on the plan the fixes before it left and then checked: one the plan loader refuses, or that
   adds a plan-check issue against the plan as it was, is undone and recorded in `dropped.json` beside the copy with its
   reason (for a plan-check issue, the issues it makes), and the rest of the list still lands. Point moves run before
-  insertions, and insertions of one list back to front, so an insertion never shifts the element a point move names. A
-  `move_stand` fix moves the plan element its row names (a leg's `to` point, a via, an approach point or a step's stand);
-  a pull row's stand is the last approach point, and a boss row's stand is the last approach point before the boss (both
-  created when there is none) — never the boss's position. If every applicable fix is dropped, no copy is written and the
-  command exits 27.
+  insertions, and insertions of one list back to front, so an insertion never shifts the element a point move names; an
+  insertion into a stand-pull row's approach list lands before the stand, so it never becomes the stand a `move_stand`
+  repaired. A `move_stand` fix moves the plan element its row names (a leg's `to` point, a via, an approach point or a
+  step's stand); a pull row's stand is the last approach point, and a boss row's stand is the last approach point before
+  the boss (both created when there is none) — never the boss's position. A boss hold row sits at the hold's spot, which
+  the hold's own walk takes the party to, so its stand move (and any point move) moves that spot instead. If every
+  applicable fix is dropped, no copy is written and the command exits 27.
 - `--fail-on fail` (the default) exits 27 on a failed step; `--fail-on warn` also on a warning. The live pass that
   stopped part-way exits 28; a refused or failed live phase exits 18; a mesh that cannot answer exits 1.
 

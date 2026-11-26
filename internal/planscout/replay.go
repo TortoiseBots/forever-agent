@@ -3,12 +3,12 @@ package planscout
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/planexport"
-	"github.com/pjerra/forever-agent/internal/routeedit"
 )
 
 // UnmarshalJSON reads a fix file and keeps, per fix, which coordinate fields its JSON leaves out: json's zero value
@@ -151,7 +151,8 @@ func (ff FixFile) missing(i int, field string) []string {
 	return out
 }
 
-// meshRefusal says the point is not on the map's mesh, as routeedit finds a floor for an edit, or "".
+// meshRefusal says the point is not on the map's mesh by the plan check's own walk rule — the nearest walkable floor
+// within dungeon.WalkFloorDH sideways and dungeon.WalkFloorDZ up or down, whatever window the lookup searched — or "".
 func meshRefusal(nav Nav, mapID uint32, p dungeon.Point, name string) string {
 	q, ok, err := nav.Nearest(mapID, navmesh.Vec3{p.X, p.Y, p.Z})
 	if err != nil {
@@ -160,11 +161,13 @@ func meshRefusal(nav Nav, mapID uint32, p dungeon.Point, name string) string {
 	if !ok {
 		return fmt.Sprintf("the %s (%.1f %.1f %.1f) is off the mesh: the map has no floor there", name, p.X, p.Y, p.Z)
 	}
-	if at := (dungeon.Point{X: q[0], Y: q[1], Z: q[2]}); dist3(p, at) > routeedit.FloorWindow {
-		return fmt.Sprintf("the %s (%.1f %.1f %.1f) is off the mesh: the nearest floor is %.1f yd away (the window is %.0f yd)",
-			name, p.X, p.Y, p.Z, dist3(p, at), routeedit.FloorWindow)
+	at := dungeon.Point{X: q[0], Y: q[1], Z: q[2]}
+	if dungeon.OnFloor(p, at) {
+		return ""
 	}
-	return ""
+	return fmt.Sprintf("the %s (%.1f %.1f %.1f) is off the mesh: the nearest floor is %.1f yd sideways and %.1f yd up or down (a walk point takes %.1f and %.1f)",
+		name, p.X, p.Y, p.Z, math.Hypot(float64(at.X-p.X), float64(at.Y-p.Y)), math.Abs(float64(at.Z-p.Z)),
+		dungeon.WalkFloorDH, dungeon.WalkFloorDZ)
 }
 
 // originName names a row origin as the fix file's reader knows it.
