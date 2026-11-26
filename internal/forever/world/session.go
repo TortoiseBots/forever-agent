@@ -582,6 +582,9 @@ type session struct {
 	selfSeen   bool
 	// gmCastAt is when the last `.cast` GM lines went out (paceGMCast).
 	gmCastAt []time.Time
+	// raidSentAt is when the last raid-setup packet of the core's ten-a-second bucket went out (paceRaidPacket):
+	// CMSG_CONVERT_RAID, CMSG_CHANGE_SUB_GROUP, CMSG_SET_ASSISTANT_LEADER, and CMSG_SWAP_SUB_GROUPS with them.
+	raidSentAt time.Time
 	// selfTeleports counts the server's own SMSG_MOVE_TELEPORT of this character (not another unit's).
 	selfTeleports int
 	teleportSeq   uint64

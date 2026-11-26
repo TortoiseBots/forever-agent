@@ -9,33 +9,50 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/chat"
 	"github.com/pjerra/forever-agent/internal/forever/party"
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
-// raidRoster checks the precondition the raid calls share: a group the model holds a valid roster for. Unlike
-// groupRoster it takes a raid (that is the point) and a party too, since convert_raid starts from one.
-func (s *session) raidRoster(what string) error {
-	s.initChat()
-	switch {
-	case !s.party.InParty:
-		return fmt.Errorf("%s: not in a group", what)
-	case !s.party.RosterValid:
-		return fmt.Errorf("%s: no valid party roster (%s)", what, s.party.LastInvalid)
+// raidStepGap is the space the raid setup keeps between its packets: 8 a second, under the core's own 10. The core
+// counts these per walking second and refuses the 11th (WorldSession.cpp:1833-1857: CMSG_CONVERT_RAID,
+// CMSG_CHANGE_SUB_GROUP and CMSG_SET_ASSISTANT_LEADER share the ten-a-second bucket; PacketSpoof.Policy = 1 is
+// POLICY_KICK, WorldSession.cpp:1648-1652, and the live server runs it); a twenty-member raid's layout is nineteen
+// moves, and the live run (2026-11-26) sent them 2 ms apart and lost the leader's socket. 130 ms keep nine packets
+// more than a second apart, whatever the second boundary. CMSG_SWAP_SUB_GROUPS rides the same pace: the core has it
+// in the default bucket, but it is the layout's other half and one pace is easier to hold.
+const raidStepGap = 130 * time.Millisecond
+
+// paceRaidPacket waits until the next raid-setup packet may go out: raidStepGap after the one before. It is the
+// session's own pace, not the caller's, because the serve's raid_move, the player-led raid's layout and the
+// commander's raid watch all end in the same packets. ctx ends the wait with the caller's reason: the packet is then
+// not sent, and the timestamp stays where it was.
+func (s *session) paceRaidPacket(ctx context.Context) error {
+	if !s.raidSentAt.IsZero() {
+		if wait := time.Until(s.raidSentAt.Add(raidStepGap)); wait > 0 {
+			t := time.NewTimer(wait)
+			defer t.Stop()
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-t.C:
+			}
+		}
 	}
+	s.raidSentAt = time.Now()
 	return nil
 }
 
 // raidLeader reports whether this character leads the group.
 func (s *session) raidLeader() bool { return s.party.LeaderGUID == s.party.SelfGUID }
 
-// raidLeaderRank is raidRoster plus the leader rank the core asks of the raid commands only the leader may send:
+// raidLeaderRank is groupRoster plus the leader rank the core asks of the raid commands only the leader may send:
 // the assistant rank (CMSG_SET_ASSISTANT_LEADER) is taken only from Group::IsLeader (GroupHandler.cpp:545-555). The
 // message is the party leader-only one, so a caller reads the same refusal in a party and in a raid.
 func (s *session) raidLeaderRank(what string) error {
-	if err := s.raidRoster(what); err != nil {
+	if err := s.groupRoster(what); err != nil {
 		return err
 	}
 	if !s.raidLeader() {
@@ -94,7 +111,7 @@ func (s *session) raidInSubgroup(guid wire.GUID, subgroup int) bool {
 // a raid already is done without a packet.
 func (s *session) convertRaid(ctx context.Context) error {
 	const what = "convert_raid"
-	if err := s.raidRoster(what); err != nil {
+	if err := s.groupRoster(what); err != nil {
 		return err
 	}
 	if !s.raidLeader() {
@@ -105,6 +122,9 @@ func (s *session) convertRaid(ctx context.Context) error {
 	}
 	if s.party.Raid {
 		return nil
+	}
+	if err := s.paceRaidPacket(ctx); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
 	}
 	if err := s.Send(wire.CMSGConvertRaid, party.BuildConvertRaid(true)); err != nil {
 		return err
@@ -122,7 +142,7 @@ func (s *session) raidMove(ctx context.Context, g wire.GUID, name string, subgro
 	if subgroup < 1 || subgroup > party.MaxSubgroups {
 		return fmt.Errorf("%s: subgroup %d: use 1 to %d", what, subgroup, party.MaxSubgroups)
 	}
-	if err := s.raidRoster(what); err != nil {
+	if err := s.groupRoster(what); err != nil {
 		return err
 	}
 	if !s.raidLeader() && !s.raidAssistant() {
@@ -150,6 +170,9 @@ func (s *session) raidMove(ctx context.Context, g wire.GUID, name string, subgro
 				what, chat.SanitiseName(o.Name), raidSubgroup(o), subgroup, chat.SanitiseName(m.Name))
 		}
 		from := raidSubgroup(m)
+		if err := s.paceRaidPacket(ctx); err != nil {
+			return fmt.Errorf("%s: %w", what, err)
+		}
 		if err := s.Send(wire.CMSGSwapSubGroups, party.BuildSwapSubGroups(m.GUID, o.GUID)); err != nil {
 			return err
 		}
@@ -166,6 +189,9 @@ func (s *session) raidMove(ctx context.Context, g wire.GUID, name string, subgro
 	}
 	payload, err := party.BuildChangeSubGroup(m.GUID, uint8(subgroup-1))
 	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	if err := s.paceRaidPacket(ctx); err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
 	if err := s.Send(wire.CMSGChangeSubGroup, payload); err != nil {

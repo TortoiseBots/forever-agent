@@ -431,7 +431,7 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 				return
 			}
 			f.mu.Lock()
-			f.groupSeenChange = append(f.groupSeenChange, fakeSubSeen{GUID: target, Subgroup: sub})
+			f.groupSeenChange = append(f.groupSeenChange, fakeSubSeen{GUID: target, Subgroup: sub, At: time.Now()})
 			var frame []byte
 			if !f.groupSilent {
 				frame = f.fakeChangeSubgroupLocked(target, sub)
@@ -447,7 +447,7 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 				return
 			}
 			f.mu.Lock()
-			f.groupSeenSwap = append(f.groupSeenSwap, fakeSwapSeen{A: a, B: b})
+			f.groupSeenSwap = append(f.groupSeenSwap, fakeSwapSeen{A: a, B: b, At: time.Now()})
 			var frame []byte
 			if !f.groupSilent {
 				frame = f.fakeSwapSubgroupsLocked(a, b)

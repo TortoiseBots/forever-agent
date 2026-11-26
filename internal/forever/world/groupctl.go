@@ -84,16 +84,15 @@ func ParseLootSpec(s string) (party.LootMethod, int, error) {
 // wrapped so the command layer needs no party import.
 func ParseRaidMark(s string) (party.Mark, bool) { return party.ParseMarkName(s) }
 
-// groupRoster checks the precondition every group call shares: a group the model holds a valid roster for. A raid is
-// refused by name: the raid ranks differ (an assistant may mark icons, GroupHandler.cpp:456-479) and the raid
-// operations come with the raid walk, so the party ranks below are not the raid's.
+// groupRoster checks the precondition every group call shares: a group the model holds a valid roster for. It takes
+// a party and a raid: the roster model holds both (party.State), and the core's group commands read the group's
+// leader and members whatever its size (GroupHandler.cpp:394-430). The ranks that differ in a raid are checked by the
+// call itself where they matter (an assistant may mark icons, GroupHandler.cpp:468-474).
 func (s *session) groupRoster(what string) error {
 	s.initChat()
 	switch {
 	case !s.party.InParty:
 		return fmt.Errorf("%s: not in a group", what)
-	case s.party.Raid:
-		return fmt.Errorf("%s: raid group control is not ported yet", what)
 	case !s.party.RosterValid:
 		return fmt.Errorf("%s: no valid party roster (%s)", what, s.party.LastInvalid)
 	}
@@ -220,6 +219,9 @@ func (s *session) groupAssistant(ctx context.Context, name string, apply bool) e
 		s.opts.logf("group: assistant %s: already %v", chat.SanitiseName(m.Name), apply)
 		return nil
 	}
+	if err := s.paceRaidPacket(ctx); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
 	if err := s.Send(wire.CMSGSetAssistantLeader, party.BuildSetAssistantLeader(m.GUID, apply)); err != nil {
 		return err
 	}
@@ -270,12 +272,15 @@ func (s *session) groupLootMethod(ctx context.Context, method party.LootMethod, 
 }
 
 // groupMark sets a raid target icon on a unit, or clears the icon with an empty target, and waits for the icon slot.
-// Any member of a party may set one; in a raid only the leader or an assistant (GroupHandler.cpp:456-479), so a raid
-// is refused by groupRoster until the raid ranks are modelled with the raid operations.
+// Any member of a party may set one; in a raid only the leader or an assistant (GroupHandler.cpp:456-479 drops anyone
+// else silently), so a raid checks that rank before the packet.
 func (s *session) groupMark(ctx context.Context, target wire.GUID, mark party.Mark) error {
 	const what = "mark"
 	if err := s.groupRoster(what); err != nil {
 		return err
+	}
+	if s.party.Raid && !s.raidLeader() && !s.raidAssistant() {
+		return fmt.Errorf("%s: needs the group leader or an assistant", what)
 	}
 	if mark < party.MarkStar || mark > party.MarkSkull {
 		return fmt.Errorf("%s: %d is not a raid target icon (0..7)", what, mark)

@@ -4,7 +4,7 @@ title: forever dungeon-play
 description: Play one dungeon plan as a real character leading four bots, and read the run's record and its pass or fail verdict.
 tags: [dungeons, play, player, command]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T19:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T19:30:00Z }
 sources:
   - id: play-cmd
     resource: cmd/forever-agent/forever_play.go
@@ -120,7 +120,7 @@ fields on legs after `--last-leg` are not refused while keeping those legs in th
 | `--tanks` | required for a raid | The bots that tank, comma separated. The **first** one is the pull tank: every order that names the party's tank goes to it, and the off-tanks fight with the damage dealers. |
 | `--healers` | required for a raid | The bots that heal. Any living one may raise a dead member; the first one is the rest gate's healer (it must use mana). |
 | `--dps` | required for a raid | The damage dealers, at least 2. Every one of them (and every off-tank) is ordered onto the skull. |
-| `--layout` | none | A layout file: one bot per line, its name and the subgroup 1-8 it is moved to with a raid move ([raid-suite](../turtle/raids/raid-suite-reference.md) reads the same format). A move into a subgroup that already holds five trades places with a member it holds (the first in roster order the layout does not place there); a failed or unsatisfiable layout stops the run `raid-move`. |
+| `--layout` | none | A layout file: one bot per line, its name and the subgroup 1-8 it is moved to with a raid move ([raid-suite](../turtle/raids/raid-suite-reference.md) reads the same format). A move into a subgroup that already holds five trades places with a member it holds (the first in roster order the layout does not place there); a failed or unsatisfiable layout stops the run `raid-move`. The moves are paced at 8 a second (the core closes the connection on the 11th sub-group packet inside one second), so a twenty-member layout takes a few seconds. |
 
 A group is refused before anything is sent when it has no tank, no healer, fewer than 2 damage dealers, the same name
 twice, or a size outside **5** to **39** bots (`PlayRaidMinBots`, `PlayRaidMaxBots` = the core's raid of 40 less this

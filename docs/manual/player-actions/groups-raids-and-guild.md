@@ -4,7 +4,7 @@ title: Groups, raids and guilds
 description: Invite and leave a group, read the party roster, lead a party (promote, loot method, marks, disband), convert it to a raid, handle guild invites, and check the group code live.
 tags: [player-actions, party, raid, guild, group-control]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T19:30:00Z }
 sources:
   - id: serve-session
     resource: internal/forever/world/serve_session.go
@@ -64,10 +64,11 @@ no pending invite it is `no pending group invite`. `leave_group` needs a valid r
 | `marks` | none | Read the icons back. |
 | `disband` | none | End the party. |
 
-Only the leader may `promote`, `assistant`, `loot_method` and `disband`; in a party any member may `mark`. These
-calls are refused in a raid (`raid group control is not ported yet`), because the raid ranks differ and the raid
-operations come with the raid runs. The exception is `assistant`: the flag is a raid rank the core sets only in a
-raid and only from the leader, so `assistant` takes a raid and refuses a party with
+Only the leader may `promote`, `assistant`, `loot_method` and `disband`; in a party any member may `mark`, and in a
+raid only the leader or an assistant (`mark: needs the group leader or an assistant`, refused before any packet).
+Every one of these calls takes a party and a raid: the core reads the group's leader and members whatever the group's
+size, and the roster the readback comes from carries a raid's members and flags. `assistant` is the raid rank alone:
+the core sets the flag only in a raid and only from the leader, so a party reads
 `assistant: needs a raid: convert_raid first` (a non-leader reads `assistant: only the leader can (the leader is
 NAME)`).
 
@@ -99,6 +100,11 @@ the module's `.bot lfg` and `.bot dungeon` commands).
 assistant. A subgroup holds five members: moving into a full one is refused, and `swap_with` names the member of the
 target subgroup who trades places instead. A swap needs a member of the target subgroup who is in another subgroup
 than the one being moved.
+
+The sub-group packets are paced at 8 a second (130 ms apart), and so are `convert_raid` and `assistant`, which the
+core counts in the same ten-a-second bucket: the core closes the connection on the 11th of them inside one second,
+which a raid layout of nineteen moves would reach in a moment. A layout therefore takes a few seconds, and the
+trace's `raid_move` events carry its moves as they go out.
 
 # Guild
 
@@ -202,7 +208,8 @@ refused group command gets no answer)`.
 
 # Common problems
 
-- `promote: not in a group`; `promote: raid group control is not ported yet`.
+- `promote: not in a group`.
+- `mark: needs the group leader or an assistant` in a raid this character neither leads nor assists.
 - `mark: "skull " is not a raid target icon (star circle diamond triangle moon square cross skull)`.
 - `raid_move: subgroup 9: use 1 to 8`; `raid_move: subgroup 3 is full (5 members): pass swap_with to trade places
   with one of them`.

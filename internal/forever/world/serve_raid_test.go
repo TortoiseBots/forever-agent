@@ -17,15 +17,18 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
-// fakeSubSeen is one CMSG_CHANGE_SUB_GROUP the fake saw: the member and the 0-based wire subgroup it was sent.
+// fakeSubSeen is one CMSG_CHANGE_SUB_GROUP the fake saw: the member, the 0-based wire subgroup it was sent and when
+// the packet arrived (the raid layout is paced, so the times are the evidence the pace holds).
 type fakeSubSeen struct {
 	GUID     wire.GUID
 	Subgroup uint8
+	At       time.Time
 }
 
-// fakeSwapSeen is one CMSG_SWAP_SUB_GROUPS the fake saw: the two members in the packet's order.
+// fakeSwapSeen is one CMSG_SWAP_SUB_GROUPS the fake saw: the two members in the packet's order and when it arrived.
 type fakeSwapSeen struct {
 	A, B wire.GUID
+	At   time.Time
 }
 
 // raidSceneNames are nine bots: with this character, the ten-member raid the R2 scenes use.
@@ -530,4 +533,158 @@ func TestServeAssistantInRaid(t *testing.T) {
 	c.mustFail(t, "assistant", map[string]any{"name": "Bottwo"}, -32003, "did not confirm")
 	c.stop(t)
 	h.wait(t)
+}
+
+// TestServeRaidLayoutPaced is the raid fix round's first finding: a twenty-member raid's layout sent one
+// CMSG_CHANGE_SUB_GROUP per member as fast as the readbacks came (2 ms apart in the live run), and the core closed the
+// connection on the eleventh inside one second (WorldSession.cpp:1833-1857: CMSG_CHANGE_SUB_GROUP is in the
+// ten-a-second packet bucket, and PacketSpoof.Policy = 1 kicks, WorldSession.cpp:1648-1652). The layout's sub-group
+// packets are paced under that: nine of them never fit in one second.
+func TestServeRaidLayoutPaced(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	// Twenty members: bots 1-5 in subgroup 1, 6-10 in 2, 11-15 in 3, 16-19 in 4, this character in subgroup 4. The
+	// moves below send each band into the subgroup the band before it emptied, so every move is a plain move into a
+	// subgroup with room.
+	names := make([]string, 19)
+	for i := range names {
+		// Letters only: the server's name rule (ObjectMgr.cpp:9172-9200), and the client checks it before a lookup.
+		names[i] = "Layout" + string(rune('a'+i/26)) + string(rune('a'+i%26))
+	}
+	f.groupNames = names
+	f.groupRaid = true
+	sub := make(map[string]uint8, len(names)+1)
+	for i, name := range names {
+		sub[strings.ToLower(name)] = uint8(i / 5)
+	}
+	sub["testchar"] = 3
+	f.groupSubgroup = sub
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	awaitGroup(t, a, steps, 20)
+
+	// The layout: subgroup 1 to 5, 2 to 1, 3 to 2, 4 to 3 (wire 0 to 4, 1 to 0, 2 to 1, 3 to 2). Nineteen moves.
+	type layoutMove struct {
+		name string
+		to   int // the wire subgroup
+	}
+	var moves []layoutMove
+	for band := 0; band < 4; band++ {
+		for i := band * 5; i < len(names) && i < (band+1)*5; i++ {
+			moves = append(moves, layoutMove{name: names[i], to: (band + 4) % 5})
+		}
+	}
+	if len(moves) != 19 {
+		t.Fatalf("the layout names %d members, want 19", len(moves))
+	}
+	for _, mv := range moves {
+		a.mustCall(t, "raid_move", map[string]any{"name": mv.name, "subgroup": mv.to + 1})
+	}
+
+	f.mu.Lock()
+	seen := append([]fakeSubSeen(nil), f.groupSeenChange...)
+	f.mu.Unlock()
+	if len(seen) != len(moves) {
+		t.Fatalf("the fake saw %d CMSG_CHANGE_SUB_GROUP, want %d\n%s", len(seen), len(moves), steps.joined())
+	}
+	for i := 0; i+9 <= len(seen); i++ {
+		if span := seen[i+8].At.Sub(seen[i].At); span < time.Second {
+			t.Fatalf("moves %d to %d sent 9 CMSG_CHANGE_SUB_GROUP in %s: the core closes the connection on the 11th in one second (WorldSession.cpp:1833-1857, 1648-1652)",
+				i+1, i+9, span.Round(time.Millisecond))
+		}
+	}
+	a.stop(t)
+	f.wait(t)
+}
+
+// TestServeLootMethodInRaid is the raid fix round's second finding: the player-led raid's FORM stopped loot-method
+// with "raid group control is not ported yet" before any packet. The core takes CMSG_SET_LOOT_METHOD from the leader
+// of a raid exactly as from a party's leader (GroupHandler.cpp:394-430 reads the group's leader whatever its size), so
+// the call goes out and the roster's loot block confirms it; a member that does not lead is still refused before the
+// packet.
+func TestServeLootMethodInRaid(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	raidScene(f)
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	awaitGroup(t, a, steps, 10)
+
+	a.mustCall(t, "loot_method", map[string]any{"method": "group", "threshold": 3})
+	var info ServePartyInfo
+	json.Unmarshal(a.mustCall(t, "party", nil), &info)
+	if !info.Raid || info.LootMethod != "group-loot" || info.LootThreshold != 3 {
+		t.Fatalf("the raid's loot block after the call: raid %v, method %q, threshold %d\n%s",
+			info.Raid, info.LootMethod, info.LootThreshold, steps.joined())
+	}
+	f.mu.Lock()
+	seen := append([]party.LootSettings(nil), f.groupSeenLoot...)
+	f.mu.Unlock()
+	if len(seen) != 1 || seen[0].Method != party.GroupLoot || seen[0].Threshold != 3 {
+		t.Fatalf("the fake saw loot settings %+v, want group loot, threshold 3", seen)
+	}
+	a.stop(t)
+	f.wait(t)
+
+	// A raid member that is not the leader: refused before the packet, the rank the party path already checks.
+	g := newFakeServer(t)
+	g.serveMode = true
+	raidScene(g)
+	g.groupLeaderName = "Bottwo"
+	defer g.close()
+	steps = &stepLog{}
+	b := startServeDaemon(t, g, steps)
+	awaitGroup(t, b, steps, 10)
+	b.mustFail(t, "loot_method", map[string]any{"method": "group"}, -32003, "only the leader")
+	g.mu.Lock()
+	sent := len(g.groupSeenLoot)
+	g.mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("a refused rank sent %d CMSG_SET_LOOT_METHOD", sent)
+	}
+	b.stop(t)
+	g.wait(t)
+}
+
+// TestServeMarkInRaid: a raid target icon in a raid is the leader's or an assistant's to set (GroupHandler.cpp:456-479
+// drops anyone else silently), while in a party any member may. In a raid this character neither leads nor assists, so
+// the call is refused before the packet; leading, the same call goes out and the icon reads back.
+func TestServeMarkInRaid(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	raidScene(f)
+	f.groupLeaderName = "Bottwo"
+	defer f.close()
+	steps := &stepLog{}
+	a := startServeDaemon(t, f, steps)
+	awaitGroup(t, a, steps, 10)
+
+	a.mustFail(t, "mark", map[string]any{"guid": GUID(fakeGroupMemberGUID(5)), "icon": "skull"}, -32003,
+		"needs the group leader or an assistant")
+	f.mu.Lock()
+	sent := len(f.groupSeenMark)
+	f.mu.Unlock()
+	if sent != 0 {
+		t.Fatalf("a refused rank sent %d CMSG_UPDATE_RAID_TARGET", sent)
+	}
+	a.stop(t)
+	f.wait(t)
+
+	g := newFakeServer(t)
+	g.serveMode = true
+	raidScene(g)
+	defer g.close()
+	steps = &stepLog{}
+	b := startServeDaemon(t, g, steps)
+	awaitGroup(t, b, steps, 10)
+	b.mustCall(t, "mark", map[string]any{"guid": GUID(fakeGroupMemberGUID(5)), "icon": "skull"})
+	var marks ServeMarks
+	json.Unmarshal(b.mustCall(t, "marks", nil), &marks)
+	if len(marks.Marks) != 1 || marks.Marks[0].Icon != "skull" || marks.Marks[0].GUID != GUID(fakeGroupMemberGUID(5)) {
+		t.Fatalf("the icons after the leader's mark: %+v\n%s", marks, steps.joined())
+	}
+	b.stop(t)
+	g.wait(t)
 }
