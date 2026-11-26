@@ -249,7 +249,10 @@ forever-agent plan-scout <plan> [--dir dungeons] [--sql FILE] [--mmaps DIR] [--s
   `scout-<plan>.txt`. The text lists every non-ok step, then `N steps: a ok, b warn, c fail, d skip (s)`.
 - `--fix-out FILE` writes the fix file (`tb-scout-fix` version 1) even when there are no fixes.
 - `--apply-fixes DIR` writes a patched plan copy and `<plan>.diff` into a new or empty folder; it refuses a folder
-  inside a `dungeons/` folder, and with `--sql` it first proves the migration's rows equal the plan's export.
+  inside a `dungeons/` folder, and with `--sql` it first proves the migration's rows equal the plan's export. Each
+  applicable fix is validated with the plan loader after it is applied; a fix that makes the plan invalid is undone
+  and recorded in `dropped.json` beside the copy (and if every applicable fix is dropped, no copy is written and the
+  command exits 27).
 - `--fail-on fail` (the default) exits 27 on a failed step; `--fail-on warn` also on a warning. The live pass that
   stopped part-way exits 28; a refused or failed live phase exits 18; a mesh that cannot answer exits 1.
 

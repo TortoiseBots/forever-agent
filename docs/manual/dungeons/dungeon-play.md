@@ -111,7 +111,9 @@ regroup's or a wait's idling bots as fighting; read those hits beside the `regro
 `--tanks`, `--healers` and `--dps` name a raid group (comma lists) and make the same player run lead a raid instead of
 the four bots; `--layout FILE` puts the members in their subgroups before the run starts. They exclude `--bots`, and a
 plan loaded this way must be a raid plan (kind `raid` with its `raid` block): `--bots` keeps refusing a raid plan, so
-the five-member path is unchanged.
+the five-member path is unchanged. In raid mode, pull-group `stand_pull` and `clear_yd` are read as a plain pull
+(no patrol-clear wait, noted once), `max_bodies` is noted without enforcement, and when `--last-leg` is set, boss
+fields on legs after `--last-leg` are not refused while keeping those legs in the route for stranger counting.
 
 | Flag | Default | Meaning |
 |---|---|---|

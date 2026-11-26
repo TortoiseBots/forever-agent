@@ -41,6 +41,25 @@ type planScoutNav interface {
 	Close()
 }
 
+// scoutForeverCheckNav wraps a Forever planner for dungeon.CheckPlan without implementing ServerQuerier,
+// so the edited-plan check runs Plan instead of ServerPath on v16 tiles.
+type scoutForeverCheckNav struct{ n planScoutNav }
+
+func (s scoutForeverCheckNav) Plan(mapID uint32, from, to navmesh.Vec3) (navmesh.Path, error) {
+	return s.n.Plan(mapID, from, to)
+}
+func (s scoutForeverCheckNav) Raycast(mapID uint32, from, to navmesh.Vec3) (navmesh.Ray, error) {
+	return s.n.Raycast(mapID, from, to)
+}
+func (s scoutForeverCheckNav) Nearest(mapID uint32, p navmesh.Vec3) (navmesh.Vec3, bool, error) {
+	return s.n.Nearest(mapID, p)
+}
+func (s scoutForeverCheckNav) SetAvoid(mapID uint32, boxes []navmesh.Box) {
+	if setter, ok := s.n.(dungeon.AvoidSetter); ok {
+		setter.SetAvoid(mapID, boxes)
+	}
+}
+
 // planScoutOpen opens the navmesh of one mmaps folder; the caller closes it.
 var planScoutOpen = func(dir string) planScoutNav {
 	return navmesh.NewPlanner(dir)
@@ -242,7 +261,11 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		if p == nil {
 			return fail("%v", perr)
 		}
-		res, err := planexport.Build(p, planexport.Options{Source: "plan-scout", Cut: cutWith(planner, false)})
+		server := ""
+		if o.forever {
+			server = planexport.ServerForever
+		}
+		res, err := planexport.Build(p, planexport.Options{Source: "plan-scout", Cut: cutWith(planner, false), Server: server})
 		if err != nil {
 			return fail("the exporter refused the plan: %v", err)
 		}
@@ -442,7 +465,11 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			return fail("%s is inside a dungeons/ folder (or a slot's plan folder): the plan file is never written there", applyTo)
 		}
 		if o.sqlFile != "" {
-			exp, err := planexport.Build(in.Plan, planexport.Options{Source: "plan-scout", Cut: cutWith(planner, false)})
+			server := ""
+			if o.forever {
+				server = planexport.ServerForever
+			}
+			exp, err := planexport.Build(in.Plan, planexport.Options{Source: "plan-scout", Cut: cutWith(planner, false), Server: server})
 			if err != nil {
 				return fail("%v", err)
 			}
@@ -450,7 +477,15 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 				return fail("the rows in %s do not equal the plan's export (sha256 %s vs %s): nothing to apply fixes to", o.sqlFile, rowsSHA, h)
 			}
 		}
-		edited, res, err := planscout.ApplyFixes(in.Plan, fixes, planner)
+		var checkNav dungeon.Navmesh = planner
+		if o.forever {
+			checkNav = scoutForeverCheckNav{planner}
+		}
+		edited, res, dropped, err := planscout.ApplyFixes(in.Plan, fixes, checkNav)
+		for _, d := range dropped {
+			fmt.Fprintf(stderr, "plan-scout: fix %d (step %d, %s) dropped: %s\n", d.ID, d.Step, d.Kind, d.Reason)
+			rep.Notes = append(rep.Notes, fmt.Sprintf("fix %d (step %d, %s) dropped: %s", d.ID, d.Step, d.Kind, d.Reason))
+		}
 		if err != nil {
 			applyRefused = true
 			rep.Notes = append(rep.Notes, "apply-fixes refused: "+err.Error())
@@ -472,7 +507,12 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			if err := os.WriteFile(filepath.Join(applyTo, rep.Plan+".diff"), []byte(diff), 0o644); err != nil {
 				return fail("%v", err)
 			}
-			rep.Notes = append(rep.Notes, fmt.Sprintf("apply-fixes: %d fix(es) applied to a copy in %s (the plan check found no new issue)", countApplied(fixes), applyTo))
+			if len(dropped) > 0 {
+				if err := writeJSON(filepath.Join(applyTo, "dropped.json"), dropped); err != nil {
+					return fail("dropped.json: %v", err)
+				}
+			}
+			rep.Notes = append(rep.Notes, fmt.Sprintf("apply-fixes: %d fix(es) applied to a copy in %s (the plan check found no new issue)", countApplied(fixes)-len(dropped), applyTo))
 		}
 		// Rewrite the report with the apply note.
 		if err := writeJSON(jsonFile, rep); err != nil {

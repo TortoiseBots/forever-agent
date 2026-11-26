@@ -101,7 +101,10 @@ dungeons, `stormwind_stockade` and `ragefire_chasm` are `exported`, and `deadmin
 `zulfarrak`, `maraudon_purple`, `maraudon_orange`, `lower_blackrock_spire`, `blackrock_depths`, `scholomance`, the
 three Dire Maul wings (`dire_maul_east`, `dire_maul_north`, `dire_maul_west`), `stratholme_live`,
 `stratholme_undead` and `wailing_caverns-extra` are `refused`, each with the field, the spawns or the segments its
-value names. The plans still saying `todo` (`wailing_caverns` and the raid plans) have not had the check.
+value names. `zul_gurub` is `todo (offline-checked ...)` on leg 0 (`high_priestess_jeklik`; raid rows are not exported,
+so a player-led run reads the plan directly), while `wailing_caverns`, `molten_core`, `onyxias_lair` and
+`ruins_of_ahnqiraj` remain `todo` (`molten_core` and `onyxias_lair` carry Turtle-only entries and would be refused on
+ForeverCore data).
 
 A naming rule that bites: `plan-export` refuses a `draft` plan unless `--allow-draft` is passed, and
 `--all-live` exports only `live-checked` plans. The plan check does not care about the status: it walks the file as
@@ -143,7 +146,9 @@ for each other), `patrol` (a closed loop that walks near the pack — a multi-po
 waypoint back to the first counts as part of the path in the watch and play drivers alike, and an empty `path` keeps
 the entry-only rule: `entries`, `path`, `period_s`, `period_estimate`,
 `source`), `approach` (up to four points the run leader walks before pulling), `hold`, `stand_pull` with `clear_yd`,
-and `max_bodies`.
+`max_bodies`, and `alt_entries` (per-server creature entry overrides `{"<server>": {"<plan entry>": <server entry>}}`;
+`plan-check --forever`, `plan-scout --forever`, `plan-export --forever` and the Forever driver read the `forever`
+key, and every other reader keeps `entries`).
 
 A pull group's members should stand within about 20 yd of each other (`PackSpreadYd`): the world data's
 `creature_groups` that aggro together (or a `creature_linking` aggro edge) is what links a pack, and a wide plan group

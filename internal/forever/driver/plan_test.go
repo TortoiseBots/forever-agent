@@ -340,3 +340,87 @@ func TestPlanRunFieldsAreValidated(t *testing.T) {
 		}
 	}
 }
+
+func TestRoutePullGroupAltEntriesForever(t *testing.T) {
+	p := minimalPlan()
+	p.Legs[0].PullGroups[0].Entries = []uint32{11372, 11350}
+	p.Legs[0].PullGroups[0].AltEntries = map[string]map[uint32]uint32{"forever": {11372: 11371}}
+	r, err := NewRoute(p)
+	if err != nil {
+		t.Fatalf("NewRoute: %v", err)
+	}
+	got := r.Legs[0].Groups[0].Entries
+	if len(got) != 2 || got[0] != 11371 || got[1] != 11350 {
+		t.Fatalf("group entries = %v; want [11371 11350]", got)
+	}
+}
+
+func TestPlayRaidRouteUntil(t *testing.T) {
+	raidWithUntilPlan := func() *dungeon.Plan {
+		return &dungeon.Plan{
+			Version: 1, Name: "raid_until", Kind: dungeon.KindRaid, Map: 309,
+			Raid:     &dungeon.RaidSpec{Size: 20, Tanks: 3, Healers: 5, DPS: 12},
+			Entrance: dungeon.Point{X: 0, Y: 0, Z: 0},
+			Legs: []dungeon.Leg{
+				{
+					Name: "leg0",
+					To:   dungeon.Point{X: 10, Y: 0, Z: 0},
+					PullGroups: []dungeon.PullGroup{{
+						Entries:   []uint32{100},
+						Positions: []dungeon.Point{{X: 20, Y: 0, Z: 0}},
+						Approach:  []dungeon.Point{{X: 15, Y: 0, Z: 0}},
+						StandPull: true,
+						ClearYd:   40,
+						MaxBodies: 8,
+					}},
+					Boss: &dungeon.Boss{Entry: 200, Position: dungeon.Point{X: 30, Y: 0, Z: 0}},
+				},
+				{
+					Name: "leg1",
+					To:   dungeon.Point{X: 40, Y: 0, Z: 0},
+					Boss: &dungeon.Boss{Entry: 201, Position: dungeon.Point{X: 50, Y: 0, Z: 0}},
+				},
+				{
+					Name: "leg2",
+					To:   dungeon.Point{X: 60, Y: 0, Z: 0},
+					Boss: &dungeon.Boss{Entry: 202, Position: dungeon.Point{X: 70, Y: 0, Z: 0}},
+				},
+				{
+					Name: "leg3",
+					To:   dungeon.Point{X: 80, Y: 0, Z: 0},
+					Boss: &dungeon.Boss{Entry: 203, Position: dungeon.Point{X: 90, Y: 0, Z: 0}, PhaseEntries: []uint32{204}},
+				},
+			},
+		}
+	}
+
+	p := raidWithUntilPlan()
+	if _, err := NewPlayRaidRoute(p); err == nil || !strings.Contains(err.Error(), "phase_entries") {
+		t.Fatalf("NewPlayRaidRoute err = %v; want phase_entries refusal", err)
+	}
+	r, err := NewPlayRaidRouteUntil(p, "leg0")
+	if err != nil {
+		t.Fatalf("NewPlayRaidRouteUntil(leg0): %v", err)
+	}
+	if len(r.Legs) != 4 || r.Legs[3].Boss == nil {
+		t.Fatalf("legs = %d; want all 4 kept for stranger counting", len(r.Legs))
+	}
+	wantNote := "stand_pull read as a plain pull (1 groups)"
+	if !slices.Contains(r.Notes, wantNote) {
+		t.Fatalf("notes = %v; want %q", r.Notes, wantNote)
+	}
+	if _, err := NewPlayRaidRouteUntil(p, "leg3"); err == nil || !strings.Contains(err.Error(), "phase_entries") {
+		t.Fatalf("NewPlayRaidRouteUntil(leg3) err = %v; want phase_entries refusal", err)
+	}
+	if _, err := NewPlayRaidRouteUntil(p, "missing"); !errors.Is(err, ErrUnknownLeg) {
+		t.Fatalf("NewPlayRaidRouteUntil(missing) err = %v; want ErrUnknownLeg", err)
+	}
+
+	// modePlay still refuses stand_pull.
+	play := minimalPlan()
+	play.Legs[0].PullGroups[0].StandPull = true
+	play.Legs[0].PullGroups[0].Approach = []dungeon.Point{{X: 0, Y: 15, Z: 0}}
+	if _, err := NewPlayRoute(play); err == nil || !strings.Contains(err.Error(), "stand_pull") {
+		t.Fatalf("NewPlayRoute err = %v; want stand_pull refusal", err)
+	}
+}

@@ -3,6 +3,7 @@ package planscout
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/pjerra/forever-agent/internal/dungeon"
@@ -111,5 +112,141 @@ func TestSetPointRefusesAStepItCannotEdit(t *testing.T) {
 	}
 	if p.Legs[0].Steps[1].AreaTrigger.Stand == pt || p.Legs[0].AfterBoss[0].AreaTrigger.Stand == pt {
 		t.Error("a refused edit changed a neighbour")
+	}
+}
+
+func TestInsertViasBossApproach(t *testing.T) {
+	p := &dungeon.Plan{
+		Version: 1, Name: "t", Map: 1,
+		Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 10},
+			Boss: &dungeon.Boss{
+				Entry:    100,
+				Position: dungeon.Point{X: 30},
+				Approach: []dungeon.Point{{X: 15}, {X: 25}},
+			},
+		}},
+	}
+	via := dungeon.Point{X: 20}
+	ref := planexport.RowOrigin{Leg: 0, Part: "approach", Group: -1, Index: 1}
+	if err := insertVias(p, ref, []dungeon.Point{via}); err != nil {
+		t.Fatalf("insertVias boss approach: %v", err)
+	}
+	got := p.Legs[0].Boss.Approach
+	if len(got) != 3 || got[0].X != 15 || got[1].X != 20 || got[2].X != 25 {
+		t.Fatalf("boss approach = %+v; want [15, 20, 25]", got)
+	}
+
+	noBoss := &dungeon.Plan{Version: 1, Name: "t", Map: 1, Legs: []dungeon.Leg{{Name: "one"}}}
+	if err := insertVias(noBoss, ref, []dungeon.Point{via}); err == nil || err.Error() != "the leg has no boss" {
+		t.Fatalf("nil boss err = %v; want %q", err, "the leg has no boss")
+	}
+	badGroup := planexport.RowOrigin{Leg: 0, Part: "approach", Group: 0, Index: 0}
+	if err := insertVias(p, badGroup, []dungeon.Point{via}); err == nil {
+		t.Fatal("group >= len(PullGroups) accepted")
+	}
+}
+
+func TestApplyFixesDropsApproachOverFour(t *testing.T) {
+	p := &dungeon.Plan{
+		Version: 1, Name: "t", Map: 1, Entrance: dungeon.Point{},
+		Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 10},
+			PullGroups: []dungeon.PullGroup{
+				{
+					Entries:   []uint32{100},
+					Positions: []dungeon.Point{{X: 20}},
+					Approach:  []dungeon.Point{{X: 12}, {X: 14}, {X: 16}, {X: 18}},
+				},
+				{
+					Entries:   []uint32{101},
+					Positions: []dungeon.Point{{X: 50}},
+					Approach:  []dungeon.Point{{X: 40}},
+				},
+			},
+		}},
+	}
+	fixes := []Fix{
+		{
+			ID: 1, Step: 2, Kind: FixInsertVia, Apply: true,
+			Ref:  &planexport.RowOrigin{Leg: 0, Part: "approach", Group: 0, Index: 0},
+			Vias: []dungeon.Point{{X: 11}},
+		},
+		{
+			ID: 2, Step: 7, Kind: FixMoveStand, Apply: true,
+			Ref:   &planexport.RowOrigin{Leg: 0, Part: "pull", Group: 1, Index: 0},
+			Stand: &FixStand{X: 42},
+		},
+	}
+	edited, res, dropped, err := ApplyFixes(p, fixes, fakePlanNet{})
+	if err != nil {
+		t.Fatalf("ApplyFixes: %v", err)
+	}
+	if !res.Checked {
+		t.Fatalf("check not run: %+v", res)
+	}
+	if len(dropped) != 1 || dropped[0].ID != 1 || !strings.Contains(dropped[0].Reason, "at most 4") {
+		t.Fatalf("dropped = %+v; want fix 1 with 'at most 4'", dropped)
+	}
+	if got := len(edited.Legs[0].PullGroups[0].Approach); got != 4 {
+		t.Fatalf("group 0 approach len = %d; want 4", got)
+	}
+	if got := edited.Legs[0].PullGroups[1].Approach[0].X; got != 42 {
+		t.Fatalf("group 1 stand X = %v; want 42", got)
+	}
+}
+
+func TestApplyFixesDropsFarStand(t *testing.T) {
+	base := func() *dungeon.Plan {
+		return &dungeon.Plan{
+			Version: 1, Name: "t", Map: 1, Entrance: dungeon.Point{},
+			Legs: []dungeon.Leg{{
+				Name: "one",
+				To:   dungeon.Point{X: 10},
+				PullGroups: []dungeon.PullGroup{
+					{
+						Entries:   []uint32{100},
+						Positions: []dungeon.Point{{X: 100}},
+						Approach:  []dungeon.Point{{X: 80}},
+						StandPull: true,
+					},
+					{
+						Entries:   []uint32{101},
+						Positions: []dungeon.Point{{X: 140}},
+						Approach:  []dungeon.Point{{X: 120}},
+					},
+				},
+			}},
+		}
+	}
+	far := Fix{
+		ID: 1, Step: 3, Kind: FixMoveStand, Apply: true,
+		Ref:   &planexport.RowOrigin{Leg: 0, Part: "pull", Group: 0, Index: 0},
+		Stand: &FixStand{X: 37},
+	}
+	good := Fix{
+		ID: 2, Step: 5, Kind: FixMoveStand, Apply: true,
+		Ref:   &planexport.RowOrigin{Leg: 0, Part: "pull", Group: 1, Index: 0},
+		Stand: &FixStand{X: 122},
+	}
+	edited, _, dropped, err := ApplyFixes(base(), []Fix{far, good}, fakePlanNet{})
+	if err != nil {
+		t.Fatalf("ApplyFixes: %v", err)
+	}
+	if len(dropped) != 1 || dropped[0].ID != 1 || !strings.Contains(dropped[0].Reason, "60 yd") {
+		t.Fatalf("dropped = %+v; want fix 1 with '60 yd'", dropped)
+	}
+	if got := edited.Legs[0].PullGroups[0].Approach[0].X; got != 80 {
+		t.Fatalf("group 0 stand X = %v; want 80", got)
+	}
+	if got := edited.Legs[0].PullGroups[1].Approach[0].X; got != 122 {
+		t.Fatalf("group 1 stand X = %v; want 122", got)
+	}
+
+	// All applicable fixes dropped -> refused with error.
+	if editedAll, _, droppedAll, err := ApplyFixes(base(), []Fix{far}, fakePlanNet{}); err == nil || editedAll != nil || len(droppedAll) != 1 {
+		t.Fatalf("all-dropped: edited=%v dropped=%+v err=%v", editedAll, droppedAll, err)
 	}
 }

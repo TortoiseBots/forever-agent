@@ -18,6 +18,7 @@ import (
 	"github.com/pjerra/forever-agent/internal/dungeon"
 	"github.com/pjerra/forever-agent/internal/forever/serveclient"
 	"github.com/pjerra/forever-agent/internal/forever/sightcmd"
+	"github.com/pjerra/forever-agent/internal/navmesh"
 	"github.com/pjerra/forever-agent/internal/navmesh/navfixture"
 	"github.com/pjerra/forever-agent/internal/planexport"
 	"github.com/pjerra/forever-agent/internal/planscout"
@@ -1730,5 +1731,30 @@ func TestForeverServerSightNotesUnmatchedTargets(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("the report does not note the unmatched targets: %q", rep.Notes)
+	}
+}
+
+type fakeForeverNoServerPathNav struct{ scoutNet }
+
+func (fakeForeverNoServerPathNav) ServerPath(uint32, navmesh.Vec3, navmesh.Vec3) (navmesh.ServerPath, error) {
+	return navmesh.ServerPath{}, errors.New("navmesh: ServerPath replays the 1.12 core's own query; use PathTo/PathToFilter for a Forever mmap set")
+}
+
+func TestPlanScoutApplyFixesForeverNoServerPath(t *testing.T) {
+	dir := t.TempDir()
+	foreverScoutPlanFile(t, dir, "scout_apply_forever", false)
+	old := planScoutOpenForever
+	planScoutOpenForever = func(string, map[uint32]uint32) planScoutNav { return fakeForeverNoServerPathNav{} }
+	t.Cleanup(func() { planScoutOpenForever = old })
+
+	out := filepath.Join(dir, "out")
+	applyDir := filepath.Join(dir, "patched")
+	code, _, errOut := runCLI("plan-scout", "scout_apply_forever", "--dir", dir, "--mmaps", dir,
+		"--spawns", foreverExport(), "--forever", "--out", out, "--apply-fixes", applyDir)
+	if code != exitOK {
+		t.Fatalf("plan-scout --forever --apply-fixes exited %d: %s", code, errOut)
+	}
+	if _, err := os.Stat(filepath.Join(applyDir, "scout_apply_forever.json")); err != nil {
+		t.Fatalf("missing patched plan copy: %v", err)
 	}
 }

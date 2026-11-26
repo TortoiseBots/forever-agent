@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -112,10 +113,20 @@ func foreverDungeonPlayCmd(ctx context.Context, args []string, stdout, stderr io
 	// loads the raid plan through the player-led raid's own route, and its group is validated before anything is sent.
 	load := driver.LoadPlayRoute
 	if raidRun {
-		load = driver.LoadPlayRaidRoute
+		if *lastLeg != "" {
+			load = func(path string) (*driver.Route, error) {
+				return driver.LoadPlayRaidRouteUntil(path, *lastLeg)
+			}
+		} else {
+			load = driver.LoadPlayRaidRoute
+		}
 	}
 	route, err := load(*plan)
 	if err != nil {
+		if errors.Is(err, driver.ErrUnknownLeg) {
+			fmt.Fprintf(stderr, "forever dungeon-play: %v\n", err)
+			return exitUsage
+		}
 		fmt.Fprintf(stderr, "forever dungeon-play: the plan is refused: %v\n", err)
 		return driver.ExitPlanRefused
 	}

@@ -11,8 +11,9 @@ import (
 
 // The core's GroupAIFlags (CreatureGroups.h:28-31). They are NOT worldspawn's option bits: 0x1 says the members assist
 // the leader, 0x2 that the leader assists a member, and 0x200 that a member follows the leader while idle. The reader's
-// FormationMove means that last follow and its AggroTogether means the group wakes as one, which either assist direction
-// causes.
+// FormationMove means that last follow, and its AggroTogether means the group wakes as one: either assist direction
+// causes it, and 0x200 members walking in formation stand inside the core's 10 yd family-assist radius of the leader, so
+// they come as one pull too.
 const (
 	foreverMembersAssistLeader = 0x00000001
 	foreverLeaderAssistsMember = 0x00000002
@@ -21,10 +22,11 @@ const (
 
 // foreverGroupFlags maps one creature_formations.groupAI value to the reader's own option set. Copying the raw number
 // would read the common 0x1 pack (members assist the leader when it pulls) as FormationMove and split it into single
-// pulls, and a 0x3 pack (assist both ways) as FormationMove|AggroTogether, i.e. as a moving formation.
+// pulls; 0x200 (idle in formation) sets both FormationMove and AggroTogether because formation followers stand within the
+// core's family-assist radius of their leader.
 func foreverGroupFlags(groupAI uint32) uint32 {
 	var flags uint32
-	if groupAI&(foreverMembersAssistLeader|foreverLeaderAssistsMember) != 0 {
+	if groupAI&(foreverMembersAssistLeader|foreverLeaderAssistsMember|foreverIdleInFormation) != 0 {
 		flags |= AggroTogether
 	}
 	if groupAI&foreverIdleInFormation != 0 {

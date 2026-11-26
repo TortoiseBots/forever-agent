@@ -475,3 +475,43 @@ func TestParseAltEntries(t *testing.T) {
 		}
 	}
 }
+
+func TestPullGroupAltEntries(t *testing.T) {
+	const src = `{"version":1,"name":"t","map":309,"entrance":{"x":0,"y":0,"z":0},"legs":[
+ {"name":"jeklik","to":{"x":1,"y":0,"z":0},"pull_groups":[
+  {"entries":[11372,11350],"positions":[{"x":2,"y":0,"z":0},{"x":3,"y":0,"z":0}],"alt_entries":{"forever":{"11372":11371}}}]}]}`
+	p, err := Parse("t.json", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := p.Legs[0].PullGroups[0]
+	if got := g.EntriesFor(""); len(got) != 2 || got[0] != 11372 || got[1] != 11350 {
+		t.Fatalf("EntriesFor(\"\") = %v; want [11372 11350]", got)
+	}
+	if got := g.EntriesFor("forever"); len(got) != 2 || got[0] != 11371 || got[1] != 11350 {
+		t.Fatalf("EntriesFor(\"forever\") = %v; want [11371 11350]", got)
+	}
+	if got := g.EntriesFor("other"); len(got) != 2 || got[0] != 11372 || got[1] != 11350 {
+		t.Fatalf("EntriesFor(\"other\") = %v; want [11372 11350]", got)
+	}
+	out, err := Marshal(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err := Parse("t.json", out)
+	if err != nil || q.Legs[0].PullGroups[0].AltEntries["forever"][11372] != 11371 {
+		t.Fatalf("round trip: err=%v alt=%+v", err, q)
+	}
+	for _, bad := range []struct{ name, rep, want string }{
+		{"empty server", `"alt_entries":{"":{"11372":11371}}`, "server name is required"},
+		{"not in entries", `"alt_entries":{"forever":{"99999":11371}}`, "not in this pull group"},
+		{"zero value", `"alt_entries":{"forever":{"11372":0}}`, "0 is not a creature entry"},
+		{"same entry", `"alt_entries":{"forever":{"11372":11372}}`, "already the entry"},
+		{"bad key", `"alt_entries":{"forever":{"abc":11371}}`, "not a creature entry"},
+	} {
+		b := strings.Replace(src, `"alt_entries":{"forever":{"11372":11371}}`, bad.rep, 1)
+		if _, err := Parse("t.json", []byte(b)); err == nil || !strings.Contains(err.Error(), bad.want) {
+			t.Errorf("%s: err = %v; want %q", bad.name, err, bad.want)
+		}
+	}
+}

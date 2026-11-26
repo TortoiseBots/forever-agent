@@ -2,6 +2,7 @@
 
 ## 2026-11-26
 
+* **Update**: Documented `pull_groups[].alt_entries` and `zul_gurub` leg-0 offline check status in [dungeon plans](dungeons/plans.md), `--apply-fixes` validation and `dropped.json` output in [plan tools](dungeons/plan-tools.md), and raid `stand_pull`, `max_bodies` and `--last-leg` handling in [dungeon-play](dungeons/dungeon-play.md).
 * **Update**: Documented in [dungeon plans](dungeons/plans.md) that a patrol's `path` is treated as a closed loop (closing leg included, empty `path` entry-only) in the watch and play drivers alike; `plan-scout --forever --live` level fill keys live units by `UnitSpawnKey` and `serve`'s `los` clears a previous said-aloud answer at the start of each call.
 
 ## 2026-11-25

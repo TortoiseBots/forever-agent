@@ -474,9 +474,12 @@ func TestApplyInsertsHighIndexFirst(t *testing.T) {
 		{ID: 2, Step: 3, Kind: FixInsertVia, Apply: true, Ref: &planexport.RowOrigin{Leg: 0, Part: "via", Group: -1, Index: 1},
 			Vias: []dungeon.Point{{X: 1.5, Y: 0, Z: 0}}},
 	}
-	edited, res, err := ApplyFixes(p, fixes, fakePlanNet{})
+	edited, res, dropped, err := ApplyFixes(p, fixes, fakePlanNet{})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(dropped) != 0 {
+		t.Fatalf("dropped = %+v; want none", dropped)
 	}
 	if !res.Checked {
 		t.Fatalf("check: %+v", res)

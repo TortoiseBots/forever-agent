@@ -488,12 +488,13 @@ func buildUnitRows(p *dungeon.Plan, res Result) ([]UnitRow, error) {
 				continue
 			}
 			g := l.PullGroups[o.Group]
-			n := len(g.Entries)
+			entries := g.EntriesFor(ServerForever)
+			n := len(entries)
 			if len(g.Positions) > n {
 				n = len(g.Positions)
 			}
 			for k := 0; k < n; k++ {
-				add(s.Plan, s, k, at(g.Entries, k), g.Positions[min(k, len(g.Positions)-1)], UnitPack)
+				add(s.Plan, s, k, at(entries, k), g.Positions[min(k, len(g.Positions)-1)], UnitPack)
 			}
 			if g.Patrol != nil && len(g.Patrol.Path) > 0 {
 				for j, e := range g.Patrol.Entries {

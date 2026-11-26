@@ -26,8 +26,8 @@ func foreverRow(guid uint64, entry uint32, name, levelMin, levelMax string, grou
 }
 
 // TestForeverGroupAIMapping pins the mapping of the core's GroupAIFlags (CreatureGroups.h:28-31) to the reader's option
-// set: either assist direction makes the group wake as one (AggroTogether), and only 0x200 makes its members follow the
-// leader (FormationMove). Copying the raw number would turn 0x1 into FormationMove and 0x3 into a moving formation.
+// set: either assist direction or 0x200 (idle in formation, standing inside the leader's family-assist radius) makes the
+// group wake as one (AggroTogether), and 0x200 also sets FormationMove.
 func TestForeverGroupAIMapping(t *testing.T) {
 	for _, c := range []struct {
 		ai   uint32
@@ -37,13 +37,19 @@ func TestForeverGroupAIMapping(t *testing.T) {
 		{foreverMembersAssistLeader, AggroTogether},
 		{foreverLeaderAssistsMember, AggroTogether},
 		{foreverMembersAssistLeader | foreverLeaderAssistsMember, AggroTogether},
-		{foreverIdleInFormation, FormationMove},
+		{foreverIdleInFormation, FormationMove | AggroTogether},
 		{foreverIdleInFormation | foreverMembersAssistLeader, FormationMove | AggroTogether},
 		{0x100, 0},
 	} {
 		if got := foreverGroupFlags(c.ai); got != c.want {
 			t.Errorf("foreverGroupFlags(%#x) = %#x, want %#x", c.ai, got, c.want)
 		}
+	}
+}
+
+func TestForeverGroupFlagsIdleFormationIsPack(t *testing.T) {
+	if got, want := foreverGroupFlags(512), uint32(FormationMove|AggroTogether); got != want {
+		t.Fatalf("foreverGroupFlags(512) = %#x, want %#x", got, want)
 	}
 }
 
@@ -71,16 +77,16 @@ func TestForeverDBFormationSelfRow(t *testing.T) {
 	if got := byGUID[101].GroupFlags; got != AggroTogether {
 		t.Errorf("spawn 101: GroupFlags %#x, want the group's AggroTogether", got)
 	}
-	if got := byGUID[300].GroupFlags; got != FormationMove {
-		t.Errorf("spawn 300: GroupFlags %#x, want FormationMove from 0x200", got)
+	if got := byGUID[300].GroupFlags; got != FormationMove|AggroTogether {
+		t.Errorf("spawn 300: GroupFlags %#x, want FormationMove|AggroTogether from 0x200", got)
 	}
-	if got := byGUID[301].GroupFlags; got != FormationMove {
-		t.Errorf("spawn 301: GroupFlags %#x, want the group's FormationMove", got)
+	if got := byGUID[301].GroupFlags; got != FormationMove|AggroTogether {
+		t.Errorf("spawn 301: GroupFlags %#x, want the group's FormationMove|AggroTogether", got)
 	}
 	got := packText(w.Packs(PackOptions{}))
-	want := []string{"100:[100 101]", "200:[200]", "300:[300]", "301:[301]"}
+	want := []string{"100:[100 101]", "200:[200]", "300:[300 301]"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Fatalf("packs = %v, want %v (the 0x1 pack is one pull; 0x200 is not aggro together)", got, want)
+		t.Fatalf("packs = %v, want %v (the 0x1 and 0x200 packs are each one pull)", got, want)
 	}
 	if !strings.Contains(strings.Join(notes, "\n"), "groups.tsv: 2 groups, 4 members") {
 		t.Errorf("no group note:\n%s", strings.Join(notes, "\n"))
