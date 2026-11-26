@@ -223,9 +223,15 @@ type Leg struct {
 	// unless asked for, like an optional leg without an item (Zul'Farrak's farraki_arena and zeljeb, Turtle-custom wings mapped
 	// offline and never fought live: the default export keeps today's leg numbers). The driver runs such a leg as written; only
 	// plan-export skips it. Never with Optional (an optional leg is already skipped unless asked for, by its item).
-	SkipExport bool   `json:"skip_export,omitempty"`
-	Steps      []Step `json:"steps,omitempty"`
-	Boss       *Boss  `json:"boss,omitempty"`
+	SkipExport bool `json:"skip_export,omitempty"`
+	// ForeverChecked marks a leg whose points and packs were checked against ForeverCore data (plan-scout --forever,
+	// plan-check --forever) and remapped where they differed (Zul'Gurub's leg 0, #279). plan-export --forever writes a raid
+	// plan only up to its last checked leg, and refuses a selection that reaches an unchecked one: the shared plan's other
+	// legs may stand where no ForeverCore spawn does. A dungeon plan's legs are exported without it (the batches that checked
+	// them did not mark the legs).
+	ForeverChecked bool   `json:"forever_checked,omitempty"`
+	Steps          []Step `json:"steps,omitempty"`
+	Boss           *Boss  `json:"boss,omitempty"`
 	// CompanionsLoot false has the driver order the party's corpse and object looting off (".bot behavior <bot> loot off") from the start
 	// of the leg to its end, and on again after: the Zul'Farrak graveyard, where a bot that loots opens a Shallow Grave chest and wakes
 	// what lies in it. It is the leg's whole stretch, not only the boss fight (Boss.CompanionsLoot, which the boss's own loot_item needs).
@@ -990,10 +996,12 @@ type rawLeg struct {
 	Leftover       []uint32     `json:"leftover_entries"`
 	Optional       *OptionalLeg `json:"optional"`
 	// SkipExport is Leg.SkipExport.
-	SkipExport bool      `json:"skip_export"`
-	Rest       *RestSpec `json:"rest"`
-	Notes      []string  `json:"notes"`
-	NeedsWalk  bool      `json:"needs_walk"`
+	SkipExport bool `json:"skip_export"`
+	// ForeverChecked is Leg.ForeverChecked.
+	ForeverChecked bool      `json:"forever_checked"`
+	Rest           *RestSpec `json:"rest"`
+	Notes          []string  `json:"notes"`
+	NeedsWalk      bool      `json:"needs_walk"`
 }
 
 type rawLeave struct {
@@ -1534,7 +1542,7 @@ func (c *checker) entries(path string, es []uint32, need bool) {
 }
 
 func (c *checker) leg(path string, r *rawLeg) Leg {
-	l := Leg{Name: r.Name, Skip: r.Skip, Notes: r.Notes, NeedsWalk: r.NeedsWalk, CompanionsLoot: r.CompanionsLoot, LeftoverEntries: r.Leftover, SkipExport: r.SkipExport}
+	l := Leg{Name: r.Name, Skip: r.Skip, Notes: r.Notes, NeedsWalk: r.NeedsWalk, CompanionsLoot: r.CompanionsLoot, LeftoverEntries: r.Leftover, SkipExport: r.SkipExport, ForeverChecked: r.ForeverChecked}
 	for i, e := range r.Leftover {
 		if e == 0 {
 			c.fail(fmt.Sprintf("%s.leftover_entries[%d]", path, i), "0 is not a creature entry")

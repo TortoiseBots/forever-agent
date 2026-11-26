@@ -2055,3 +2055,33 @@ func TestRunLeaderHopWarningOnlyForHopsLeftUncut(t *testing.T) {
 		t.Fatalf("a cut ending 70 yd out lost its warning: %q", w)
 	}
 }
+
+// TestBuildLastLeg: a leg selection writes that leg and the ones before it, numbers them from 0, says in the plan row's
+// comment and a warning that the rest is out, and refuses a name the plan does not hold.
+func TestBuildLastLeg(t *testing.T) {
+	const doc = `{"version":1,"name":"cut","status":"live-checked","map":1,"entrance":{"x":0,"y":0,"z":0},
+ "legs":[{"name":"a","to":{"x":1,"y":0,"z":0},"pull_groups":[{"entries":[1],"positions":[{"x":1,"y":0,"z":0}]}]},
+         {"name":"b","to":{"x":2,"y":0,"z":0},"pull_groups":[{"entries":[2],"positions":[{"x":2,"y":0,"z":0}]}]},
+         {"name":"c","to":{"x":3,"y":0,"z":0},"pull_groups":[{"entries":[3],"positions":[{"x":3,"y":0,"z":0}]}]}]}`
+	res, err := Build(parsePlan(t, doc), Options{LastLeg: "b", Source: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Rows.Legs) != 2 || res.Rows.Legs[0].Name != "a" || res.Rows.Legs[1].Leg != 1 {
+		t.Fatalf("legs = %+v; want a and b numbered 0 and 1", res.Rows.Legs)
+	}
+	for _, s := range res.Rows.Steps {
+		if s.Leg > 1 {
+			t.Fatalf("step %d is in leg %d; the rows stop after b", s.Seq, s.Leg)
+		}
+	}
+	if !strings.Contains(res.Rows.Plan.Comment, "exported up to leg 1 (b) only (--last-leg)") {
+		t.Fatalf("plan comment %q lacks the selection", res.Rows.Plan.Comment)
+	}
+	if !strings.Contains(strings.Join(res.Warnings, "\n"), "legs after 1 (b) are not in the rows: --last-leg b") {
+		t.Fatalf("warnings %v lack the selection", res.Warnings)
+	}
+	if _, err := Build(parsePlan(t, doc), Options{LastLeg: "nowhere", Source: "test"}); err == nil || !strings.Contains(err.Error(), "not a leg of the plan (legs: a, b, c)") {
+		t.Fatalf("unknown leg: err = %v", err)
+	}
+}

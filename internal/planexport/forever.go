@@ -79,11 +79,15 @@ const ForeverHeader = `-- Dungeon plan rows for a server module that runs dungeo
 `
 
 // BuildForever maps a plan to the Forever rows and reports every plan field as carried, dropped with a note, or refused.
-// A plan with a refused field is not exported: the error names every refused field.
+// A plan with a refused field is not exported: the error names every refused field. A raid plan exports only the legs a Forever
+// check reached (dungeon.Leg.ForeverChecked), selected with Options.LastLeg: its other legs may stand where the server has no spawn.
 func BuildForever(p *dungeon.Plan, opt Options) (ForeverReport, error) {
 	// The rows name the objects this server uses: an object ref's alt_entries value for it where the plan carries one (the Deadmines
 	// Heavy Doors are 16400 and 16399 here, 17153 in the plan), the plan's own entry everywhere else.
 	opt.Server = ServerForever
+	if err := raidLegSelection(p, opt); err != nil {
+		return ForeverReport{}, err
+	}
 	var rep ForeverReport
 	c := newClassifier(&rep)
 	classifyPlan(c, p, opt)
@@ -112,6 +116,42 @@ func BuildForever(p *dungeon.Plan, opt Options) (ForeverReport, error) {
 		}
 	}
 	return rep, nil
+}
+
+// raidLegSelection checks the leg selection of a raid plan's Forever export. A raid plan's rows carry only the legs a Forever
+// check reached (dungeon.Leg.ForeverChecked): its other legs are the shared plan's points, which the server may have no spawn
+// for. The export needs Options.LastLeg so the operator says which prefix is meant; every leg the selection writes must be
+// checked. A name the plan does not hold is refused here too, in Build's words.
+func raidLegSelection(p *dungeon.Plan, opt Options) error {
+	if !p.IsRaid() {
+		return nil
+	}
+	last, named := lastLegIndex(p, opt)
+	if !named {
+		return fmt.Errorf("plan %s: --last-leg %q is not a leg of the plan (legs: %s)", p.Name, opt.LastLeg, legNamesText(p))
+	}
+	lastChecked := -1
+	for i, l := range p.Legs {
+		if l.ForeverChecked {
+			lastChecked = i
+		}
+	}
+	if lastChecked < 0 {
+		return fmt.Errorf("plan %s: no leg is remapped for ForeverCore (forever_checked): its rows cannot be exported", p.Name)
+	}
+	if opt.LastLeg == "" {
+		return fmt.Errorf("plan %s: a raid plan exports only the legs remapped for ForeverCore; pass --last-leg <name> (the last remapped leg is %s (leg %d))", p.Name, p.Legs[lastChecked].Name, lastChecked)
+	}
+	for i := 0; i <= last; i++ {
+		l := p.Legs[i]
+		if !legExported(l, opt) {
+			continue // not a row of the export: its points are not walked from a row either
+		}
+		if !l.ForeverChecked {
+			return fmt.Errorf("plan %s: --last-leg %s: leg %d (%s) is not remapped for ForeverCore (forever_checked); the last remapped leg is %s (leg %d)", p.Name, opt.LastLeg, i, l.Name, p.Legs[lastChecked].Name, lastChecked)
+		}
+	}
+	return nil
 }
 
 // bossOfUnit finds the boss entry whose leg and row the unit belongs to (for a message only).
@@ -184,11 +224,9 @@ func classifyPlan(c *classifier, p *dungeon.Plan, opt Options) {
 	c.carried("name")
 	c.carried("map")
 	c.carried("legs")
-	if p.Kind == "" || p.Kind == dungeon.KindDungeon {
-		c.carried("kind")
-	} else {
-		c.refused("kind", "plan", fmt.Sprintf("kind %q: the rows are a dungeon plan; a raid plan is not carried", p.Kind))
-	}
+	// A raid plan reaches here only with its remapped legs selected (raidLegSelection): its kind is part of the plan the rows
+	// carry, and its raid block has no column.
+	c.carried("kind")
 	if p.Status != "" {
 		c.carried("status (plan row comment)")
 	}
@@ -247,11 +285,16 @@ func classifyPlan(c *classifier, p *dungeon.Plan, opt Options) {
 		c.dropped("team", "plan "+p.Team, "no plan column: a pack's or boss's team is its row's flag")
 	}
 	if p.Raid != nil {
-		c.refused("raid", "plan", "a raid library is not carried; the rows are a dungeon plan")
+		c.dropped("raid", "plan", "no column: the rows carry no raid size, and the module's own run holds it")
 	}
+	lastLeg, _ := lastLegIndex(p, opt)
 	for li, l := range p.Legs {
 		at := fmt.Sprintf("legs[%d]", li)
 		where := fmt.Sprintf("leg %d (%s)", li, l.Name)
+		if lastLeg >= 0 && li > lastLeg {
+			c.dropped(at, where, fmt.Sprintf("after --last-leg %s: not in the rows", opt.LastLeg))
+			continue
+		}
 		if !legExported(l, opt) {
 			if l.Optional != nil {
 				c.dropped(at+".optional", where, fmt.Sprintf("leg left out (it needs item %d); pass --with-optional %s to write it", l.Optional.Item, l.Name))

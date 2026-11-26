@@ -274,6 +274,11 @@ type Options struct {
 	// Zul'Farrak's farraki_arena and zeljeb (Turtle-custom wings, mapped offline and never fought live; the default export leaves
 	// them out so its leg numbers stay today's). A name that is no skip_export leg of the plan is an error.
 	WithLegs []string
+	// LastLeg names the leg the export stops after (plan-export --forever's --last-leg): that leg and the ones before it are
+	// written, the legs after it are left out with a warning. Empty: every exportable leg. A name that is no leg of the plan is an
+	// error. It is how a raid plan's remapped prefix is exported: the rows of legs a Forever check has not reached would name
+	// spawns the server may not have.
+	LastLeg string
 	// Route, when set, is called for every hop between two anchors of the rows (move, pull, boss, hold) of a plan with avoid boxes: it
 	// returns the via points that keep the run leader's own navmesh path (the server's, which does not know the boxes) out of them,
 	// none when that path is already clear. An error means a hop that cannot be made safe: the export fails.
@@ -378,10 +383,24 @@ func Build(p *dungeon.Plan, opt Options) (Result, error) {
 			return Result{}, fmt.Errorf("plan %s: with-legs names %q, which is no skip_export leg of the plan", name, n)
 		}
 	}
+	lastLeg, named := lastLegIndex(p, opt)
+	if !named {
+		return Result{}, fmt.Errorf("plan %s: --last-leg %q is not a leg of the plan (legs: %s)", name, opt.LastLeg, legNamesText(p))
+	}
 	b := &builder{opt: opt, plan: p, name: name, legs: ExportedLegs(p, opt)}
-	b.rows.Plan = PlanRow{Plan: name, Map: p.Map, CCPriority: slices.Clone(p.CCPriority), CCAlways: slices.Clone(p.CCAlways), KillFirst: slices.Clone(p.KillFirst), Source: clip(source, MaxSource), Comment: clip(planComment(p), MaxComment)}
+	comment := planComment(p)
+	if lastLeg >= 0 && lastLeg+1 < len(p.Legs) {
+		comment += fmt.Sprintf("; exported up to leg %d (%s) only (--last-leg)", lastLeg, p.Legs[lastLeg].Name)
+	}
+	b.rows.Plan = PlanRow{Plan: name, Map: p.Map, CCPriority: slices.Clone(p.CCPriority), CCAlways: slices.Clone(p.CCAlways), KillFirst: slices.Clone(p.KillFirst), Source: clip(source, MaxSource), Comment: clip(comment, MaxComment)}
+	if lastLeg >= 0 && lastLeg+1 < len(p.Legs) {
+		b.warnings = append(b.warnings, fmt.Sprintf("legs after %d (%s) are not in the rows: --last-leg %s", lastLeg, p.Legs[lastLeg].Name, opt.LastLeg))
+	}
 	cut, cutLeg := "", 0
 	for li := range p.Legs {
+		if lastLeg >= 0 && li > lastLeg {
+			break
+		}
 		nl, ns, nw := len(b.rows.Legs), len(b.rows.Steps), len(b.warnings)
 		if err := b.leg(li); err != nil {
 			if li > 0 && errors.Is(err, ErrNoRunLeaderStep) {
@@ -403,7 +422,11 @@ func Build(p *dungeon.Plan, opt Options) (Result, error) {
 			}
 		}
 		b.warnings = append(b.warnings, cut)
-		b.rows.Plan.Comment = clip(planComment(p)+"; cut before leg "+strconv.Itoa(len(b.rows.Legs))+" ("+p.Legs[cutLeg].Name+"): a step the run leader cannot do", MaxComment)
+		cutComment := "; cut before leg " + strconv.Itoa(len(b.rows.Legs)) + " (" + p.Legs[cutLeg].Name + "): a step the run leader cannot do"
+		if lastLeg >= 0 && lastLeg+1 < len(p.Legs) {
+			cutComment += fmt.Sprintf("; exported up to leg %d (%s) only (--last-leg)", lastLeg, p.Legs[lastLeg].Name)
+		}
+		b.rows.Plan.Comment = clip(planComment(p)+cutComment, MaxComment)
 	}
 	if err := b.cutLongHops(); err != nil {
 		return Result{}, err
@@ -411,18 +434,21 @@ func Build(p *dungeon.Plan, opt Options) (Result, error) {
 	if err := b.routeAroundAvoid(); err != nil {
 		return Result{}, err
 	}
+	upto := len(p.Legs)
+	if cut != "" {
+		upto = cutLeg
+	}
+	if lastLeg >= 0 && lastLeg+1 < upto {
+		upto = lastLeg + 1
+	}
 	for _, w := range p.RunLeaderReach(0) {
-		if cut != "" && w.Leg >= cutLeg {
+		if w.Leg >= upto {
 			continue
 		}
 		if b.cutReach[reachKey{leg: w.Leg, group: w.PullGroup}] {
 			continue // --approach-hops cut the hop: the rows bring the party within the run leader's reach
 		}
 		b.warnings = append(b.warnings, w.String())
-	}
-	upto := len(p.Legs)
-	if cut != "" {
-		upto = cutLeg
 	}
 	b.warnings = append(b.warnings, unexpressed(p, opt, upto)...)
 	if err := Validate(b.rows); err != nil {
@@ -455,6 +481,15 @@ func planComment(p *dungeon.Plan) string {
 		c += ", " + p.Status
 	}
 	return c
+}
+
+// legNamesText lists the plan's leg names, for a message that names a selection the plan does not hold.
+func legNamesText(p *dungeon.Plan) string {
+	names := make([]string, len(p.Legs))
+	for i := range p.Legs {
+		names[i] = p.Legs[i].Name
+	}
+	return strings.Join(names, ", ")
 }
 
 type builder struct {
@@ -1485,11 +1520,30 @@ func legExported(l dungeon.Leg, opt Options) bool {
 	return l.Optional == nil || slices.Contains(opt.WithOptional, l.Name)
 }
 
+// lastLegIndex is the plan leg index opt.LastLeg names: -1 when LastLeg is empty. ok is false when the plan has no leg of that
+// name; the caller that validates the option errors on it, and ExportedLegs then writes every leg (as if LastLeg were empty).
+func lastLegIndex(p *dungeon.Plan, opt Options) (idx int, ok bool) {
+	if opt.LastLeg == "" {
+		return -1, true
+	}
+	for i := range p.Legs {
+		if p.Legs[i].Name == opt.LastLeg {
+			return i, true
+		}
+	}
+	return -1, false
+}
+
 // ExportedLegs is the LegMap of an export of p with opt: the legs it writes, numbered in plan order. Export builds it once and gives it
-// to the builder; a caller that has no rows (an observer, the route aggro) asks it for the export it reads.
+// to the builder; a caller that has no rows (an observer, the route aggro) asks it for the export it reads. A --last-leg name the plan
+// does not hold is left to the exporter to refuse and writes every leg here (the rows are never built on that path).
 func ExportedLegs(p *dungeon.Plan, opt Options) LegMap {
+	last, _ := lastLegIndex(p, opt)
 	m := LegMap{}
 	for i, l := range p.Legs {
+		if last >= 0 && i > last {
+			break
+		}
 		if legExported(l, opt) {
 			m[i] = len(m)
 		}

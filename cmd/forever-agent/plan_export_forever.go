@@ -15,7 +15,7 @@ import (
 
 // planExportForeverArgs is plan-export's Forever mode, parsed by planExportCmd.
 type planExportForeverArgs struct {
-	dir, out, mmaps, rev, stamp                                  string
+	dir, out, mmaps, rev, stamp, lastLeg                         string
 	allLive, allowDraft, force, report, floorAware, approachHops bool
 	skipLegs, withOptional, withLegs, names                      []string
 	stdout, stderr                                               io.Writer
@@ -68,7 +68,7 @@ func planExportForever(a planExportForeverArgs) int {
 	var planner, naive *navmesh.Planner
 	opt := planexport.Options{
 		SkipLegs: a.skipLegs, WithOptional: a.withOptional, WithLegs: a.withLegs,
-		ApproachHops: a.approachHops,
+		ApproachHops: a.approachHops, LastLeg: a.lastLeg,
 	}
 	if a.mmaps != "" {
 		planner = navmesh.NewForeverPlanner(a.mmaps, nil)

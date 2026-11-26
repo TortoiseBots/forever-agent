@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pjerra/forever-agent/internal/planexport"
 )
 
 func TestPlanExportForeverRagefire(t *testing.T) {
@@ -89,5 +91,73 @@ func TestPlanExportForeverRefusesABadField(t *testing.T) {
 	code, out, _ := runExport("--forever", "--report", "--dir", plans, "gossipcave")
 	if code != exitOK || !strings.Contains(out, "status=refused") || !strings.Contains(out, "refused legs[0].steps[0].gossip") {
 		t.Fatalf("report: %d %q", code, out)
+	}
+}
+
+// TestPlanExportForeverZulGurubLeg0: the raid's remapped leg 0 is exported as the module's plan file, with the ForeverCore pack,
+// radius and boss rows; a selection past the remapped leg and a raid without one are refused, and write no file.
+func TestPlanExportForeverZulGurubLeg0(t *testing.T) {
+	dir := t.TempDir()
+	code, out, errs := runExport("--forever", "--dir", "../../dungeons", "--last-leg", "high_priestess_jeklik",
+		"--out", dir+"/", "zul_gurub")
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, errs)
+	}
+	file := filepath.Join(dir, "plan_zul_gurub.sql")
+	data, err := os.ReadFile(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans, err := planexport.ParseForever(string(data))
+	if err != nil || len(plans) != 1 {
+		t.Fatalf("parse: %v (%d plans)", err, len(plans))
+	}
+	if len(plans[0].Rows.Legs) != 1 || plans[0].Rows.Legs[0].Name != "high_priestess_jeklik" {
+		t.Fatalf("legs = %+v; want only high_priestess_jeklik", plans[0].Rows.Legs)
+	}
+	if len(plans[0].Bosses) != 1 || plans[0].Bosses[0].Entry != 14517 {
+		t.Fatalf("boss rows = %+v; want 14517", plans[0].Bosses)
+	}
+	packed := map[uint32]int{}
+	for _, u := range plans[0].Units {
+		if u.Role == planexport.UnitPack {
+			packed[u.Entry]++
+		}
+	}
+	if packed[11371] < 2 {
+		t.Fatalf("pack unit rows by entry = %v; want the ForeverCore serpent 11371 in pull group 0", packed)
+	}
+	if !strings.Contains(out, "zul_gurub: map 309, 1 legs") || !strings.Contains(out, "wrote "+file) {
+		t.Fatalf("stdout %q", out)
+	}
+
+	// Leg 1 is not remapped: the selection is refused by name and writes nothing.
+	past := t.TempDir()
+	code, _, errs = runExport("--forever", "--dir", "../../dungeons", "--last-leg", "high_priest_venoxis",
+		"--out", past+"/", "zul_gurub")
+	if code != exitUsage || !strings.Contains(errs, "high_priest_venoxis") || !strings.Contains(errs, "forever_checked") {
+		t.Fatalf("--last-leg high_priest_venoxis: exit %d: %s", code, errs)
+	}
+	if fs, _ := filepath.Glob(filepath.Join(past, "*")); len(fs) != 0 {
+		t.Fatalf("a file was written for a refused selection: %v", fs)
+	}
+
+	// A raid plan needs the selection.
+	none := t.TempDir()
+	code, _, errs = runExport("--forever", "--dir", "../../dungeons", "--out", none+"/", "zul_gurub")
+	if code != exitUsage || !strings.Contains(errs, "--last-leg") {
+		t.Fatalf("no selection: exit %d: %s", code, errs)
+	}
+
+	// The report says the same, and writes nothing.
+	code, repOut, _ := runExport("--forever", "--report", "--dir", "../../dungeons", "--last-leg", "high_priestess_jeklik", "zul_gurub")
+	if code != exitOK || !strings.Contains(repOut, "plan=zul_gurub map=309 status=exported legs=1") {
+		t.Fatalf("report: %d %q", code, repOut)
+	}
+
+	// The flag is the Forever mode's: the run-leader export writes every leg.
+	code, _, errs = runExport("--dir", "../../dungeons", "--stamp", "20261126000000", "--last-leg", "high_priestess_jeklik", "--out", t.TempDir(), "zul_gurub")
+	if code != exitUsage || !strings.Contains(errs, "--last-leg is the --forever mode's") {
+		t.Fatalf("run-leader --last-leg: exit %d: %s", code, errs)
 	}
 }

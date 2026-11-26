@@ -9,9 +9,10 @@ remapping check:
   refused on ForeverCore data.
 - Leg 0 (`high_priestess_jeklik`, 16 pull groups plus boss `14517`) provides a complete self-contained entrance-to-boss
   path to test ForeverCore spawn matching, formation grouping, navmesh scouting and driver dry-run execution.
-- `dungeons/zul_gurub.json` stays `todo (2026-11-26 offline-checked ...)`: leg 0 passes offline checks, legs 1–8 have
-  not been remapped yet, and raid rows are not exported to SQL (`plan-export --forever` refuses `kind: "raid"`, `raid`,
-  `phase_entries` and `summon_open_step`); a player-led raid run reads the plan JSON directly.
+- `dungeons/zul_gurub.json` stays `todo (2026-11-26 offline-checked ...)`: leg 0 passes offline checks and is the one
+  leg marked `forever_checked`, legs 1–8 have not been remapped yet, and its module plan rows are exported for leg 0
+  (`plan-export --forever --last-leg high_priestess_jeklik`); a player-led raid run of any leg reads the plan JSON
+  directly.
 
 ## Tooling and Driver Fixes
 
@@ -65,6 +66,7 @@ Commands executed offline with ForeverCore map `309` exports and mmaps alongside
 - `forever-agent plan-scout zul_gurub --forever --dir dungeons --mmaps <forever-mmaps> --spawns <forever-spawns> --party-level 60 --until high_priestess_jeklik`
 - `forever-agent plan-check --forever --dir dungeons --mmaps <forever-mmaps> --spawns <forever-spawns> --json zul_gurub`
 - `forever-agent plan-export --forever --dir dungeons --report zul_gurub`
+- `forever-agent plan-export --forever --dir dungeons --mmaps <forever-mmaps> --last-leg high_priestess_jeklik --out <dir> zul_gurub`
 - `forever-agent forever dungeon-play --dry --character Leader --plan dungeons/zul_gurub.json --last-leg high_priestess_jeklik ...`
 
 | Check | Before | After | Gate |
@@ -74,11 +76,19 @@ Commands executed offline with ForeverCore map `309` exports and mmaps alongside
 | Spawn match, leg 0 | `PG 10`, `11`, `12` short; `PG 15` `7/10` | `PG 10`–`12` reach every spawn; `PG 15` still `7/10`; boss `14517` within `11.7` yd | Pass (`PG 15` is the listed KNOWN MISS) |
 | Forever `plan-check` leg 0 | `50 warn, 19 err`, `0` failed pts | `52 warn, 17 err`, `0` failed pts | Pass (`0` failed pts, allowed err kinds only) |
 | Forever `plan-check` legs 1–8 | `125 err`, `3` failed pts | `694` lints (`569 warn, 125 err`), `3` failed pts | Recorded in `forever_status` |
-| `plan-export --forever --report` | Refused (`kind; raid; phase_entries; summon_open_step`) | Refused (same fields; `alt_entries` accepted) | Pass (player-led reads JSON) |
+| `plan-export --forever --report` | Refused (`kind; raid; phase_entries; summon_open_step`) | Whole plan refused (raid needs a `--last-leg` selection); `--last-leg high_priestess_jeklik` exports 1 leg, 16 pulls, 1 boss, `59` unit rows and `1` boss row | Pass (the legs after leg 0 are not classified) |
 | `forever dungeon-play --dry --last-leg high_priestess_jeklik` | Not runnable with `--last-leg` / `stand_pull` / `max_bodies` | `exit=0`, `play: stop raid-boss-reached, 16 pulls, 0 wipes, 0 deaths, 3.7 min, gm_lines=0` | Pass (ends `raid-boss-reached`) |
+
+## Module Plan Rows (Leg 0)
+
+`plan-export --forever --last-leg high_priestess_jeklik` writes `plan_zul_gurub.sql` (1 leg, 16 pull groups, 54 pack
+unit rows, 4 patrol unit rows, 1 boss unit row and 1 boss row; 54 steps with the ForeverCore tiles, 45 without). The
+rows carry the remap: pull group 0 names the ForeverCore serpent `11371` with `radius` 11, and groups 10–12's widened
+radii are the row values. Legs 1–8 carry no `forever_checked`, so a `--last-leg` that reaches one is refused, and a
+raid plan without a selection is refused.
 
 ## Remaining Live Gap
 
-Live raid watch and execution remain offline: the server-side C++ dungeon module does not carry raid plans
-(`plan-export --forever` refuses raid plans and fields), and live raid-watch command handling is outside the scope of
-this offline leg-0 check.
+Live raid watch and execution remain offline: the module's own raid-size run is what reads these rows, and the live
+raid-watch command handling is outside the scope of this offline leg-0 check. A player-led raid still reads the plan
+JSON.

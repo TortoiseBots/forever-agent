@@ -17,6 +17,10 @@ forever-agent plan-export --forever --report --dir dungeons
 # navmesh cuts from the server's v16 tiles (no --mmaps: the plan's own points are written)
 forever-agent plan-export --forever --mmaps /path/to/mmaps --out forever/sql/world/ ragefire_chasm
 
+# a raid plan: only the legs a Forever check remapped (Zul'Gurub's leg 0), never a leg after them
+forever-agent plan-export --forever --mmaps /path/to/mmaps --last-leg high_priestess_jeklik \
+    --out forever/sql/world/ zul_gurub
+
 # plan-check against the same tiles and a spawn list (guid entry x y z movetype [kind])
 forever-agent plan-check --forever --mmaps /path/to/mmaps --spawns rfc-spawns.tsv ragefire_chasm
 ```
@@ -28,7 +32,10 @@ forever-agent plan-check --forever --mmaps /path/to/mmaps --spawns rfc-spawns.ts
   `plan=<name> map=<n> status=exported|refused legs= steps= pulls= moves= bosses= units= boss_rows= why=` and one
   `dropped` or `refused` line per field. A plan that does not load, is a draft, or is refused is a record too.
 - `--force`, `--rev`, `--skip-legs`, `--with-optional`, `--with-legs`, `--floor-aware` and `--approach-hops` mean
-  what they mean in the run-leader export.
+  what they mean in the run-leader export. `--last-leg` is the Forever mode's own: it writes that leg and the ones
+  before it and leaves the rest out with a warning, and a name the plan does not hold is refused. A raid plan needs
+  it, and every leg the selection writes must carry `forever_checked` (Zul'Gurub's leg 0 is the only one today): a
+  raid leg a Forever check has not remapped may name spawns the server does not have.
 - Without `--mmaps` the export still writes, and says so: long hops stay in the plan as written. With `--mmaps` the
   v16 tiles are read; a plan's avoid boxes mark the tiles, and the rows keep the party's own path out of them.
 
@@ -89,8 +96,10 @@ over 60 yd gain move rows, so the step count is higher.
 
 | Field | What happens |
 | --- | --- |
-| `version`, `name`, `map`, `kind` | carried |
+| `version`, `name`, `map`, `kind` | carried (a raid plan's `kind` only once `--last-leg` selects a remapped prefix) |
 | `status` | carried in the plan row's comment |
+| `raid` | dropped: no column; the module's own run holds the raid size |
+| `legs[].forever_checked` | not a row: it gates a raid plan's `--last-leg` selection (the legs a Forever check remapped) |
 | `cc_priority`, `cc_always`, `kill_first` | carried in the plan row; the first run makes no crowd-control orders from them |
 | `legs[].name`, `legs[].to` | carried |
 | `legs[].via[].direct`, `exact` | carried (move / move_direct rows) |
@@ -117,17 +126,40 @@ over 60 yd gain move rows, so the step count is higher.
 | `legs[].steps[].use_object.alt_entries` (and `loot_object`, `wait_for.gameobject`) | the row names the entry this server uses (the `forever` value) where the plan carries one; every other reader keeps the plan's own entry |
 | steps, holds, items, gossip, area triggers, phase entries, GM crosses, leftovers | refused by field name (see below) |
 
-Refused fields: `kind` (a raid plan), `raid`, `legs[].steps[].use_item`, `ritual`, `gossip`, `area_trigger`, a
-`wait_for` that is a hold or a unit wait (the module's plan table has no `hold` or unit-wait row), the same under
-`after_boss`, `legs[].pull_groups[].hold`, `legs[].boss.hold`, `legs[].boss.phase_entries`, `legs[].boss.loot_item`,
-`legs[].boss.summon_open_step`, `legs[].leftover_entries` and `legs[].via[].gm_cross`. A refused plan writes no file;
-every refused field is named on stderr (or in the report).
+Refused fields: a raid plan without a `--last-leg` selection, and a selection that reaches a leg without
+`forever_checked` (the refusal names the selection, not a field);
+`legs[].steps[].use_item`, `ritual`, `gossip`, `area_trigger`, a `wait_for` that is a hold or a unit wait (the
+module's plan table has no `hold` or unit-wait row), the same under `after_boss`, `legs[].pull_groups[].hold`,
+`legs[].boss.hold`, `legs[].boss.phase_entries`, `legs[].boss.loot_item`, `legs[].boss.summon_open_step`,
+`legs[].leftover_entries` and `legs[].via[].gm_cross`. A refused plan writes no file; every refused field is named
+on stderr (or in the report). Legs after `--last-leg` are not classified: their fields are not the export's.
 
 The object rows are the module's own step rows (`kind`, `entry`, the point, `item`, `param`, `timeout_s`, `entries`):
 Deadmines exports its 6 `wait_object`, 3 `open`, 2 `wait_clear` and 1 `loot` row, the two doors its own server opens
 by 17153 written as 16400 (Mast Room Door) and 16399 (Foundry Door). Wailing Caverns has no object step and its
 export is byte-identical to the one before the object rows landed
 (`internal/planexport/testdata/forever/wailing_caverns.sql`).
+
+## Zul'Gurub leg 0
+
+`dungeons/zul_gurub.json` is a raid plan. Its leg 0 (`high_priestess_jeklik`) is the one marked `forever_checked`
+after the ForeverCore remap (#279), so `plan-export --forever --last-leg high_priestess_jeklik` writes
+`plan_zul_gurub.sql` into the `--out` folder:
+
+| Item | Count |
+| --- | --- |
+| Legs | 1 (`high_priestess_jeklik`) |
+| Steps | 45 without `--mmaps`, 54 with the ForeverCore tiles (16 pull, 1 boss, the rest moves) |
+| Pull groups | 16 |
+| Pack unit rows | 54 |
+| Patrol unit rows | 4 |
+| Boss unit row | 1 (14517) |
+| Unit rows | 59 |
+| Boss rows | 1 |
+
+The rows carry the remap: pull group 0 names the ForeverCore Razzashi Serpent (11371, the plan's `alt_entries` value)
+with `radius` 11, and the widened radii of groups 10-12 are the row values. Legs 1-8 have no `forever_checked`: a
+selection that reaches one is refused, and the whole plan is refused when `--last-leg` is missing.
 
 ## Tests
 
@@ -139,9 +171,11 @@ export is byte-identical to the one before the object rows landed
   reader that understands the upsert, every object-backed step kind carried as its row, Deadmines' object rows on
   the Forever server's entries (16400/16399, the alt entries belong to this export alone), Wailing Caverns'
   unchanged golden export, and a coordinate on the columns' halfway point (-93.3125 reads back) with a moved row
-  still failing.
-- `cmd/forever-agent/plan_export_forever_test.go`: the command's export, its report, its refusal, the file name, and
-  the `--force` rule.
+  still failing; the selected Zul'Gurub leg 0 (its ForeverCore pack entry, `radius` column, boss and boss row, the
+  round trip), a raid plan's missing-selection refusal, the `forever_checked` gate and the dropped `raid` block.
+- `cmd/forever-agent/plan_export_forever_test.go`: the command's export, its report, its refusal, the file name, the
+  `--force` rule, and Zul'Gurub leg 0's `plan_zul_gurub.sql` with the refusals of an unchecked selection and of a
+  raid plan without `--last-leg`.
 - `internal/worldspawn/foreverspawns_test.go` and `foreverspawns_objects_test.go`: the spawn-list TSV `plan-check --forever --spawns` reads (six columns by default; a seventh `kind` column marks game-object rows: `creature`, or `object` for a door, lever or chest).
 - `internal/planlint/objects_test.go`: the `objects` lint. Every `open`, `use_on`, `open_proof`, `loot` and `wait_object` row must name an object spawn of its entry (the plan's `alt_entries` value for the checked server) within the step's search radius: a miss is an error, like a missing creature. No objects in the list fails the rows instead of skipping: a creature-only spawn file must not approve a plan with doors unchecked. A nil world (no list at all) still skips.
 - `cmd/forever-agent/plan_check_forever_test.go`: the wiring on the real plans. Deadmines passes on the facts' eight object spawns (16400 at Sneed's door, 16399 at Gilnid's) and fails naming those entries when their rows are missing; Wailing Caverns (no object step) passes. Deadmines against a creature-only spawn file fails every object-backed step at the objects-lint level (the CheckObjects call lintRows makes); Wailing Caverns passes the same file.
@@ -151,8 +185,9 @@ export is byte-identical to the one before the object rows landed
 
 ## Limits
 
-- The format has no rows for doors, objects, waits, loot, items, gossip, area triggers, holds, tactics, or a raid
-  library. Those fields are refused by name rather than silently lost.
+- The format has no rows for holds, use items, rituals, gossip, area triggers, a boss's phase entries, loot item or
+  summon step, a leg's leftovers or a GM cross; those fields are refused by name rather than silently lost. A raid
+  plan has no size column, and only its `forever_checked` legs are exported (`--last-leg`).
 - `skip` and `avoid` have no representation of their own; the report says they were dropped, names the leg and
   entries of a `skip`, and the plan points an `avoid` box holds. The rows therefore leave a skipped friendly alone
   only because the module searches by entry and position, not because they carry the list.
