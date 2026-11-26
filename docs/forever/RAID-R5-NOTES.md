@@ -43,10 +43,10 @@ remapping check:
 - **PG 0 `alt_entries`**: added `"alt_entries": {"forever": {"11372": 11371}}` because ForeverCore pools those two spots
   with Razzashi Serpent `11371`; PG 3 and PG 4 already match `11372` within 0.00 yd and needed no override.
 - **PG 10, PG 11, PG 12 radii**: widened `4.6 -> 7`, `1 -> 4`, `5.5 -> 9` to match ForeverCore spawn offsets.
-- **PG 15 radius (KNOWN MISS)**: left at `13`. Seven of the group's ten expected spawns stand inside it; the next
-  three are `14.5`, `15.4` and `24.0` yd (3D) from the pull point, so a radius that reaches them exceeds the +5 yd
-  widening cap (`18`) and the group stays a KNOWN MISS under A4.2. The live PASS allows its `pull_end` to be
-  `stranger`.
+- **PG 15 radius (KNOWN MISS)**: left at `13`. Seven of the group's ten expected spawns stand inside it; the three
+  missing ones (two `11368` and one `14750`) stand `14.5`, `15.4` and `36.2` yd (3D) from the pull point, so the
+  radius that reaches all ten (about `37`) exceeds the +5 yd widening cap (`18`) and the group stays a KNOWN MISS
+  under A4.2. The live PASS allows its `pull_end` to be `stranger`.
 - **Scout coordinate fixes**:
   - Applied `pull_groups[0].approach[0]` from the scout patch (moving clear of the entry pack), clearing step 3's
     aggro failure without regressing Turtle lints.
