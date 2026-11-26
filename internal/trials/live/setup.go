@@ -255,11 +255,8 @@ func (s *LiveSetup) Run(ctx context.Context, r *Repeat) (map[string]any, error) 
 		_ = exCtx
 	}
 	// Player gear / off-hand rows (each retried once on failure).
-	if wanted["player_gear"] {
-		checks = append(checks, retryOnce(func() map[string]any { return s.ensurePlayerGear(ctx, r, trial) }))
-	}
-	if wanted["player_no_shield"] {
-		checks = append(checks, retryOnce(func() map[string]any { return s.playerNoShield(ctx, r) }))
+	for _, row := range s.playerGearRows(ctx, r, trial, wanted) {
+		checks = append(checks, row)
 	}
 	// Config: no Forever source — ok=false, defaults assumed (Python path).
 	if wanted["config_read"] {
@@ -442,14 +439,15 @@ func (s *LiveSetup) guardOr(r *Repeat) *Guard {
 	return s.Guard
 }
 
-// playerGearRows runs the player gear and off-hand rows in trial order.
+// playerGearRows runs the player gear and off-hand rows in trial order,
+// retrying each failed row once just like the rest of Run.
 func (s *LiveSetup) playerGearRows(ctx context.Context, r *Repeat, trial map[string]any, wanted map[string]bool) []map[string]any {
 	var out []map[string]any
 	if wanted["player_gear"] {
-		out = append(out, s.ensurePlayerGear(ctx, r, trial))
+		out = append(out, retryOnce(func() map[string]any { return s.ensurePlayerGearFor(ctx, r, trial, wanted["player_no_shield"]) }))
 	}
 	if wanted["player_no_shield"] {
-		out = append(out, s.playerNoShield(ctx, r))
+		out = append(out, retryOnce(func() map[string]any { return s.playerNoShield(ctx, r) }))
 	}
 	return out
 }
@@ -459,6 +457,10 @@ func (s *LiveSetup) playerGearRows(ctx context.Context, r *Repeat, trial map[str
 // verified by inv read-back, equip through the daemon's equip method) and
 // passes only when inv and equipment confirm every kit piece is worn.
 func (s *LiveSetup) ensurePlayerGear(ctx context.Context, r *Repeat, trial map[string]any) map[string]any {
+	return s.ensurePlayerGearFor(ctx, r, trial, wantedChecks(trial)["player_no_shield"])
+}
+
+func (s *LiveSetup) ensurePlayerGearFor(ctx context.Context, r *Repeat, trial map[string]any, noShield bool) map[string]any {
 	player, _ := trial["player"].(map[string]any)
 	gearName, _ := player["gear"].(string)
 	if player["gear"] == nil || gearName == "" {
@@ -467,7 +469,14 @@ func (s *LiveSetup) ensurePlayerGear(ctx context.Context, r *Repeat, trial map[s
 	if gearName != "tier" {
 		return rowOf("player_gear", false, gearName, "unknown player gear kind "+gearName)
 	}
-	kit, kitLevel, why := gear.PickKit(player)
+	var kit []gear.Kit
+	var kitLevel int64
+	var why string
+	if noShield {
+		kit, kitLevel, why = gear.PickKitNoShield(player)
+	} else {
+		kit, kitLevel, why = gear.PickKit(player)
+	}
 	if len(kit) == 0 {
 		return rowOf("player_gear", false, nil, why)
 	}

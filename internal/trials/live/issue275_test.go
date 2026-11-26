@@ -672,3 +672,88 @@ func TestGuardAllowsSelfAddItem(t *testing.T) {
 		t.Fatal("wrong self guid additem passed")
 	}
 }
+
+func TestPlayerGearRowsRetriesOnceOnTransientFailure(t *testing.T) {
+	gw := newGearFakeWorld(t)
+	s, rep := gearTestSetup(gw)
+	trial := warriorTierTrial()
+
+	// Fail the first inv call (player_gear attempt 1) and the first equipment
+	// call after player_gear passes (player_no_shield attempt 1) so retryOnce
+	// must recover both rows through the same path Run uses.
+	gw.f.mu.Lock()
+	gw.f.errCodes["inv"] = []int{-32000}
+	gw.f.errMsg["inv"] = "transient inv read failure"
+	gw.f.mu.Unlock()
+
+	rows := s.playerGearRows(context.Background(), rep, trial, wantedChecks(trial))
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2: %v", len(rows), rows)
+	}
+	if !rowOK(rows[0]) || strOf(rows[0]["id"]) != "player_gear" {
+		t.Fatalf("player_gear failed to recover on retry: %v", rows[0])
+	}
+	if !rowOK(rows[1]) || strOf(rows[1]["id"]) != "player_no_shield" {
+		t.Fatalf("player_no_shield failed: %v", rows[1])
+	}
+
+	// Now fail the first equipment read of a fresh player_no_shield check and
+	// confirm retryOnce recovers it on the second try.
+	beforeEq := gw.f.callCount("equipment")
+	gw.f.mu.Lock()
+	gw.f.errCodes["equipment"] = []int{-32000}
+	gw.f.errMsg["equipment"] = "transient equipment read failure"
+	gw.f.mu.Unlock()
+	shieldOnly := map[string]bool{"player_no_shield": true}
+	shieldRows := s.playerGearRows(context.Background(), rep, trial, shieldOnly)
+	if len(shieldRows) != 1 || !rowOK(shieldRows[0]) {
+		t.Fatalf("player_no_shield did not recover via retryOnce: %v", shieldRows)
+	}
+	if got := gw.f.callCount("equipment") - beforeEq; got != 2 {
+		t.Fatalf("expected 2 equipment calls across retryOnce, got %d", got)
+	}
+}
+
+func TestPlayerGearWithNoShieldAvoidsShieldKit(t *testing.T) {
+	gw := newGearFakeWorld(t)
+	gw.equipped[16] = 9404 // pre-existing shield in off-hand
+	s, rep := gearTestSetup(gw)
+	trial := map[string]any{
+		"player": map[string]any{
+			"class":       "warrior",
+			"level":       float64(40),
+			"forced_role": "tank",
+			"gear":        "tier",
+		},
+		"setup_checks": []any{"player_gear", "player_no_shield"},
+	}
+	rows := s.playerGearRows(context.Background(), rep, trial, wantedChecks(trial))
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2: %v", len(rows), rows)
+	}
+	if !rowOK(rows[0]) || strOf(rows[0]["id"]) != "player_gear" {
+		t.Fatalf("player_gear failed: %v", rows[0])
+	}
+	if !rowOK(rows[1]) || strOf(rows[1]["id"]) != "player_no_shield" || strOf(rows[1]["value"]) != "none" {
+		t.Fatalf("player_no_shield failed: %v", rows[1])
+	}
+	for _, entry := range gw.added {
+		if entry == 9404 {
+			t.Fatalf("added shield 9404 despite player_no_shield: %v", gw.added)
+		}
+	}
+	for _, sp := range gw.learned {
+		if sp == 9116 {
+			t.Fatalf("learned shield proficiency 9116 despite player_no_shield: %v", gw.learned)
+		}
+	}
+	hasTwoHand := false
+	for _, entry := range gw.equipCalls {
+		if entry == 10758 {
+			hasTwoHand = true
+		}
+	}
+	if !hasTwoHand {
+		t.Fatalf("expected two-hander 10758 to be equipped, got %v", gw.equipCalls)
+	}
+}
