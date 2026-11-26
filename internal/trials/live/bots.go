@@ -13,18 +13,20 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/trials/data"
 	"github.com/pjerra/forever-agent/internal/trials/pyjson"
+	"github.com/pjerra/forever-agent/internal/trials/spells"
 )
 
 // Bots.go: the hire pool and per-bot provisioning (trial["bot"] and
 // trial["extra_bots"]): login, engine on, level, train, talent kit, the
 // consumables luggage, role, party, and the read-backs each step proves
-// itself with. The `blue` bot kit has no Forever item source yet
-// (gear_kits.json covers warriors only), so a spec that wants worn gear is
-// SKIPPED with needs=bot_items (never a pass without a scan/equip read-back);
-// consumables prove through `ItemScan` (exists=yes). For an extra hire a
-// SKIPPED kit is noted on extra_bots_present and does not fail it: presence is
-// the hire, the kit is a SKIP the main hire's bot_items row reports the same
-// way, and a kit the overlay does carry still fails presence on a refusal.
+// itself with. The `blue` bot kit has no item source for most classes (the
+// Forever overlay carries the priest level-40 kit only), so a spec that wants
+// worn gear is SKIPPED with needs=bot_items (never a pass without a
+// scan/equip read-back); consumables prove through `ItemScan` (exists=yes).
+// For an extra hire a SKIPPED kit is noted on extra_bots_present and does not
+// fail it: presence is the hire, the kit is a SKIP the main hire's bot_items
+// row reports the same way, and a kit the overlay does carry still fails
+// presence on a refusal.
 //
 // A bot is a pool character named in the slot config's `pool` block (D5:
 // invented names `Atank Bheal Cmage Dcmd` style): the runner never invents
@@ -669,17 +671,23 @@ func (p *Provisioner) ensureTalents(ctx context.Context, spec BotSpec, name stri
 	}
 	if len(unknown) > 0 {
 		return rowOf("bot_spec", false, spec.Spec, fmt.Sprintf(
-			"SKIPPED needs=bot_spec: .tb learn answered unknown for spell(s) %s of the %s/%s kit; this server cannot learn them",
-			joinUint32s(unknown), spec.Class, spec.Spec))
+			"SKIPPED needs=bot_spec: module/core gap — .tb learn answered unknown for spell(s) %s of the %s/%s kit; this server cannot learn them",
+			spellIDNames(unknown), spec.Class, spec.Spec))
 	}
 	return rowOf("bot_spec", true, spec.Spec, fmt.Sprintf(".tb learn %s: %d spell(s) learned|known", name, len(rep.Results)))
 }
 
-// joinUint32s renders ids as "a, b" for a row's evidence.
-func joinUint32s(ids []uint32) string {
+// spellIDNames renders ids as "51328 (Righteous Defense), ...": the spell's
+// name from the copied spell table when it holds one, the bare id otherwise.
+func spellIDNames(ids []uint32) string {
 	parts := make([]string, len(ids))
 	for i, id := range ids {
-		parts[i] = strconv.FormatUint(uint64(id), 10)
+		key := strconv.FormatUint(uint64(id), 10)
+		if name := spells.NameFor(int64(id)); name != key {
+			parts[i] = key + " (" + name + ")"
+		} else {
+			parts[i] = key
+		}
 	}
 	return strings.Join(parts, ", ")
 }
@@ -734,19 +742,25 @@ func specOverlay(over any, class, spec string, base []any) []any {
 // granted by free-text additem and proved to exist by typed `ItemScan`
 // (exists=yes). The `blue` kit is scanned the same way and each scannable
 // piece is worn through typed `Equip replace`; the row is ok ONLY when the
-// scans prove every expected id and every equip answers `equipped`. There is
-// no Forever item source for the kit yet (gear_kits.json covers warriors
-// only), so a spec that wants worn gear returns ok=false with a SKIPPED
-// reason: a required row that is SKIPPED makes the trial SKIPPED, never PASS.
+// scans prove every expected id and every equip answers `equipped`. The
+// overlay carries no kit for the other classes, so a spec that wants worn
+// gear returns ok=false with a SKIPPED reason: a required row that is SKIPPED
+// makes the trial SKIPPED, never PASS.
 func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name string) map[string]any {
 	if spec.Gear == "" && len(spec.Items) == 0 {
 		return nil
 	}
-	// A killed run leaves what it gave in the bags: take that back first so
-	// the new items fit. A clear that fails is not fatal here; a full bag
-	// then ends the give as SKIPPED needs=bot_bag_space.
-	if ev, ok := p.ClearGiven(ctx, name); !ok {
-		p.Ledger.Add(map[string]any{"kind": "items_clear_failed", "bot": name, "evidence": ev})
+	// What an earlier trial (or a killed run) left behind is taken back
+	// before the new items go in, but only what the recovery grants prove:
+	// each grant's copies above the carried count read before that give. An
+	// id with no grant is never touched: nothing proves those copies are the
+	// trial's, and a missing baseline is not a floor of zero. A clear that
+	// cannot be proved fails this row closed instead of giving into bags it
+	// cannot certify.
+	clearEv, clearOK := p.ClearGiven(ctx, name)
+	if !clearOK {
+		p.Ledger.Add(map[string]any{"kind": "items_clear_failed", "bot": name, "evidence": clearEv})
+		return rowOf("bot_items", false, itemIDs(spec.Items), "leftover trial items not cleared: "+clearEv)
 	}
 	if spec.Gear != "" {
 		kit := botGearKit(spec.Class, spec.Gear, spec.Level)
@@ -833,8 +847,11 @@ func (p *Provisioner) wearKit(ctx context.Context, spec BotSpec, name string, ki
 			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb equip %s %d (%s): %s %s", name, item.Entry, item.Name, eq.Result, eq.Why))
 		}
 		equipped++
-		// The piece left the bags: its mark is kept as worn, never claimed cleared.
-		p.marks().setWorn(p.Server, name, item.Entry)
+		// The piece left the bags: its grant is marked worn, so a later
+		// clear unequips only a proven slot instead of looking in the bags.
+		if err := p.marks().setWorn(p.Server, name, item.Entry); err != nil {
+			return rowOf("bot_items", false, ids, fmt.Sprintf("recovery mark not updated for the worn item %d (%s): %v", item.Entry, item.Name, err))
+		}
 	}
 	return rowOf("bot_items", true, ids, fmt.Sprintf("%s kit: %d piece(s) scanned exists and equipped", spec.Gear, equipped))
 }

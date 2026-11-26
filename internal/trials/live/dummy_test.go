@@ -483,6 +483,85 @@ func TestAHireThatNeverArrivesStopsTheRun(t *testing.T) {
 	}
 }
 
+// Item (5) of #278: if `.tb tele` returned OK yet the hire has not arrived
+// within 10 yd after 15 s, bringHires retries `.tb tele` once; if still away at
+// timeout, the failure reports whether the hire was seen at distance or absent.
+func TestBringHireRetriesTeleOnceWhenUnarrivedAndReportsDistance(t *testing.T) {
+	stamp := func(tok string, lines ...string) []string {
+		out := make([]string, len(lines))
+		for i, l := range lines {
+			out[i] = strings.ReplaceAll(l, " #T", " #"+tok)
+		}
+		return out
+	}
+	splitTok := func(line string) (string, string) {
+		if i := strings.LastIndex(line, " #"); i >= 0 {
+			return line[:i], line[i+2:]
+		}
+		return line, ""
+	}
+	t.Run("retry tele succeeds after 15s", func(t *testing.T) {
+		h, d := hireHarness(t, 42, 3)
+		teles := 0
+		h.fake.botFn = func(raw string) []string {
+			line, tok := splitTok(raw)
+			if strings.HasPrefix(line, ".tb tele Bmage ") {
+				teles++
+				if teles >= 2 {
+					h.world.mu.Lock()
+					h.world.mobs[hire128]["distance"] = 4.0
+					h.world.mu.Unlock()
+				}
+				return stamp(tok,
+					"tele-begin #T",
+					"tele bot=Bmage status=started map=0 pos=-11926,-1283,85 #T",
+					"tele-end count=1 records=1 target=Bmage bots=1 started=1 refused=0 #T",
+				)
+			}
+			if strings.HasPrefix(line, ".tb tele Bheal ") {
+				return stamp(tok,
+					"tele-begin #T",
+					"tele bot=Bheal status=started map=0 pos=-11926,-1283,85 #T",
+					"tele-end count=1 records=1 target=Bheal bots=1 started=1 refused=0 #T",
+				)
+			}
+			return nil
+		}
+		h.sit.Now = jumpClock(16 * time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if why := d.bringHire(ctx, "Bmage"); why != "" {
+			t.Fatalf("retry tele should have brought hire: %s", why)
+		}
+		if teles != 2 {
+			t.Fatalf("expected 2 tele attempts for delayed hire, got %d", teles)
+		}
+	})
+
+	t.Run("timeout includes seen distance", func(t *testing.T) {
+		h, d := hireHarness(t, 22.5, 3)
+		h.fake.botFn = func(raw string) []string {
+			line, tok := splitTok(raw)
+			if strings.HasPrefix(line, ".tb tele ") {
+				name := strings.Fields(line)[2]
+				return stamp(tok,
+					"tele-begin #T",
+					"tele bot="+name+" status=started map=0 pos=-11926,-1283,85 #T",
+					"tele-end count=1 records=1 target="+name+" bots=1 started=1 refused=0 #T",
+				)
+			}
+			return nil
+		}
+		h.sit.Now = jumpClock(20 * time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		why := d.bringHire(ctx, "Bmage")
+		if !strings.Contains(why, "hire Bmage is not within 10 yd of the arena") || !strings.Contains(why, "seen at 22.5 yd") {
+			t.Fatalf("unexpected stop reason: %q", why)
+		}
+	})
+}
+
 // TestDummyStrangerDuringTheFightWaitEndsRealPlayer: a real player in view while the repeat waits for the first
 // engagement (up to 60 s) ends it INVALID real_player at once, not 65 s later or never.
 func TestDummyStrangerDuringTheFightWaitEndsRealPlayer(t *testing.T) {

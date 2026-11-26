@@ -34,6 +34,8 @@ func hireTargets(r *Repeat) []hireTarget {
 	return out
 }
 
+const hireRetriedAfter = 15 * time.Second
+
 // bringHires puts every hire of the repeat in the arena and proves each within 10 yards. Each hire is teleported by
 // name: `.tb tele party` with no leader is refused ambiguous-party as soon as the sender's character leads or
 // commands more than one party (live dummy bench), and a name-less party teleport would also move bots that are not
@@ -44,6 +46,7 @@ func hireTargets(r *Repeat) []hireTarget {
 func bringHires(ctx context.Context, tb *tbcmd.Client, r *Repeat, sit *LiveSituation, a *Arena) string {
 	targets := hireTargets(r)
 	refused := map[string]error{}
+	retried := map[string]bool{}
 	if a != nil {
 		for _, h := range targets {
 			if _, err := tb.Tele(ctx, h.name, uint32(a.Map), a.X, a.Y, a.Z); err != nil {
@@ -54,22 +57,30 @@ func bringHires(ctx context.Context, tb *tbcmd.Client, r *Repeat, sit *LiveSitua
 		}
 	}
 	arrived := map[string]bool{}
-	deadline := sit.now().Add(45 * time.Second)
+	lastDist := map[string]float64{}
+	seenDist := map[string]bool{}
+	start := sit.now()
+	deadline := start.Add(45 * time.Second)
 	for {
 		units, err := r.Client.Units(ctx, 100)
 		for _, h := range targets {
 			if arrived[h.name] || err != nil {
 				continue
 			}
-			if u, ok := findHire(units, h); ok && u.Distance <= 10 {
-				arrived[h.name] = true
-				r.Marks.Add(map[string]any{"kind": "hire_brought", "bot": h.name, "distance": u.Distance})
+			if u, ok := findHire(units, h); ok {
+				lastDist[h.name] = u.Distance
+				seenDist[h.name] = true
+				if u.Distance <= 10 {
+					arrived[h.name] = true
+					r.Marks.Add(map[string]any{"kind": "hire_brought", "bot": h.name, "distance": u.Distance})
+				}
 			}
 		}
 		if len(arrived) == len(targets) {
 			return ""
 		}
-		if sit.now().After(deadline) || ctx.Err() != nil {
+		now := sit.now()
+		if now.After(deadline) || ctx.Err() != nil {
 			for _, h := range targets {
 				if arrived[h.name] {
 					continue
@@ -77,9 +88,28 @@ func bringHires(ctx context.Context, tb *tbcmd.Client, r *Repeat, sit *LiveSitua
 				why := fmt.Sprintf("hire %s is not within 10 yd of the arena", h.name)
 				if e := refused[h.name]; e != nil {
 					why += fmt.Sprintf(" (the teleport was refused: %v)", e)
+				} else if seenDist[h.name] {
+					why += fmt.Sprintf(" (seen at %.1f yd)", lastDist[h.name])
+				} else {
+					why += " (not in view within 100 yd)"
 				}
 				sit.logf("%s", why)
 				return why
+			}
+		}
+		// If `.tb tele` returned no refusal yet the hire is still missing after
+		// hireRetriedAfter, retry `.tb tele` once (falling back to `.tb come` on refusal).
+		if a != nil && now.Sub(start) >= hireRetriedAfter {
+			for _, h := range targets {
+				if arrived[h.name] || retried[h.name] || refused[h.name] != nil {
+					continue
+				}
+				retried[h.name] = true
+				sit.logf("hire %s not within 10 yd after %s; retrying teleport", h.name, hireRetriedAfter)
+				if _, terr := tb.Tele(ctx, h.name, uint32(a.Map), a.X, a.Y, a.Z); terr != nil {
+					refused[h.name] = terr
+					_, _ = tb.Come(ctx, h.name)
+				}
 			}
 		}
 		sleepCtx(ctx, time.Second)

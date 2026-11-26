@@ -4,7 +4,7 @@ title: Settings, slots and leases
 description: The files that tell the agent which server and account to use, how slot directories are laid out, and how leases keep one worker per slot.
 tags: [getting-started, settings, slots, leases, configuration]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T02:45:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T12:48:00Z }
 sources:
   - id: config
     resource: internal/config/config.go
@@ -110,11 +110,13 @@ child process and say to pass `--forever`. Each block may carry:
 | `build` | client build to claim; `"0"` or absent = automatic |
 | `serve_dir_root` | where this server's serve slot directories live (`<root>/<slot>`); the trials runner and `--forever` tools need it |
 | `player` | the slot character the serve logged in (empty: read from serve status) |
-| `bot_pool` | persistent hire pool by class, as bot names |
+| `bot_pool` | persistent hire pool by class, as bot names (each pool bot must belong to its own game account) |
 | `arena_state_dir` | where the trials runner keeps its arena locks |
 | `scratch_bot` | the character the spell-data check learns spells on |
 | `soap` | `{host, port, user, password_file|password_env}` for the server console |
 | `soap_setup` | console commands the trials runner sends before provisioning (allow-list only) |
+
+Every character in `bot_pool` must live on its own separate game account: the server only allows one character per account online at a time, so two pool bots on one account cannot be logged in together. The tester slot's character needs its own account too, because it stays online while the trial's hires run.
 
 `slot setup --forever` requires `rest`, `rpc` and `ca` in the block and refuses a server without them.
 

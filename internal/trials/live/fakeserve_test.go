@@ -40,6 +40,8 @@ type fakeServe struct {
 	// ownUnit, when set, answers the `unit` read of that guid (the session's
 	// own character, which `units` never lists).
 	ownUnit map[string]any
+	// botFn, when set, answers `.bot` lines routed directly through Client.botLine.
+	botFn func(line string) []string
 }
 
 type fakeCall struct {
@@ -251,8 +253,15 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 			Line string `json:"line"`
 		}
 		_ = json.Unmarshal(req.Params, &p)
+		f.mu.Lock()
+		fn := f.botFn
+		f.mu.Unlock()
 		lines := []string{}
-		if strings.HasPrefix(p.Line, ".bot cc moon") {
+		if fn != nil {
+			if got := fn(p.Line); got != nil {
+				lines = got
+			}
+		} else if strings.HasPrefix(p.Line, ".bot cc moon") {
 			lines = []string{"TBM:ACTION_ACK|cc moon|bot:Atank|1|Atank"}
 		}
 		writeRPCResult(w, req.ID, map[string]any{"sent": p.Line, "complete": true, "lines": lines})

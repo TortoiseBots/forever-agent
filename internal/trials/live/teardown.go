@@ -423,9 +423,14 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		if name == "" {
 			continue
 		}
-		// What the trial gave goes back out of the bags while the hire is
-		// still online; a clear that cannot be proved is ledgered and the
-		// recovery mark stays for the next run to clean first.
+		// What the trial's grants gave goes back out of the bags while the
+		// hire is still online. Only the copies a grant proved are taken
+		// back, each capped at that grant's proved count and floored at the
+		// carried count read before its give; an id with no grant is the
+		// hire's own and is never touched. A clear that cannot be proved is
+		// ledgered, the grant record stays for the next run, and the teardown
+		// reports it. The count comes from `.tb itemscan` by item id; the
+		// slot for an unequip comes from a complete `.bot inv` reply.
 		clearEv, cleared := prov.ClearGiven(ctx, name)
 		rep.Ledger.Add(map[string]any{"kind": "items_cleared", "bot": name, "ok": cleared, "evidence": clearEv})
 		if !cleared {

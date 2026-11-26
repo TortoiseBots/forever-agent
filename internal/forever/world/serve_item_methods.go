@@ -48,6 +48,7 @@ type serveEquipParams struct {
 	ItemEntry *int32 `json:"item_entry,omitempty"`
 	Bag       *int   `json:"bag,omitempty"`
 	Slot      *int   `json:"slot,omitempty"`
+	Dst       *int   `json:"dst,omitempty"`
 }
 
 // serveUseItemParams is use_item's parameter object.
@@ -241,12 +242,17 @@ func itemRowAfter(inv items.Inventory, before items.Item) ServeInvItem {
 	return serveInvItem(before)
 }
 
-// serveEquip answers equip: it runs the act equip step (AutoEquip; the server chooses the slot) and returns the
-// item's row after the move. Neither item_entry nor slot is an error before any packet.
+// serveEquip answers equip: it runs the act equip step (SwapInvItem/SwapItem
+// when dst is named, otherwise AutoEquip where the server chooses the slot)
+// and returns the item's row after the move. Neither item_entry nor slot is
+// an error before any packet.
 func (s *session) serveEquip(ctx context.Context, p serveEquipParams) (ServeInvItem, error) {
 	args, err := itemStepArgs("equip", p.ItemEntry, p.Bag, p.Slot)
 	if err != nil {
 		return ServeInvItem{}, err
+	}
+	if p.Dst != nil {
+		args["dst"] = strconv.Itoa(*p.Dst)
 	}
 	inv := s.inventoryNow()
 	if !inv.Known {

@@ -17,6 +17,7 @@ package live
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -24,7 +25,9 @@ import (
 	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
+	"github.com/pjerra/forever-agent/internal/trials/data"
 	"github.com/pjerra/forever-agent/internal/trials/gear"
+	"github.com/pjerra/forever-agent/internal/trials/pyjson"
 )
 
 // TestPlayerLevelReadsTheOwnUnitRow pins item 3: the status snapshot stays at
@@ -299,8 +302,8 @@ func TestTalentKitAbsentOnForeverIsSkipped(t *testing.T) {
 	if needs := skippedIn(ev); needs != "bot_spec" {
 		t.Fatalf("want SKIPPED needs=bot_spec, got %q", ev)
 	}
-	if !strings.Contains(ev, "52507") || !strings.Contains(ev, "unknown") {
-		t.Fatalf("the skip must name the missing id and the server's answer: %q", ev)
+	if !strings.Contains(ev, "52507") || !strings.Contains(ev, "Blade Rush") || !strings.Contains(ev, "unknown") || !strings.Contains(ev, "module/core gap") {
+		t.Fatalf("the skip must name the missing id and spell, the server's answer, and module/core gap: %q", ev)
 	}
 }
 
@@ -755,5 +758,155 @@ func TestPlayerGearWithNoShieldAvoidsShieldKit(t *testing.T) {
 	}
 	if !hasTwoHand {
 		t.Fatalf("expected two-hander 10758 to be equipped, got %v", gw.equipCalls)
+	}
+}
+
+// Item (2) of #278: `equip` from a gear kit passes the target slot `dst` so
+// AutoEquip does not touch unrelated equipped items (such as entry 38), and a
+// transient unconfirmed move on `inv` waits/retries before failing closed.
+func TestPlayerGearEquipsWithSlotDstAndConfirmsTransientUnconfirmed(t *testing.T) {
+	gw := newGearFakeWorld(t)
+	gw.equipped[3] = 38 // starter shirt untouched by any warrior tier kit
+	s, rep := gearTestSetup(gw)
+	trial := warriorTierTrial()
+
+	rows := s.playerGearRows(context.Background(), rep, trial, wantedChecks(trial))
+	if len(rows) != 2 || !rowOK(rows[0]) || !rowOK(rows[1]) {
+		t.Fatalf("playerGearRows = %v", rows)
+	}
+	// Every equip RPC call must include a non-nil dst slot so actEquip uses SwapInvItem/SwapItem
+	// rather than CMSG_AUTO_EQUIP_ITEM touching every equipped slot (including shirt 38).
+	gw.f.mu.Lock()
+	var equipParams []map[string]any
+	for _, c := range gw.f.calls {
+		if c.method == "equip" {
+			var p map[string]any
+			_ = json.Unmarshal(c.params, &p)
+			equipParams = append(equipParams, p)
+		}
+	}
+	gw.f.mu.Unlock()
+	if len(equipParams) == 0 {
+		t.Fatal("expected equip RPC calls")
+	}
+	for _, p := range equipParams {
+		if _, hasDst := p["dst"]; !hasDst {
+			t.Fatalf("equip call missing dst slot (would touch entry 38 via AutoEquip): %v", p)
+		}
+	}
+
+	// Simulate a transient unconfirmed entry 38 that clears on the 2nd inv read:
+	// player_no_shield must wait/retry once and pass without touching RetryOnce RPC budget for failures.
+	gw.mu.Lock()
+	gw.unconfirmed[38] = true
+	gw.mu.Unlock()
+	reads := 0
+	prevHook := gw.f.hook
+	gw.f.hook = func(method string, params map[string]any) {
+		if prevHook != nil {
+			prevHook(method, params)
+		}
+		if method == "inv" {
+			reads++
+			if reads >= 2 {
+				gw.mu.Lock()
+				delete(gw.unconfirmed, 38)
+				gw.mu.Unlock()
+			}
+		}
+	}
+	s2 := &LiveSetup{
+		Client:    NewClient(gw.f.rpc()),
+		Ledger:    NewLedger(""),
+		Player:    "Atank",
+		EquipWait: 20 * time.Millisecond,
+		EquipPoll: 5 * time.Millisecond,
+	}
+	row := s2.playerNoShield(context.Background(), rep)
+	if !rowOK(row) {
+		t.Fatalf("transient unconfirmed item must confirm after wait/retry read: %v", row)
+	}
+}
+
+// Item (3) of #278: Forever overlay has no blue kits for paladin, druid, or mage
+// (and Forever provides no item kit source to verify them against), so ensureBotGear
+// skips cleanly with SKIPPED needs=bot_items before sending any additem/itemscan/equip.
+func TestBotItemsMissingBlueKitsSkipWithReason(t *testing.T) {
+	cases := []struct {
+		class string
+		level int
+	}{
+		{"paladin", 40},
+		{"druid", 40},
+		{"mage", 40},
+		{"mage", 45},
+		{"mage", 50},
+	}
+	for _, tc := range cases {
+		t.Run(fmt.Sprintf("%s-%d", tc.class, tc.level), func(t *testing.T) {
+			s, _ := newSetupFake(t)
+			var seen []string
+			s.tbFn = func(line string) []string {
+				seen = append(seen, line)
+				return nil
+			}
+			prov := levelProv(s)
+			row := prov.ensureBotGear(context.Background(), BotSpec{Class: tc.class, Gear: "blue", Level: tc.level}, "Bbot")
+			if row == nil || rowOK(row) {
+				t.Fatalf("expected failed SKIPPED row for %+v, got %v", tc, row)
+			}
+			ev := rowEvidence(row)
+			if skippedIn(ev) != "bot_items" {
+				t.Fatalf("want SKIPPED needs=bot_items, got %q", ev)
+			}
+			if !strings.Contains(ev, fmt.Sprintf("no blue kit for %s level %d", tc.class, tc.level)) {
+				t.Fatalf("unexpected skip reason: %q", ev)
+			}
+			for _, line := range seen {
+				if strings.HasPrefix(line, ".tb additem") || strings.HasPrefix(line, ".tb itemscan") || strings.HasPrefix(line, ".tb equip") {
+					t.Fatalf("unexpected provisioning command before kit check: %q", line)
+				}
+			}
+		})
+	}
+}
+
+// Every slot a gear kit names must resolve to a real equipment slot: a name
+// kitSlotIndex does not know silently falls back to AutoEquip, which touches
+// every worn item (the #278 entry-38 unconfirmed move).
+func TestEveryKitSlotResolvesToAnEquipmentSlot(t *testing.T) {
+	check := func(path string, doc []byte) {
+		t.Helper()
+		root, err := pyjson.Unmarshal(doc)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		classes, ok := pyjson.Object(root)
+		if !ok {
+			t.Fatalf("%s: not an object", path)
+		}
+		for class, gears := range classes {
+			byGear, _ := pyjson.Object(gears)
+			for gearName, levels := range byGear {
+				byLevel, _ := pyjson.Object(levels)
+				for level, list := range byLevel {
+					items, _ := pyjson.List(list)
+					for _, e := range items {
+						item, _ := pyjson.Object(e)
+						slot, _ := item["slot"].(string)
+						if slot == "" {
+							continue
+						}
+						if idx := kitSlotIndex(slot); idx < 0 {
+							t.Fatalf("%s: %s/%s/%s names slot %q, which maps to no equipment slot", path, class, gearName, level, slot)
+						}
+					}
+				}
+			}
+		}
+	}
+	check("data/gear_kits.json", data.Read("gear_kits.json"))
+	if overlay := data.ReadOverlay("gear_kits.json"); len(overlay) > 0 {
+		check("forever/gear_kits.json", overlay)
 	}
 }

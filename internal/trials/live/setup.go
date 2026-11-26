@@ -485,9 +485,7 @@ func (s *LiveSetup) ensurePlayerGearFor(ctx context.Context, r *Repeat, trial ma
 		entries = append(entries, uint32(item.Entry))
 	}
 	cl := s.clientOr(r)
-	tctx, cancel := context.WithTimeout(ctx, s.timeoutVal())
-	inv, eq, readWhy := readConfirmedEquipment(tctx, cl)
-	cancel()
+	inv, eq, readWhy := s.awaitConfirmedRead(ctx, cl)
 	if readWhy != "" {
 		return rowOf("player_gear", false, entries, readWhy)
 	}
@@ -521,7 +519,7 @@ func (s *LiveSetup) ensurePlayerGearFor(ctx context.Context, r *Repeat, trial ma
 			return rowOf("player_gear", false, entries, err.Error())
 		}
 		ectx, ecancel := context.WithTimeout(ctx, s.timeoutVal())
-		res, err := cl.Equip(ectx, entry)
+		res, err := cl.EquipSlot(ectx, entry, kitSlotIndex(item.Slot))
 		ecancel()
 		s.ledgerOr(r).Add(map[string]any{"kind": "equip", "player": s.playerOr(r),
 			"item": entry, "slot": res.Slot, "placed": res.Placed, "unconfirmed": res.Unconfirmed})
@@ -575,20 +573,85 @@ func (s *LiveSetup) ensurePlayerItemInBags(ctx context.Context, r *Repeat, guard
 
 func (s *LiveSetup) awaitConfirmedKit(ctx context.Context, cl *Client, kit []gear.Kit) ([]EquipmentItem, string) {
 	deadline := time.Now().Add(s.equipWaitVal())
-	var lastEq []EquipmentItem
-	var lastWhy string
 	for {
 		tctx, cancel := context.WithTimeout(ctx, s.timeoutVal())
 		_, eq, why := readConfirmedEquipment(tctx, cl)
 		cancel()
-		lastEq, lastWhy = eq, why
 		if why == "" && len(missingKitEntries(kit, eq)) == 0 {
 			return eq, ""
 		}
 		if !time.Now().Before(deadline) {
-			return lastEq, lastWhy
+			sleepCtx(ctx, s.equipPollVal())
+			tctx, cancel := context.WithTimeout(ctx, s.timeoutVal())
+			_, eq2, why2 := readConfirmedEquipment(tctx, cl)
+			cancel()
+			return eq2, why2
 		}
 		sleepCtx(ctx, s.equipPollVal())
+	}
+}
+
+// awaitConfirmedRead waits/polls for a transient unconfirmed item move to clear
+// and retries once at the deadline, failing closed if it remains unconfirmed.
+// Which moves clear is the module's: an equipment move is answered with an
+// ActivePlayerData update behind a PlayerData one the client does not decode
+// (docs/forever/WORLD-R2-NOTES.md), so it is never confirmed and stays
+// UNVERIFIED; targeting the slot on equip (`dst`) keeps unrelated worn items
+// out of that move so one equip no longer marks the whole worn set.
+func (s *LiveSetup) awaitConfirmedRead(ctx context.Context, cl *Client) (InvSnapshot, []EquipmentItem, string) {
+	deadline := time.Now().Add(s.equipWaitVal())
+	for {
+		tctx, cancel := context.WithTimeout(ctx, s.timeoutVal())
+		inv, eq, why := readConfirmedEquipment(tctx, cl)
+		cancel()
+		if why == "" || !strings.Contains(why, "unconfirmed item move") {
+			return inv, eq, why
+		}
+		if !time.Now().Before(deadline) {
+			sleepCtx(ctx, s.equipPollVal())
+			tctx, cancel := context.WithTimeout(ctx, s.timeoutVal())
+			inv2, eq2, why2 := readConfirmedEquipment(tctx, cl)
+			cancel()
+			return inv2, eq2, why2
+		}
+		sleepCtx(ctx, s.equipPollVal())
+	}
+}
+
+func kitSlotIndex(slot string) int {
+	switch strings.ToLower(strings.TrimSpace(slot)) {
+	case "head":
+		return 0
+	case "neck":
+		return 1
+	case "shoulder", "shoulders":
+		return 2
+	case "shirt", "body":
+		return 3
+	case "chest":
+		return 4
+	case "waist":
+		return 5
+	case "legs":
+		return 6
+	case "feet":
+		return 7
+	case "wrist", "wrists":
+		return 8
+	case "hands":
+		return 9
+	case "back":
+		return 14
+	case "main_hand", "mainhand", "twohand", "two_hand", "two-handed":
+		return 15
+	case "off_hand", "offhand", "shield":
+		return 16
+	case "ranged":
+		return 17
+	case "tabard":
+		return 18
+	default:
+		return -1
 	}
 }
 
@@ -596,9 +659,7 @@ func (s *LiveSetup) awaitConfirmedKit(ctx context.Context, cl *Client, kit []gea
 // through inv and equipment, failing closed whenever the state cannot be
 // confirmed (unknown, stale, unconfirmed move, or RPC error).
 func (s *LiveSetup) playerNoShield(ctx context.Context, r *Repeat) map[string]any {
-	tctx, cancel := context.WithTimeout(ctx, s.timeoutVal())
-	defer cancel()
-	_, eq, why := readConfirmedEquipment(tctx, s.clientOr(r))
+	_, eq, why := s.awaitConfirmedRead(ctx, s.clientOr(r))
 	if why != "" {
 		return rowOf("player_no_shield", false, "unreadable", why)
 	}

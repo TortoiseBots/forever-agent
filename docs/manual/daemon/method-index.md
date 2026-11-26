@@ -4,7 +4,7 @@ title: Method index
 description: Every method a forever serve daemon registers, with its parameters, what it does and the page that explains it.
 tags: [daemon, methods, reference, rpc]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-24T20:35:07Z }
+generated: { by: forever-agent docs, at: 2026-11-26T13:50:00Z }
 sources:
   - id: method-table
     resource: internal/forever/world/serve_session_methods.go
@@ -107,7 +107,7 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 
 | Method | Params | What it does | Page |
 |---|---|---|---|
-| `equip` | `item_entry`, `bag`, `slot` | Equip or swap an item | [Items](../player-actions/items-and-inventory.md) |
+| `equip` | `item_entry`, `bag`, `slot`, `dst` | Equip or swap an item | [Items](../player-actions/items-and-inventory.md) |
 | `use_item` | `item_entry`, `bag`, `slot`, `target`, `spell_id` | Use an item | [Items](../player-actions/items-and-inventory.md) |
 
 # The bank

@@ -4,7 +4,7 @@ title: Items and inventory
 description: Read the character's inventory and equipment, move items between slots and bags, use an item, and mount or dismount.
 tags: [player-actions, items, inventory, equipment, mounts]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-24T20:35:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T12:48:00Z }
 sources:
   - id: inventory
     resource: internal/forever/world/inventory.go
@@ -35,7 +35,7 @@ really has 35-50), the bank 63+ and the buyback 72-83. A position is either a ba
 | `inv` | none | the full inventory snapshot (read-only) |
 | `inventory` | `bags`, `names` | array of item rows |
 | `equipment` | `names` | array of worn items |
-| `equip` | `item_entry` or `bag` + `slot` | the item's row after the move |
+| `equip` | `item_entry` or `bag` + `slot`, optional `dst` | the item's row after the move |
 | `use_item` | `item_entry` or `bag` + `slot`, `spell_id`, `target` | the item's row |
 | `mount` | `spell` or `entry` (+ `spell`) | mount state |
 | `dismount` | none | mount state |
@@ -103,12 +103,13 @@ world.
 # equip
 
 `equip` moves one item to a worn slot. The item is named by `item_entry` (the first stack whose position the server
-confirmed) or by `bag` (default 255, the player's own slots) with `slot`. The step uses the server's auto-equip, so
-the server chooses the slot: the answer is the item's row after the move and its slot is usually still unknown.
+confirmed) or by `bag` (default 255, the player's own slots) with `slot`. Passing an optional equipment slot `dst`
+(`0-18`) swaps directly into that slot without touching unrelated worn items; without `dst` the step uses the server's
+auto-equip so the server chooses the slot (touching existing equipped slots).
 
 Two limits from the protocol are worth knowing: equipping a two-handed weapon can send the off-hand item to a free
 slot the client cannot name, and an equip is never confirmed by this server's answer in the current version, so the
-item and any displaced item read `unconfirmed` for a moment and then unknown. Read the equipment again after a
+moved item (and any displaced item) reads `unconfirmed` for a moment and then unknown. Read the equipment again after a
 moment to see the result.
 
 # use_item
