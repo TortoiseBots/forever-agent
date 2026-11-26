@@ -2078,7 +2078,9 @@ func (r *Run) groupClear(g Group, units []Unit, claim packClaim) bool {
 }
 
 // isPatrolMember says whether a unit is the group's patrol: one of its entries, not one of the group's own members
-// (the plan lists the same entry in both), and standing on the patrol's path.
+// (the plan lists the same entry in both), and standing on the patrol's path. Like the rest of the driver,
+// patrolOnPath treats a multi-point Patrol.Path as a closed loop (counting the closing leg from the last waypoint back
+// to the first) and keeps the entry-only rule when Path is empty.
 func (r *Run) isPatrolMember(g Group, ui int, units []Unit, claim packClaim) bool {
 	if g.Patrol == nil {
 		return false

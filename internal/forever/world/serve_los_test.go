@@ -287,6 +287,60 @@ func TestServeLOSNonGMSaidAloud(t *testing.T) {
 	f.wait(t)
 }
 
+// TestServeLOSResetsSaidAloudForLaterCall: a said-aloud sight answer refuses only that call; nothing caches it across
+// serve los calls, so once the account holds GM (or another call fails for another reason) later calls answer
+// normally instead of failing "said aloud" forever.
+func TestServeLOSResetsSaidAloudForLaterCall(t *testing.T) {
+	t.Run("after GM confirm", func(t *testing.T) {
+		f := newFakeServer(t)
+		f.serveMode = true
+		f.serveNoGM = true
+		f.serveEchoTB = true
+		defer f.close()
+		steps := &stepLog{}
+		a := startServeDaemon(t, f, steps)
+		waitServeState(t, a, "online", steps)
+
+		a.mustFail(t, "los", map[string]any{"a": "-7,0,0", "b": sightGuid}, -32003, "said aloud")
+
+		f.mu.Lock()
+		f.serveNoGM = false
+		f.serveEchoTB = false
+		f.serveCommander = func(line string) []string {
+			if !strings.HasPrefix(line, ".tb los ") {
+				return nil
+			}
+			return []string{"los a=target b=ForeverRat map=700 los=1 dist=4.5 same_map=1 in_world=1 #T"}
+		}
+		f.mu.Unlock()
+
+		var out ServeLOS
+		json.Unmarshal(a.mustCall(t, "los", map[string]any{"a": "target", "b": sightGuid}), &out)
+		if !out.Clear || out.Reason != "" || out.B != "ForeverRat" || out.DistYD == nil || *out.DistYD != 4.5 {
+			t.Fatalf("answer after GM confirm = %+v", out)
+		}
+		a.stop(t)
+		f.wait(t)
+	})
+
+	t.Run("later failure keeps its own error", func(t *testing.T) {
+		f := newFakeServer(t)
+		f.serveMode = true
+		f.serveNoGM = true
+		f.serveEchoTB = true
+		defer f.close()
+		steps := &stepLog{}
+		a := startServeDaemon(t, f, steps)
+		waitServeState(t, a, "online", steps)
+
+		a.mustFail(t, "los", map[string]any{"a": "-7,0,0", "b": sightGuid}, -32003, "said aloud")
+		a.mustFail(t, "los", map[string]any{"a": "target", "b": sightGuid}, -32003, "not a GM")
+
+		a.stop(t)
+		f.wait(t)
+	})
+}
+
 // TestServeBotTBLineStillGuarded: the `bot` method's `.tb` line is not the player run's sight shape, so an unconfirmed
 // account is refused and nothing is sent.
 func TestServeBotTBLineStillGuarded(t *testing.T) {

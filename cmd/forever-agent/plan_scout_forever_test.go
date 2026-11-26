@@ -568,6 +568,44 @@ func TestScoutForeverLevelFillTrustsOnlyTheSpawnsOwnCreature(t *testing.T) {
 	}
 }
 
+// TestScoutForeverLevelFillUsesUnitSpawnKey: a Forever serve unit carries a 128-bit guid (parsed as 0 or an
+// instance counter) and its matched export spawn id in SpawnID, which can exceed 24 bits. Level fill keys by
+// UnitSpawnKey and the full uint32 spawn id, never the low 24 bits of GUID.
+func TestScoutForeverLevelFillUsesUnitSpawnKey(t *testing.T) {
+	w := &worldspawn.World{Spawns: []worldspawn.Spawn{
+		{GUID: 47, Entry: 4100, LevelMax: 60},
+		{GUID: 20038045, Entry: 4100, LevelMax: 60},
+	}}
+	// A 128-bit Forever guid whose low byte is instance counter 0x2f (47), matched to spawn 20038045 (> 24 bits).
+	u := foreverWorldUnit(serveclient.Unit{
+		GUID: "0x20011830A00B0DC0000000000000002F", Type: "creature", Entry: 4100, Level: 32,
+	}, 20038045)
+	// Also check a 64-bit unit whose low 24 bits match spawn 47 while SpawnID names 20038045.
+	u2 := world.Unit{GUID: 0x2F, SpawnID: 20038045, Type: "creature", Entry: 4100, Level: 32}
+	for _, tc := range []struct {
+		name string
+		unit world.Unit
+	}{
+		{"128-bit guid from serve", u},
+		{"low 24 bits collide with another spawn", u2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w.Spawns[0].LevelMax, w.Spawns[1].LevelMax = 60, 60
+			units := map[int][]world.Unit{1: {tc.unit}}
+			unknown := map[uint64]bool{47: true, 20038045: true}
+			if filled := scoutForeverFillLevels(w, units, unknown); filled != 1 {
+				t.Fatalf("filled %d spawns, want 1", filled)
+			}
+			if w.Spawns[1].LevelMax != 32 {
+				t.Errorf("spawn 20038045 level %d, want 32", w.Spawns[1].LevelMax)
+			}
+			if w.Spawns[0].LevelMax != 60 {
+				t.Errorf("spawn 47 level %d, want the assumed 60 (must not match the instance counter)", w.Spawns[0].LevelMax)
+			}
+		})
+	}
+}
+
 // unconfirmedServe is a fake serve whose first drop `.go xyz` lines are the core's silent drop: the serve answers
 // each of them with its own "not confirmed" once its budget is spent and the character stays where it was, and the
 // line after them lands.

@@ -215,8 +215,9 @@ func foreverUnknownLevels(dir string) (map[uint64]bool, error) {
 	return out, nil
 }
 
-// scoutForeverUnitKey names the spawn a live unit can be trusted to stand for: its low 24 bits (the spawn guid) and its
-// entry. A summon or pet whose low 24 bits collide with a spawn, or the same guid on another entry, is not that spawn.
+// scoutForeverUnitKey names the spawn a live unit can be trusted to stand for: its spawn key (world.UnitSpawnKey: the
+// matched export spawn id when set, else the low 24 bits of its guid) and its entry. A summon or pet whose key
+// collides with a spawn, or the same key on another entry, is not that spawn.
 type scoutForeverUnitKey struct {
 	guid  uint32
 	entry uint32
@@ -241,7 +242,7 @@ func scoutForeverFillLevels(w *worldspawn.World, units map[int][]world.Unit, unk
 			if u.Type != "creature" || u.Level <= 1 || u.Entry == 0 {
 				continue
 			}
-			g := world.Low24(u.GUID)
+			g := world.UnitSpawnKey(u)
 			if g == 0 {
 				continue
 			}
@@ -254,10 +255,10 @@ func scoutForeverFillLevels(w *worldspawn.World, units map[int][]world.Unit, unk
 	filled := 0
 	for i := range w.Spawns {
 		s := &w.Spawns[i]
-		if !unknown[s.GUID] {
+		if !unknown[s.GUID] || s.GUID > math.MaxUint32 {
 			continue
 		}
-		lv, ok := byUnit[scoutForeverUnitKey{guid: world.Low24(world.GUID(s.GUID)), entry: s.Entry}]
+		lv, ok := byUnit[scoutForeverUnitKey{guid: uint32(s.GUID), entry: s.Entry}]
 		if ok && lv != s.LevelMax {
 			s.LevelMax = lv
 			filled++
