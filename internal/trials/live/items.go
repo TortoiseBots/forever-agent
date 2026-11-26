@@ -13,11 +13,19 @@ package live
 // the baseline, so the number of items the hire had before the trial is
 // preserved. A clear is proved by an `ItemScan` read-back (the count back at
 // the baseline); an item that cannot be proved gone stays in the mark and
-// the caller says so. A kit piece that was equipped is unequipped first
-// through `.bot item <bot> unequip 255 <slot>` (read from `.bot inv <bot>`)
-// and then removed from bags. Bag copies are removed first so unequipping
-// has free bag slots. A full bag that stays full is the setup row's SKIPPED
-// needs=bot_bag_space, never a silent failure.
+// the caller says so. The count is always the ItemScan `inv` (worn plus bag
+// copies) and never a parsed `.bot inv` reply: that reply was truncated on
+// the live server (2026-11-26), so a clear that depended on it could not see
+// the worn copies and left a pool bot's bags full for every later trial.
+// A kit piece that was equipped is unequipped through `.bot item <bot>
+// unequip 255 <slot>` (the slot the ItemScan record names) and then removed
+// from bags. Bag copies are removed first so unequipping has free bag slots.
+// A full bag that stays full is the setup row's SKIPPED needs=bot_bag_space,
+// never a silent failure.
+//
+// Setup also clears the trial's own known ids (consumables and kit pieces)
+// before it gives them, fail-closed, so an earlier trial's leftovers cannot
+// make this trial fail setup even when no mark names them.
 
 import (
 	"context"
@@ -29,6 +37,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
@@ -173,51 +182,48 @@ func (m *recoveryMarks) setWorn(server, bot string, item uint32) {
 	_ = m.store(list)
 }
 
-// reduce subtracts n cleared copies from one mark, dropping it when none remain.
-func (m *recoveryMarks) reduce(g givenItem, n uint32) {
-	if n == 0 {
-		return
-	}
-	recoveryMu.Lock()
-	defer recoveryMu.Unlock()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	list := m.load()
-	var keep []givenItem
-	for _, e := range list {
-		if !sameGive(e, g.Server, g.Bot, g.Item) {
-			keep = append(keep, e)
-			continue
-		}
-		if e.Count > n {
-			e.Count -= n
-			keep = append(keep, e)
-		}
-	}
-	_ = m.store(keep)
-}
-
 func (p *Provisioner) marks() *recoveryMarks {
 	p.markOnce.Do(func() { p.recovery = &recoveryMarks{path: p.RecoveryPath} })
 	return p.recovery
 }
 
-// carriedCount reads how many of item the bot carries: the `ItemScan`
-// inv, which is the core's GetItemCount over equipment, bags and the
-// reagent bank. ok is false when it cannot be read.
-func (p *Provisioner) carriedCount(ctx context.Context, bot string, item uint32) (int, bool) {
+// scanItem reads one item's `ItemScan` record: its id, whether it exists, the
+// carried count (the core's GetItemCount over equipment and bags) and the
+// equipment slot the core would put it in (when equippable). ok is false when
+// the reply cannot be read or does not hold the record.
+func (p *Provisioner) scanItem(ctx context.Context, bot string, item uint32) (tbcmd.ItemScanResult, string, bool) {
 	tctx, cancel := p.ctxOf(ctx)
-	defer cancel()
 	rep, err := p.TB.ItemScan(tctx, bot, item)
+	cancel()
 	if err != nil {
-		return 0, false
+		return tbcmd.ItemScanResult{}, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s: %v)", item, bot, err), false
 	}
 	for _, r := range rep.Results {
-		if r.Item == item && r.Exists && r.HasInv {
-			return r.Inv, true
+		if r.Item != item {
+			continue
 		}
+		if !r.Exists {
+			// The server holds no such template: no copy can be carried, so
+			// the count is 0 (a later exist read still fails a give of it).
+			return r, "", true
+		}
+		if r.HasInv {
+			return r, "", true
+		}
+		return tbcmd.ItemScanResult{}, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s named no carried count)", item, bot), false
 	}
-	return 0, false
+	return tbcmd.ItemScanResult{}, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s held no record for it)", item, bot), false
+}
+
+// carriedCount reads how many of item the bot carries: the `ItemScan`
+// inv, which is the core's GetItemCount over equipment, bags and the reagent
+// bank (never the bank storage). ok is false when it cannot be read.
+func (p *Provisioner) carriedCount(ctx context.Context, bot string, item uint32) (int, bool) {
+	r, _, ok := p.scanItem(ctx, bot, item)
+	if !ok {
+		return 0, false
+	}
+	return r.Inv, true
 }
 
 // giveItem sends one `.tb additem` and marks it only once the bags prove it:
@@ -260,14 +266,15 @@ func (p *Provisioner) giveItem(ctx context.Context, bot string, item uint32, cou
 	return lines, fmt.Errorf("additem answered but the bags show no new item %d on %s (%d before, %d after)", item, bot, base, after)
 }
 
-// ClearGiven takes back what earlier gives left on bot: first it removes
-// non-worn bag items with `.tb removeitem` (freeing bag space for unequipping),
-// then it reads `.bot inv <bot>` and for any remaining or worn marked items it
-// unequips only trial-added copies above the baseline via
-// `.bot item <bot> unequip 255 <slot>` and removes them with `.tb removeitem`.
-// Each removal is verified by an `ItemScan` read-back and never reduces the
-// carried count (bags plus worn) below the pre-trial baseline. An item that cannot be read,
-// unequipped, or proved removed stays marked and fails closed (`allOK=false`).
+// ClearGiven takes back what earlier gives left on bot. Both the count and
+// the unequip slot come from `.tb itemscan` (inv counts worn and bag copies
+// together); the `.bot inv` reply is never read, so a truncated reply cannot
+// hide an item. Non-worn marks are cleared first (their bag copies free bag
+// slots), then worn marks unequip only trial-added copies above the baseline
+// through `.bot item <bot> unequip 255 <slot>` and remove each one at once.
+// Every step is proved by an `ItemScan` read-back and the carried count never
+// goes below the pre-trial baseline. An item that cannot be read, unequipped
+// or proved removed stays marked and fails closed (`allOK=false`).
 func (p *Provisioner) ClearGiven(ctx context.Context, bot string) (string, bool) {
 	gives := p.marks().forBot(p.Server, bot)
 	if len(gives) == 0 {
@@ -276,187 +283,256 @@ func (p *Provisioner) ClearGiven(ctx context.Context, bot string) (string, bool)
 	allOK := true
 	cleared := 0
 	var notes []string
-	var deferred []givenItem
-
-	// Pass 1: remove non-worn marked items from the bags first so bag slots
-	// open up before any worn kit pieces are unequipped.
-	for _, g := range gives {
-		if g.Worn {
-			deferred = append(deferred, g)
-			continue
-		}
-		inv, known := p.carriedCount(ctx, bot, g.Item)
-		if !known {
-			allOK = false
-			notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (carried count unreadable)", g.Item))
-			continue
-		}
-		extra := inv - int(g.Base)
-		if extra > int(g.Count) {
-			extra = int(g.Count)
-		}
-		if extra <= 0 {
-			p.marks().drop(g) // back at the pre-trial baseline (used up or already gone)
-			cleared++
-			continue
-		}
-		removed, note, verified := p.removeFromBags(ctx, bot, g.Item, extra, inv)
-		if removed > 0 {
-			p.marks().reduce(g, uint32(removed))
-		}
-		if !verified {
-			// The mark was never worn: only bag copies above the baseline may
-			// be taken back, so equipment is never touched on its behalf.
+	clear := func(g givenItem) {
+		if note, ok := p.clearAboveBaseline(ctx, bot, g); !ok {
 			allOK = false
 			notes = append(notes, note)
-			continue
+			return
 		}
 		p.marks().drop(g)
 		cleared++
 	}
-
-	if len(deferred) == 0 {
-		return formatClearSummary(cleared, notes), allOK
+	// Non-worn marks first: their bag copies free slots for the unequips the
+	// worn marks may need.
+	for _, g := range gives {
+		if !g.Worn {
+			clear(g)
+		}
 	}
-
-	// Pass 2: read `.bot inv <bot>`, remove any bag-held excess of deferred marks first,
-	// then unequip and remove one trial-added worn copy at a time.
-	binv, invErr := p.botInventory(ctx, bot)
-	for _, g := range deferred {
-		inv, known := p.carriedCount(ctx, bot, g.Item)
-		if !known {
-			allOK = false
-			notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (carried count unreadable)", g.Item))
-			continue
+	for _, g := range gives {
+		if g.Worn {
+			clear(g)
 		}
-		if invErr != nil {
-			extra := inv - int(g.Base)
-			if extra > int(g.Count) {
-				extra = int(g.Count)
-			}
-			allOK = false
-			if extra > 0 {
-				notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (cannot read .bot inv to clear %d: %v)", g.Item, extra, invErr))
-			} else {
-				notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (cannot read .bot inv for worn mark: %v)", g.Item, invErr))
-			}
-			continue
-		}
-		eqSlots := equippedSlotsFor(binv, g.Item)
-		bagHeld := bagCountFor(binv, g.Item)
-		totalCarried := inv
-		if sum := bagHeld + len(eqSlots); sum > totalCarried {
-			totalCarried = sum
-		}
-		extra := totalCarried - int(g.Base)
-		if extra > int(g.Count) {
-			extra = int(g.Count)
-		}
-		if extra <= 0 {
-			p.marks().drop(g)
-			cleared++
-			continue
-		}
-		removed := 0
-		// The mark keeps the carried baseline (bags plus worn) and the gained
-		// count, so at most `extra` copies are ever taken. Bag copies go first:
-		// they are the copies a give just added; equipment is touched only for
-		// the rest, because a worn copy of the entry may predate the trial.
-		fromBags := bagHeld
-		if fromBags > extra {
-			fromBags = extra
-		}
-		if fromBags > 0 {
-			n, note, ok := p.removeFromBags(ctx, bot, g.Item, fromBags, inv)
-			if n > 0 {
-				p.marks().reduce(g, uint32(n))
-				removed += n
-			}
-			if !ok {
-				allOK = false
-				notes = append(notes, note)
-				continue
-			}
-		}
-		rem := extra - removed
-		bagHeldNow := bagHeld - fromBags
-		if rem > 0 {
-			if len(eqSlots) == 0 {
-				allOK = false
-				notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (%d above baseline not found in bags or equipment)", g.Item, rem))
-				continue
-			}
-			toUnequip := rem
-			if len(eqSlots) < toUnequip {
-				toUnequip = len(eqSlots)
-			}
-			unequipFailed := false
-			// Unequip from highest slot index downward so lower-slot pre-existing copies stay worn.
-			for i := range toUnequip {
-				slot := eqSlots[len(eqSlots)-1-i]
-				carriedBefore, okBefore := p.carriedCount(ctx, bot, g.Item)
-				if !okBefore {
-					allOK = false
-					notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (carried count before unequipping slot %d unreadable)", g.Item, slot))
-					unequipFailed = true
-					break
-				}
-				if uerr := p.unequipBotSlot(ctx, bot, slot, g.Item); uerr != nil {
-					allOK = false
-					notes = append(notes, fmt.Sprintf("item %d: unequip slot %d failed: %v", g.Item, slot, uerr))
-					unequipFailed = true
-					break
-				}
-				// The unequip must have put exactly one copy into the bags: the
-				// carried count alone cannot prove it (it already counted the
-				// worn copy), so the bags are read through `.bot inv`. A silent
-				// refusal (bags full) would otherwise let removeitem take a copy
-				// the bot had before the trial.
-				afterBinv, berr := p.botInventory(ctx, bot)
-				bagNow := bagCountFor(afterBinv, g.Item)
-				if berr != nil || bagNow != bagHeldNow+1 {
-					allOK = false
-					why := ""
-					if berr != nil {
-						why = ": " + berr.Error()
-					}
-					notes = append(notes, fmt.Sprintf("item %d: unequip slot %d not proven (bags %d before, %d after%s)",
-						g.Item, slot, bagHeldNow, bagNow, why))
-					unequipFailed = true
-					break
-				}
-				n, note, ok := p.removeFromBags(ctx, bot, g.Item, 1, carriedBefore)
-				if n > 0 {
-					p.marks().reduce(g, uint32(n))
-					removed += n
-					bagHeldNow = bagNow - n
-				}
-				if !ok {
-					allOK = false
-					notes = append(notes, note)
-					unequipFailed = true
-					break
-				}
-			}
-			if unequipFailed {
-				continue
-			}
-			if rem > toUnequip {
-				allOK = false
-				notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (%d marked item(s) still unaccounted)", g.Item, rem-toUnequip))
-				continue
-			}
-		}
-		after, ok := p.carriedCount(ctx, bot, g.Item)
-		if !ok || after > totalCarried-extra {
-			allOK = false
-			notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (carried %d before, %d after removing %d)", g.Item, totalCarried, after, extra))
-			continue
-		}
-		p.marks().drop(g)
-		cleared++
 	}
 	return formatClearSummary(cleared, notes), allOK
+}
+
+// clearAboveBaseline takes back one mark's gives: at most g.Count copies
+// above g.Base. Bag copies go first through `.tb removeitem` (the copies a
+// give just added); a worn mark then unequips the rest, one copy at a time,
+// destroying each copy before the next unequip so it has a free bag slot. A
+// non-worn mark never touches equipment.
+func (p *Provisioner) clearAboveBaseline(ctx context.Context, bot string, g givenItem) (string, bool) {
+	scan, note, ok := p.scanItem(ctx, bot, g.Item)
+	if !ok {
+		return note, false
+	}
+	extra := scan.Inv - int(g.Base)
+	if extra > int(g.Count) {
+		extra = int(g.Count)
+	}
+	if extra <= 0 {
+		return "", true // back at the pre-trial baseline (used up or already gone)
+	}
+	removed, note, ok := p.emptyItemBags(ctx, bot, g.Item, extra)
+	if !ok {
+		return note, false
+	}
+	extra -= removed
+	if extra <= 0 {
+		return "", true
+	}
+	if !g.Worn {
+		return fmt.Sprintf("item %d: UNVERIFIED (%d above baseline not in the bags; a non-worn mark never touches equipment)", g.Item, extra), false
+	}
+	if _, note, ok := p.clearWorn(ctx, bot, g.Item, int(g.Base)); !ok {
+		return note, false
+	}
+	return "", true
+}
+
+// emptyItemBags removes what the bot's bags hold of item, up to cap copies
+// (cap <= 0: no limit), proving each removal by the carried count. It stops
+// when the bags and reagent bank hold no copy (the rest is worn) and
+// returns how many copies left them.
+func (p *Provisioner) emptyItemBags(ctx context.Context, bot string, item uint32, cap int) (int, string, bool) {
+	removed := 0
+	for range 8 {
+		scan, note, ok := p.scanItem(ctx, bot, item)
+		if !ok {
+			return removed, note, false
+		}
+		if scan.Inv == 0 {
+			return removed, "", true
+		}
+		ask := scan.Inv
+		if cap > 0 {
+			if left := cap - removed; left < ask {
+				ask = left
+			}
+			if ask <= 0 {
+				return removed, "", true
+			}
+		}
+		n, note, ok := p.removeUpTo(ctx, bot, item, ask)
+		if !ok {
+			return removed, note, false
+		}
+		if n == 0 {
+			return removed, "", true // no removable copy left: what remains is worn
+		}
+		removed += n
+	}
+	return removed, fmt.Sprintf("item %d: UNVERIFIED (bags still hold a copy after 8 removals)", item), false
+}
+
+// clearWorn unequips and destroys worn copies of item until the carried
+// count reaches floor, one copy at a time: `.bot item <bot> unequip 255
+// <slot>` (the slot the ItemScan record names) then `.tb removeitem`. A copy
+// that cannot be unequipped or proved removed fails closed.
+func (p *Provisioner) clearWorn(ctx context.Context, bot string, item uint32, floor int) (int, string, bool) {
+	removed := 0
+	for range 8 {
+		scan, note, ok := p.scanItem(ctx, bot, item)
+		if !ok {
+			return removed, note, false
+		}
+		if scan.Inv <= floor {
+			return removed, "", true
+		}
+		if !scan.CanEquip || !scan.HasSlot {
+			why := scan.Why
+			if why == "" {
+				why = "the item is not equippable"
+			}
+			return removed, fmt.Sprintf("item %d: UNVERIFIED (%d above the baseline not in the bags: %s)", item, scan.Inv-floor, why), false
+		}
+		if err := p.unequipBotSlot(ctx, bot, scan.Slot, item); err != nil {
+			return removed, fmt.Sprintf("item %d: unequip slot %d failed: %v", item, scan.Slot, err), false
+		}
+		n, note, ok := p.removeUpTo(ctx, bot, item, 1)
+		if !ok {
+			return removed, note, false
+		}
+		if n != 1 {
+			return removed, fmt.Sprintf("item %d: unequip slot %d did not put a copy into the bags", item, scan.Slot), false
+		}
+		removed += n
+	}
+	return removed, fmt.Sprintf("item %d: UNVERIFIED (still above the baseline after 8 unequips)", item), false
+}
+
+// scanItemBatch reads one `ItemScan` for every id (in chunks of the module's
+// 40-id limit) and returns the records by item id. ok is false when a reply
+// cannot be read; a missing record is left for the caller to report.
+func (p *Provisioner) scanItemBatch(ctx context.Context, bot string, ids []uint32) (map[uint32]tbcmd.ItemScanResult, string, bool) {
+	out := make(map[uint32]tbcmd.ItemScanResult, len(ids))
+	for start := 0; start < len(ids); start += 40 {
+		chunk := ids[start:]
+		if len(chunk) > 40 {
+			chunk = chunk[:40]
+		}
+		tctx, cancel := p.ctxOf(ctx)
+		rep, err := p.TB.ItemScan(tctx, bot, chunk...)
+		cancel()
+		if err != nil {
+			return nil, fmt.Sprintf("itemscan %s: %v", bot, err), false
+		}
+		for _, r := range rep.Results {
+			out[r.Item] = r
+		}
+	}
+	return out, "", true
+}
+
+// ClearTrialItems removes every copy of the ids the trial gives (its
+// consumables and its kit pieces) before the setup gives them again. An
+// earlier trial can leave those ids in the hire's bags and equipment with no
+// recovery mark naming them (a run killed between the give and the mark
+// write); without this pass the next give hits "bags full" for an item the
+// trial itself added. Counts come from `.tb itemscan`, never a `.bot inv`
+// reply; one batched read tells which ids carry anything, bag copies of every
+// such id go first (so the worn pieces have free slots), then worn copies
+// come off one at a time. A count that cannot be read, unequipped or proved
+// removed fails the setup row (fail-closed): the trial does not give into
+// bags it cannot read.
+func (p *Provisioner) ClearTrialItems(ctx context.Context, bot string, ids []uint32) (string, bool) {
+	ids = uniqueItemIDs(ids)
+	if len(ids) == 0 {
+		return "no known trial items", true
+	}
+	records, note, ok := p.scanItemBatch(ctx, bot, ids)
+	if !ok {
+		return note, false
+	}
+	allOK := true
+	var notes []string
+	var toClear []uint32
+	for _, id := range ids {
+		r, found := records[id]
+		if !found {
+			allOK = false
+			notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s held no record for it)", id, bot))
+			continue
+		}
+		if !r.Exists || (r.HasInv && r.Inv == 0) {
+			continue // no template, or nothing carried: no leftover of it
+		}
+		if !r.HasInv {
+			allOK = false
+			notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s named no carried count)", id, bot))
+			continue
+		}
+		toClear = append(toClear, id)
+	}
+	cleared := 0
+	bagFailed := map[uint32]bool{}
+	for _, id := range toClear {
+		n, note, ok := p.emptyItemBags(ctx, bot, id, 0)
+		cleared += n
+		if !ok {
+			allOK = false
+			bagFailed[id] = true
+			notes = append(notes, note)
+		}
+	}
+	for _, id := range toClear {
+		if bagFailed[id] {
+			continue
+		}
+		if r, note, ok := p.clearWorn(ctx, bot, id, 0); !ok {
+			allOK = false
+			notes = append(notes, note)
+		} else {
+			cleared += r
+		}
+	}
+	if cleared == 0 && len(notes) == 0 {
+		return "no trial items left over", true
+	}
+	var parts []string
+	if cleared > 0 {
+		parts = append(parts, fmt.Sprintf("cleared %d leftover item(s)", cleared))
+	}
+	parts = append(parts, notes...)
+	return strings.Join(parts, "; "), allOK
+}
+
+// trialItemIDs is every item id a trial gives a hire: the consumable luggage
+// and, when the spec asks for a gear kit, the kit's pieces.
+func trialItemIDs(spec BotSpec) []uint32 {
+	ids := itemIDs(spec.Items)
+	if spec.Gear != "" {
+		for _, it := range botGearKit(spec.Class, spec.Gear, spec.Level) {
+			ids = append(ids, it.Entry)
+		}
+	}
+	return uniqueItemIDs(ids)
+}
+
+// uniqueItemIDs drops id 0 and duplicates, sorted so the reads are stable.
+func uniqueItemIDs(ids []uint32) []uint32 {
+	seen := make(map[uint32]bool, len(ids))
+	out := make([]uint32, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 func formatClearSummary(cleared int, notes []string) string {
@@ -471,44 +547,32 @@ func formatClearSummary(cleared int, notes []string) string {
 	return strings.Join(parts, "; ")
 }
 
-func (p *Provisioner) removeFromBags(ctx context.Context, bot string, item uint32, count int, before int) (int, string, bool) {
+// removeUpTo asks the module to take at most n copies of item out of the bags
+// (`.tb removeitem <bot> <id> <n>`; the module takes only what the bags hold)
+// and proves it with an `ItemScan`: the carried count must fall by exactly the
+// number the module answered it removed.
+func (p *Provisioner) removeUpTo(ctx context.Context, bot string, item uint32, n int) (int, string, bool) {
+	if n <= 0 {
+		return 0, "", true
+	}
+	before, known := p.carriedCount(ctx, bot, item)
+	if !known {
+		return 0, fmt.Sprintf("item %d: UNVERIFIED (carried count unreadable before removing %d)", item, n), false
+	}
 	tctx, cancel := p.ctxOf(ctx)
-	res, lines, rerr := p.TB.FreeTextRemoveItem(tctx, bot, item, uint32(count))
+	res, lines, rerr := p.TB.FreeTextRemoveItem(tctx, bot, item, uint32(n))
 	cancel()
-	p.Ledger.Add(map[string]any{"kind": "removeitem", "bot": bot, "item_id": item, "count": count,
+	p.Ledger.Add(map[string]any{"kind": "removeitem", "bot": bot, "item_id": item, "count": n,
 		"removed": res.Removed, "left": res.Left, "reply": firstLines(lines)})
 	if rerr != nil {
 		return 0, fmt.Sprintf("item %d: remove refused: %s", item, tbErrText(rerr, lines)), false
 	}
 	after, ok := p.carriedCount(ctx, bot, item)
-	if !ok || after > before-count {
-		removed := 0
-		if ok && before > after {
-			removed = before - after
-		}
-		return removed, fmt.Sprintf("item %d: UNVERIFIED (carried %d before, %d after removing %d)", item, before, after, count), false
+	if !ok || res.Removed > n || after != before-res.Removed {
+		return 0, fmt.Sprintf("item %d: UNVERIFIED (carried %d before, %d after the module removed %d of %d)",
+			item, before, after, res.Removed, n), false
 	}
-	return count, "", true
-}
-
-func (p *Provisioner) botInventory(ctx context.Context, bot string) (tbm.Inventory, error) {
-	if p.Client == nil {
-		return tbm.Inventory{}, fmt.Errorf("no client for .bot inv")
-	}
-	tctx, cancel := p.ctxOf(ctx)
-	res, err := p.Client.botLine(tctx, ".bot inv "+bot, 5000)
-	cancel()
-	if err != nil {
-		return tbm.Inventory{}, err
-	}
-	inv := tbm.ParseInventory(res.Lines)
-	if inv.Err != nil {
-		return tbm.Inventory{}, fmt.Errorf("%s: %s", inv.Err.Code, inv.Err.Message)
-	}
-	if !inv.Complete {
-		return tbm.Inventory{}, fmt.Errorf("incomplete .bot inv reply")
-	}
-	return inv, nil
+	return res.Removed, "", true
 }
 
 func (p *Provisioner) unequipBotSlot(ctx context.Context, bot string, slot int, item uint32) error {
@@ -531,27 +595,6 @@ func (p *Provisioner) unequipBotSlot(ctx context.Context, bot string, slot int, 
 		}
 	}
 	return fmt.Errorf("no ACTION_ACK for .bot item %s unequip 255 %d", bot, slot)
-}
-
-func equippedSlotsFor(inv tbm.Inventory, item uint32) []int {
-	var slots []int
-	for slot, e := range inv.Equipped {
-		if e == item {
-			slots = append(slots, slot)
-		}
-	}
-	sort.Ints(slots)
-	return slots
-}
-
-func bagCountFor(inv tbm.Inventory, item uint32) int {
-	n := 0
-	for _, it := range inv.Items {
-		if it.Entry == item {
-			n += it.Count
-		}
-	}
-	return n
 }
 
 // isBagsFull reports the module's "bags full" refusal.

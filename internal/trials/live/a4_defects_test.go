@@ -563,10 +563,14 @@ func TestMarksAreScopedToTheServer(t *testing.T) {
 	}
 }
 
-// An equipped kit piece whose `.bot inv` cannot be read (or whose unequip
-// is refused) fails closed UNVERIFIED and keeps its mark on disk.
-func TestWornKitPieceIsNotClaimedCleared(t *testing.T) {
+// An equipped kit piece is unequipped and destroyed from the `.tb itemscan`
+// record alone: a truncated `.bot inv` reply (the live 2026-11-26 failure,
+// where TBM:INV_END never arrived and the clear saw no worn copy) cannot hide
+// it or block the clear. Before the fix this test failed: ClearGiven required
+// a complete `.bot inv` reply and reported the worn mark UNVERIFIED.
+func TestWornKitClearedWithATruncatedInvReply(t *testing.T) {
 	prov, s, bags := bagProv(t)
+	bags.itemSlot[9434] = 4
 	if _, err := prov.giveItem(context.Background(), "Bheal", 9434, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -574,14 +578,64 @@ func TestWornKitPieceIsNotClaimedCleared(t *testing.T) {
 	bags.setWorn(4, 9434) // equipped: out of the bags
 	prov.marks().setWorn("test2", "Bheal", 9434)
 	s.fake.mu.Lock()
-	s.fake.botFn = func(line string) []string { return []string{} } // unreadable .bot inv
+	s.fake.botFn = func(line string) []string {
+		if strings.HasPrefix(line, ".bot inv") {
+			// What the live server sent: the head only, no INV_ITEM, no INV_END.
+			return []string{"TBM:INV_BEGIN|Bheal|0|16|16"}
+		}
+		return bags.botAnswer(line)
+	}
 	s.fake.mu.Unlock()
 	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if ok || !strings.Contains(ev, "UNVERIFIED") || strings.Contains(ev, "cleared 1") {
-		t.Fatalf("an unverified worn clear must fail closed UNVERIFIED: ok=%v %q", ok, ev)
+	if !ok || !strings.Contains(ev, "cleared 1") {
+		t.Fatalf("a worn trial item must clear from itemscan alone: ok=%v %q", ok, ev)
 	}
-	if len(prov.marks().forBot("test2", "Bheal")) != 1 {
-		t.Fatal("the worn mark must stay")
+	if bags.wornAt(4) != 0 || bags.count(9434) != 0 {
+		t.Fatalf("worn/bag copies left: slot4=%d bags=%d", bags.wornAt(4), bags.count(9434))
+	}
+	if len(prov.marks().forBot("test2", "Bheal")) != 0 {
+		t.Fatal("the mark must be dropped after the proved clear")
+	}
+}
+
+// The setup's known-id clear takes a leftover stack out of the bags and a
+// leftover worn kit piece off the bot with the `.bot inv` reply truncated:
+// the ids and the counts come from `.tb itemscan` only.
+func TestClearTrialItemsByIDWithATruncatedInvReply(t *testing.T) {
+	prov, s, bags := bagProv(t)
+	bags.set(1708, 20)    // an earlier trial's Sweet Nectar in the bags
+	bags.setWorn(4, 9434) // an earlier trial's kit piece, still worn
+	bags.itemSlot[9434] = 4
+	s.fake.mu.Lock()
+	s.fake.botFn = func(line string) []string {
+		if strings.HasPrefix(line, ".bot inv") {
+			return []string{"TBM:INV_BEGIN|Bheal|0|16|16"}
+		}
+		return bags.botAnswer(line)
+	}
+	s.fake.mu.Unlock()
+	ev, ok := prov.ClearTrialItems(context.Background(), "Bheal", []uint32{1708, 9434, 9434, 0})
+	if !ok || !strings.Contains(ev, "cleared 21") {
+		t.Fatalf("known trial items must clear by item id: ok=%v %q", ok, ev)
+	}
+	if bags.count(1708) != 0 || bags.wornAt(4) != 0 || bags.count(9434) != 0 {
+		t.Fatalf("leftovers: 1708=%d slot4=%d 9434=%d", bags.count(1708), bags.wornAt(4), bags.count(9434))
+	}
+}
+
+// A trial does not fail setup because an earlier trial left its consumable in
+// the hire's bags with no mark naming it: the setup clears the known ids
+// first, then gives, so the bags end with exactly the trial's own stack.
+func TestSetupClearsKnownTrialItemsBeforeGiving(t *testing.T) {
+	prov, _, bags := bagProv(t)
+	bags.set(1708, 20) // an earlier trial's stack; no recovery mark names it
+	spec := BotSpec{Class: "priest", Level: 40, Items: []TrialItem{{Name: "Sweet Nectar", Count: 20}}}
+	row := prov.ensureBotGear(context.Background(), spec, "Bheal")
+	if row == nil || !rowOK(row) {
+		t.Fatalf("setup must clear the leftover and give: %v", row)
+	}
+	if got := bags.count(1708); got != 20 {
+		t.Fatalf("bags must hold exactly the trial's 20 after the leftover clear, got %d", got)
 	}
 }
 

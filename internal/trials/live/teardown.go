@@ -425,8 +425,18 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		}
 		// What the trial gave goes back out of the bags while the hire is
 		// still online; a clear that cannot be proved is ledgered and the
-		// recovery mark stays for the next run to clean first.
+		// recovery mark stays for the next run to clean first. The trial's
+		// own ids are cleared too, so a give whose mark was never written
+		// (a killed run) is still taken back. Both read `.tb itemscan` by
+		// item id; no `.bot inv` reply is parsed.
 		clearEv, cleared := prov.ClearGiven(ctx, name)
+		if ev, ok := prov.ClearTrialItems(ctx, name, trialItemIDs(trialSpecFor(rep, name))); !ok {
+			cleared = false
+			if clearEv != "" {
+				clearEv += "; "
+			}
+			clearEv += ev
+		}
 		rep.Ledger.Add(map[string]any{"kind": "items_cleared", "bot": name, "ok": cleared, "evidence": clearEv})
 		if !cleared {
 			r.logf("%s: items of %s not cleared: %s", trialID, name, clearEv)
@@ -477,6 +487,22 @@ func hireGUID(rep *Repeat, name string) string {
 		}
 	}
 	return ""
+}
+
+// trialSpecFor is the spec the trial gave the named hire (the main hire or
+// an extra, aligned by name with rep.ExtraNames): the teardown's known-id
+// clear needs the items that hire was given.
+func trialSpecFor(rep *Repeat, name string) BotSpec {
+	if strings.EqualFold(name, rep.BotName) {
+		return botSpecOf(rep.Trial["bot"])
+	}
+	rawExtras, _ := rep.Trial["extra_bots"].([]any)
+	for i, extra := range rep.ExtraNames {
+		if strings.EqualFold(name, extra) && i < len(rawExtras) {
+			return botSpecOf(rawExtras[i])
+		}
+	}
+	return BotSpec{}
 }
 
 // logoutProved sends `.tb logout` and waits for the hire to leave both the

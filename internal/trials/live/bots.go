@@ -750,11 +750,24 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 	if spec.Gear == "" && len(spec.Items) == 0 {
 		return nil
 	}
-	// A killed run leaves what it gave in the bags: take that back first so
-	// the new items fit. A clear that fails is not fatal here; a full bag
-	// then ends the give as SKIPPED needs=bot_bag_space.
-	if ev, ok := p.ClearGiven(ctx, name); !ok {
-		p.Ledger.Add(map[string]any{"kind": "items_clear_failed", "bot": name, "evidence": ev})
+	// What an earlier trial (or a killed run) left behind is taken back
+	// before the new items go in: the recovery marks first, then the ids
+	// this trial is about to give, so a leftover with no mark cannot fill
+	// the bags. Both clears read `.tb itemscan` by item id (never a `.bot
+	// inv` reply, which the live server truncated); a clear that cannot be
+	// proved fails this row closed instead of giving into unknown bags.
+	known := trialItemIDs(spec)
+	clearEv, clearOK := p.ClearGiven(ctx, name)
+	if ev, ok := p.ClearTrialItems(ctx, name, known); !ok {
+		clearOK = false
+		if clearEv != "" {
+			clearEv += "; "
+		}
+		clearEv += ev
+	}
+	if !clearOK {
+		p.Ledger.Add(map[string]any{"kind": "items_clear_failed", "bot": name, "evidence": clearEv})
+		return rowOf("bot_items", false, known, "leftover trial items not cleared: "+clearEv)
 	}
 	if spec.Gear != "" {
 		kit := botGearKit(spec.Class, spec.Gear, spec.Level)
