@@ -61,3 +61,51 @@ func TestVerifiedFixesRequiresTheRecordedPointOnTheFloor(t *testing.T) {
 		t.Fatalf("kept = %+v, dropped = %+v; want both stands within the walk rule", fixes, dropped)
 	}
 }
+
+// TestVerifiedFixesDropsAFixApplyFixesCannotApply: a recorded snap_point with only vias names its step's row and its vias
+// pass the mesh check, but ApplyFixes applies a snap_point's point, not vias. The replay must drop it with its reason, so
+// the valid fix of the same list still lands instead of the whole batch failing.
+func TestVerifiedFixesDropsAFixApplyFixesCannotApply(t *testing.T) {
+	in := Input{
+		Plan: &dungeon.Plan{Version: 1, Name: "t", Map: 1, Entrance: dungeon.Point{}, Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 40},
+			PullGroups: []dungeon.PullGroup{{Entries: []uint32{100}, Positions: []dungeon.Point{{X: 60}},
+				Approach: []dungeon.Point{{X: 50}}}},
+		}}},
+		Rows: planexport.Rows{
+			Plan: planexport.PlanRow{Plan: "t", Map: 1},
+			Legs: []planexport.LegRow{{Plan: "t", Leg: 0, Name: "one"}},
+			Steps: []planexport.StepRow{
+				{Plan: "t", Leg: 0, Seq: 0, Kind: planexport.KindMove, X: 40},
+				{Plan: "t", Leg: 0, Seq: 1, Kind: planexport.KindMove, X: 50},
+				{Plan: "t", Leg: 0, Seq: 2, Kind: planexport.KindPull, X: 60},
+			},
+		},
+		Origins: []planexport.RowOrigin{
+			{Leg: 0, Part: "to", Group: -1},
+			{Leg: 0, Part: "approach", Group: 0, Index: 0},
+			{Leg: 0, Part: "pull", Group: 0},
+		},
+	}
+	approach := planexport.RowOrigin{Leg: 0, Part: "approach", Group: 0, Index: 0}
+	pull := planexport.RowOrigin{Leg: 0, Part: "pull", Group: 0}
+	ff := FixFile{Format: Format, Version: Version, Plan: "t", Map: 1, Fixes: []Fix{
+		{ID: 1, Step: 2, Kind: FixSnapPoint, Apply: true, Ref: &approach, Vias: []dungeon.Point{{X: 48}}},
+		{ID: 2, Step: 3, Kind: FixMoveStand, Apply: true, Ref: &pull, Stand: &FixStand{X: 55}},
+	}}
+	fixes, dropped := ff.VerifiedFixes(in, fakeNav{})
+	if len(dropped) != 1 || dropped[0].ID != 1 || !strings.Contains(dropped[0].Reason, "a snap_point fix records no point") {
+		t.Fatalf("dropped = %+v; want the vias-only snap_point with its reason", dropped)
+	}
+	edited, _, applyDropped, err := ApplyFixes(in.Plan, fixes, fakePlanNet{})
+	if err != nil {
+		t.Fatalf("ApplyFixes with the verified list: %v", err)
+	}
+	if len(applyDropped) != 0 {
+		t.Fatalf("apply dropped = %+v; want the stand kept", applyDropped)
+	}
+	if got := edited.Legs[0].PullGroups[0].Approach[0].X; got != 55 {
+		t.Fatalf("the stand X = %v; want the recorded 55", got)
+	}
+}

@@ -372,6 +372,46 @@ func TestPlanScoutReplayRefusesUnverifiedFixes(t *testing.T) {
 		}
 	})
 
+	t.Run("a snap_point that records only vias", func(t *testing.T) {
+		// snap_point carries a point; only insert_via and dry_detour insert vias, so applyFix refuses this fix. The replay
+		// must drop it with its reason, and the rest of the list must still be saved.
+		bad := `{"id":1,"step":2,"kind":"snap_point","apply":true,"ref":{"leg":0,"part":"approach","group":0,"index":0},"vias":[{"x":48,"y":0,"z":0}]}`
+		applyTo, code, errOut := play(t, bad+","+good)
+		if code != exitOK {
+			t.Fatalf("code %d, %q", code, errOut)
+		}
+		dropped := droppedOf(t, applyTo)
+		if len(dropped) != 1 || dropped[0].ID != 1 || !strings.Contains(dropped[0].Reason, "a snap_point fix records no point") {
+			t.Fatalf("dropped = %+v; want fix 1 refused for its missing point", dropped)
+		}
+		patched, err := dungeon.Load(filepath.Join(applyTo, "scout_verify.json"))
+		if err != nil {
+			t.Fatalf("the good fix of the same list was not saved: %v", err)
+		}
+		if got := patched.Legs[0].PullGroups[0].Approach[0].X; got != 55 {
+			t.Fatalf("the accepted stand X = %v; want 55", got)
+		}
+	})
+
+	t.Run("a kind apply does not support", func(t *testing.T) {
+		bad := `{"id":1,"step":2,"kind":"split_pull","apply":true,"ref":{"leg":0,"part":"approach","group":0,"index":0}}`
+		applyTo, code, errOut := play(t, bad+","+good)
+		if code != exitOK {
+			t.Fatalf("code %d, %q", code, errOut)
+		}
+		dropped := droppedOf(t, applyTo)
+		if len(dropped) != 1 || dropped[0].ID != 1 || !strings.Contains(dropped[0].Reason, `fix kind "split_pull" is not applied`) {
+			t.Fatalf("dropped = %+v; want fix 1 refused for its kind", dropped)
+		}
+		patched, err := dungeon.Load(filepath.Join(applyTo, "scout_verify.json"))
+		if err != nil {
+			t.Fatalf("the good fix of the same list was not saved: %v", err)
+		}
+		if got := patched.Legs[0].PullGroups[0].Approach[0].X; got != 55 {
+			t.Fatalf("the accepted stand X = %v; want 55", got)
+		}
+	})
+
 	t.Run("every recorded fix refused", func(t *testing.T) {
 		bad := `{"id":1,"step":3,"kind":"move_stand","apply":true,"ref":{"leg":0,"part":"pull","group":0},"stand":{"y":0,"z":0}}`
 		applyTo, code, errOut := play(t, bad)

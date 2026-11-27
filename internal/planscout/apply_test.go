@@ -525,6 +525,52 @@ func TestApplyFixesKeepsTheRepairedStandUnderAnInsertion(t *testing.T) {
 	}
 }
 
+// TestApplyFixesKeepsTheAcceptedStandOverASnapOfItsPoint: a stand-pull row's stand is its last approach point, and a
+// snap_point on that approach row writes the same slot. The stand move runs first among point moves, so the snap must be
+// dropped with the conflict named, never applied over the accepted stand while both fixes count as accepted.
+func TestApplyFixesKeepsTheAcceptedStandOverASnapOfItsPoint(t *testing.T) {
+	base := func() *dungeon.Plan {
+		return &dungeon.Plan{Version: 1, Name: "t", Map: 1, Entrance: dungeon.Point{}, Legs: []dungeon.Leg{{
+			Name: "one",
+			To:   dungeon.Point{X: 10},
+			PullGroups: []dungeon.PullGroup{{
+				Entries: []uint32{100}, Positions: []dungeon.Point{{X: 40}},
+				Approach: []dungeon.Point{{X: 35}, {X: 36}}, StandPull: true,
+			}},
+		}}}
+	}
+	stand := Fix{ID: 1, Step: 5, Kind: FixMoveStand, Apply: true,
+		Ref: &planexport.RowOrigin{Leg: 0, Part: "pull", Group: 0}, Stand: &FixStand{X: 33}}
+	snapRef := planexport.RowOrigin{Leg: 0, Part: "approach", Group: 0, Index: 1}
+	snap := func(step int) Fix {
+		return Fix{ID: 2, Step: step, Kind: FixSnapPoint, Apply: true, Ref: &snapRef, Point: &dungeon.Point{X: 34}}
+	}
+	for _, c := range []struct {
+		name string
+		step int
+	}{
+		{"the snap is the lower step", 3},
+		{"the snap is the higher step", 7},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			edited, _, dropped, err := ApplyFixes(base(), []Fix{stand, snap(c.step)}, fakePlanNet{})
+			if err != nil {
+				t.Fatalf("ApplyFixes: %v", err)
+			}
+			if len(dropped) != 1 || dropped[0].ID != 2 {
+				t.Fatalf("dropped = %+v; want the snap only", dropped)
+			}
+			if !strings.Contains(dropped[0].Reason, "same plan point as fix 1") {
+				t.Errorf("dropped reason %q; want the stand it collides with", dropped[0].Reason)
+			}
+			if got := edited.Legs[0].PullGroups[0].Approach[1].X; got != 33 {
+				t.Fatalf("the stand X = %v; want 33: the snap overwrote the accepted stand", got)
+			}
+		})
+	}
+}
+
+
 // TestSetStandBossHoldRowMovesTheHoldSpot: a boss hold row's coordinates are the hold's spot (Boss.Hold.Spot), which the
 // hold's own walk takes the party to: a move_stand on that row must move the spot, not the approach points the party
 // would then walk to and hold from, and never the boss's position. The export proves the moved spot is the row's.

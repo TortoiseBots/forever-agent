@@ -1,5 +1,9 @@
 # Directory Update Log
 
+## 2026-11-27
+
+* **Update**: `plan-scout --apply-fixes` keeps an accepted stand repair: a stand move runs before the other point moves, and a later point move that resolves to the same plan point (a `snap_point` of a pull row's final approach point, for one) is dropped into `dropped.json` with the conflict named instead of overwriting the stand. A replay also drops a fix whose kind or payload `--apply-fixes` does not apply (a `snap_point` with only vias, an unsupported kind) with its reason, and the rest of the list still lands. Both are documented in [plan tools](dungeons/plan-tools.md).
+
 ## 2026-11-26
 
 * **Update**: `plan-scout --apply-fixes` applies one fix at a time and keeps the ones the plan check accepts: a fix that adds a plan-check issue is dropped with the issues it makes in `dropped.json`, point moves run before insertions (back to front) so an insertion never shifts the element a move names, a `move_stand` fix moves the plan element its row names (a leg's `to` point, a via, an approach point or a step's stand) so a leg without a boss takes them, and a boss row's stand move keeps the party's stand at the last approach point rather than moving the boss (a boss hold row's coordinates are the hold's spot, so its repairs move that spot). An insertion into a stand-pull row's approach list lands before the stand, so a later insertion never replaces a stand a `move_stand` repaired. `--fix-in FILE` replays a recorded fix list after proving it was made for the plan's own exported rows, and drops a fix whose target is not its step's row in this export or whose point is not recorded whole and on the mesh by the walk rule (the recorded point's own floor, not any floor a wider window finds), with the reason ([plan tools](dungeons/plan-tools.md#plan-scout)). A `walk_path` `no full route (none)` answer is recorded as a no-full-route walk and the pass goes on, as it already did for `(partial)`.

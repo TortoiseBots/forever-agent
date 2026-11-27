@@ -67,10 +67,11 @@ func unrecordedCoords(b []byte) []string {
 	return out
 }
 
-// VerifiedFixes is a recorded fix list made safe to replay. An applicable fix must name the plan element its step's row
-// names in this export (the target is then taken from the export, not from the file), and every destination must be a point
-// the file records whole and the map's mesh holds. A fix that fails either is dropped with the reason, never applied to a
-// guessed target or to a missing coordinate read as zero; advice fixes (apply false) are returned as recorded.
+// VerifiedFixes is a recorded fix list made safe to replay. An applicable fix must be of a kind and with a payload
+// ApplyFixes applies, must name the plan element its step's row names in this export (the target is then taken from the
+// export, not from the file), and every destination must be a point the file records whole and the map's mesh holds. A fix
+// that fails any is dropped with the reason, never applied to a guessed target or to a missing coordinate read as zero and
+// never handed on to fail the whole batch; advice fixes (apply false) are returned as recorded.
 func (ff FixFile) VerifiedFixes(in Input, nav Nav) ([]Fix, []DroppedFix) {
 	out := make([]Fix, 0, len(ff.Fixes))
 	var dropped []DroppedFix
@@ -105,11 +106,11 @@ func (ff FixFile) replayRefusal(i int, f Fix, in Input, nav Nav) string {
 	if *f.Ref != origin {
 		return fmt.Sprintf("the fix names %s; step %d's row is %s in this export", originName(*f.Ref), f.Step, originName(origin))
 	}
+	if reason := fixRefusal(f); reason != "" {
+		return reason
+	}
 	switch f.Kind {
 	case FixMoveStand:
-		if f.Stand == nil {
-			return "the fix records no stand"
-		}
 		if miss := ff.missing(i, "stand"); len(miss) > 0 {
 			return "the fix records no stand " + strings.Join(miss, ", ") + ": a missing coordinate is never read as zero"
 		}
@@ -120,9 +121,6 @@ func (ff FixFile) replayRefusal(i int, f Fix, in Input, nav Nav) string {
 				return "the fix records no point " + strings.Join(miss, ", ") + ": a missing coordinate is never read as zero"
 			}
 			return meshRefusal(nav, in.Rows.Plan.Map, *f.Point, "point")
-		}
-		if len(f.Vias) == 0 {
-			return "the fix records no point and no vias"
 		}
 		for k, p := range f.Vias {
 			field := fmt.Sprintf("vias[%d]", k)
