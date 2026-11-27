@@ -570,7 +570,6 @@ func TestApplyFixesKeepsTheAcceptedStandOverASnapOfItsPoint(t *testing.T) {
 	}
 }
 
-
 // TestSetStandBossHoldRowMovesTheHoldSpot: a boss hold row's coordinates are the hold's spot (Boss.Hold.Spot), which the
 // hold's own walk takes the party to: a move_stand on that row must move the spot, not the approach points the party
 // would then walk to and hold from, and never the boss's position. The export proves the moved spot is the row's.

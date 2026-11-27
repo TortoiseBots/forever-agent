@@ -446,7 +446,7 @@ func TestPlanScoutApplyDropsAFixThatAddsAPlanCheckIssue(t *testing.T) {
 	ff.Fixes = []planscout.Fix{
 		// Four vias before the group's one approach point make five: the plan check's cap is four.
 		{ID: 1, Step: 2, Kind: planscout.FixInsertVia, Apply: true,
-			Ref: &planexport.RowOrigin{Leg: 0, Part: "approach", Group: 0, Index: 0},
+			Ref:  &planexport.RowOrigin{Leg: 0, Part: "approach", Group: 0, Index: 0},
 			Vias: []dungeon.Point{{X: 41, Y: 0, Z: 0}, {X: 42, Y: 0, Z: 0}, {X: 43, Y: 0, Z: 0}, {X: 44, Y: 0, Z: 0}}},
 		{ID: 2, Step: 3, Kind: planscout.FixMoveStand, Apply: true,
 			Ref: &planexport.RowOrigin{Leg: 0, Part: "pull", Group: 0}, Stand: &planscout.FixStand{X: 45, Y: 0, Z: 0}},
