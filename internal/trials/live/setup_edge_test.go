@@ -2,6 +2,7 @@ package live
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -349,7 +350,8 @@ func TestVisibleFinalizesAfterHire(t *testing.T) {
 		Client: s.runner.client, Ledger: NewLedger(""),
 		Marks: NewMarks(t.TempDir() + "/marks.jsonl")}
 	rep.Guard = NewGuard(s.runner.client, GuardOptions{PlayerGUID: "0x0000000000000001"})
-	setup := &LiveSetup{Player: "Acmd", Pool: map[string][]string{"priest": {"Bheal"}}, TBRunner: s.runner}
+	setup := &LiveSetup{Player: "Acmd", Pool: map[string][]string{"priest": {"Bheal"}}, TBRunner: s.runner,
+		Server: "test2", GrantPath: filepath.Join(t.TempDir(), "grants.json")}
 	doc, err := setup.Run(context.Background(), rep)
 	if err != nil {
 		t.Fatalf("setup: %v", err)

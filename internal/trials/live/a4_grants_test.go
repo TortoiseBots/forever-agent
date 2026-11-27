@@ -283,10 +283,11 @@ func TestDeletionTheReadBackDoesNotProveIsReportedAndLeft(t *testing.T) {
 	}
 }
 
-// Rule 3: a read-back that cannot be made leaves the copy in place and is
-// reported: the clear never assumes the deletion landed.
-func TestUnreadableReadBackAfterDeletionLeavesTheCopy(t *testing.T) {
-	prov, s, bags := bagProv(t)
+// Rule 3: a deletion whose read-back cannot be made is reported and its
+// grant kept: the clear never assumes the deletion landed, and a later run
+// reads the instance list before deciding again.
+func TestUnreadableReadBackAfterDeletionIsReported(t *testing.T) {
+	prov, s, _ := bagProv(t)
 	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
 		t.Fatal(err)
 	}
@@ -305,11 +306,19 @@ func TestUnreadableReadBackAfterDeletionLeavesTheCopy(t *testing.T) {
 	if ok || !strings.Contains(ev, "UNVERIFIED") {
 		t.Fatalf("an unreadable read-back must not read ok: ok=%v %q", ok, ev)
 	}
-	if got := bags.count(1708); got != 20 {
-		t.Fatalf("nothing may be deleted on an unreadable list, bags=%d", got)
-	}
 	if got := readGrants(t, prov.GrantPath); len(got) != 1 {
-		t.Fatalf("the grant must stay: %+v", got)
+		t.Fatalf("the unproved grant must stay: %+v", got)
+	}
+	// A second clear reads the list again (here it is readable once more)
+	// and retires the grant because the copy is proved gone: the deletion is
+	// not repeated and nothing is compensated for it.
+	s.tbFn = inner
+	ev, ok = prov.ClearGiven(context.Background(), "Bheal")
+	if !ok {
+		t.Fatalf("the settled grant must retire on the next readable list: %q", ev)
+	}
+	if got := readGrants(t, prov.GrantPath); len(got) != 0 {
+		t.Fatalf("a copy proved gone must retire its grant: %+v", got)
 	}
 }
 

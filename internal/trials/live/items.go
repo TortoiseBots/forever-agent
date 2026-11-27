@@ -151,10 +151,22 @@ func (g *grantFile) store(list []ItemGrant) error {
 }
 
 // add records grants in one write; a record already stored (same server,
-// character, item and GUID) is not written twice.
+// character, item and GUID) is not written twice. A grant that does not name
+// its server, character, item and 32-hex GUID is refused here: the file must
+// never hold a record its own loader rejects.
 func (g *grantFile) add(grants []ItemGrant) error {
 	if len(grants) == 0 {
 		return nil
+	}
+	for i, n := range grants {
+		if strings.TrimSpace(n.Server) == "" || strings.TrimSpace(n.Character) == "" || n.Item == 0 {
+			return fmt.Errorf("grant %d names no server, character or item", i+1)
+		}
+		if guid, err := tbcmd.ItemGUID(n.GUID); err != nil {
+			return fmt.Errorf("grant %d: %w", i+1, err)
+		} else {
+			grants[i].GUID = guid
+		}
 	}
 	grantMu.Lock()
 	defer grantMu.Unlock()

@@ -3,6 +3,7 @@ package live
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -233,7 +234,8 @@ func TestSetupPriestHealLatencyRows(t *testing.T) {
 		Client: s.runner.client, Ledger: NewLedger(""),
 		Marks: NewMarks(t.TempDir() + "/marks.jsonl")}
 	rep.Guard = NewGuard(s.runner.client, GuardOptions{PlayerGUID: "0x0000000000000001"})
-	setup := &LiveSetup{Player: "Acmd", Pool: map[string][]string{"priest": {"Bheal"}}, Timeout: 0, TBRunner: s.runner}
+	setup := &LiveSetup{Player: "Acmd", Pool: map[string][]string{"priest": {"Bheal"}}, Timeout: 0, TBRunner: s.runner,
+		Server: "test2", GrantPath: filepath.Join(t.TempDir(), "grants.json")}
 	// The priest kit exists in the Forever overlay, but this fake never
 	// answers the kit's additem/scan/equip reads: the row is a failed
 	// read-back (the trial INVALID), never a pass and never a SKIP.
