@@ -3,7 +3,7 @@
   "name": "upper_blackrock_spire",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-27: all 202 pack unit rows match a ForeverCore map-229 spawn and four of the five boss rows match; Lord Valthalak 16042 has no static map-229 spawn at difficulty 1, but the core ships his boss script (boss_lord_valthalak.cpp), registers the encounter (CBRS_ENC_VALTHALAK, dungeon encounter 3070) and tracks its state, and the world DB holds the questline (8995) and the brazier spell focus (181050) that summon him, so the missing row is the summon path, not Turtle-only content; plan-export --forever refuses the draft and, with --allow-draft, writes no rows because no leg is remapped; plan-check fails 0 of 212 points with 335 lints (99 errors), plan-scout fails 82 of 230 steps)",
   "map": 229,
   "entrance": {"x": 138.726, "y": -318.182, "z": 70.9562},
   "entrance_tele": "ubrs",
@@ -22,7 +22,8 @@
     "Needs: Pyroguard Emberseer: the seven runes (GO_EMBERSEER_RUNE01-07) and his cage (GO_EMBERSEER_IN/OUT); Solakar Flamewreath and the Rookery eggs (GO_ROOKERY_EGG)",
     "Needs: Gyth (10339) has no spawn row: summoned in Rend's arena (GO_GYTH_ENTRY/COMBAT/EXIT_DOOR); Rend Blackhand is then fought",
     "Needs: Drakkisath's door and the Father Flame (GO_FATHER_FLAME)",
-    "Upper half of map 229 (a box on x). The party enters by teleport inside: the instance has one entrance trigger (1468) which leads to LBRS. Lord Valthalak (16042) is Turtle's addition."
+    "Upper half of map 229 (a box on x). The party enters by teleport inside: the instance has one entrance trigger (1468) which leads to LBRS. Lord Valthalak (16042) has no static spawn: the core's quest 8995 summons him with the brazier spell focus (181050).",
+    "Forever check (2026-11-27, issue #223, ForeverCore world DB, tools/dungeongen/export-forever.sh map 229 at difficulty 1: 634 spawns): the draft's 202 pack unit rows all match a core spawn of their entry within the row's radius, and four of the five boss rows match (Emberseer 0 yd, Rend 0 yd, the Beast 6.4 yd, Drakkisath 1.8 yd). The fifth, Lord Valthalak (16042), has no static map-229 spawn at this difficulty, but that is the summon path, not Turtle-only content: the core ships his boss script (boss_lord_valthalak.cpp), the creature template 16042 names it, the instance registers CBRS_ENC_VALTHALAK and dungeon encounter 3070 and tracks its state, and the world DB holds the questline (quest 8995, Mea Culpa, Lord Valthalak) with the brazier spell focus (181050) spawned in map 229 at 50.115 -534.537 111.02, 2.6 yd from the plan's boss row, like Gyth (10339), who is also summon-only. The plan keeps the boss row; whether the summon is reachable in a bot run is a separate question. plan-export --forever refuses the draft, and with --allow-draft refuses the raid because no leg is remapped (forever_checked), so no rows can be written; plan-probe --forever and trash-check --forever read an exported migration and so did not run. plan-check --forever on the Forever v16 tiles fails 0 of 212 points (8 warnings) with 335 lints, 99 of them errors (edge 124, joiners 80, short hop 64, patrol 26, climb_anchor 22, ledge 15, off-floor 2, aggro 1, hop_len 1); plan-scout --forever: 230 steps, 17 ok, 131 warn, 82 fail. plan-scout --apply-fixes writes a patch of 100 fixes (4 dropped), not applied: the shared plan's points stay as they are."
   ],
   "legs": [
     {

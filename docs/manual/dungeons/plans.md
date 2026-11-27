@@ -4,7 +4,7 @@ title: Dungeon plans
 description: What a dungeon plan file is, every field it can carry, and what its status and forever_status mean.
 tags: [dungeons, plans, reference, format]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-26T16:08:40Z }
+generated: { by: forever-agent docs, at: 2026-11-27T09:55:33Z }
 sources:
   - id: plan-go
     resource: internal/dungeon/plan.go
@@ -103,11 +103,15 @@ dungeons, `stormwind_stockade` and `ragefire_chasm` are `exported`, and `deadmin
 `zulfarrak`, `maraudon_purple`, `maraudon_orange`, `lower_blackrock_spire`, `blackrock_depths`, `scholomance`, the
 three Dire Maul wings (`dire_maul_east`, `dire_maul_north`, `dire_maul_west`), `stratholme_live`,
 `stratholme_undead`, `wailing_caverns-extra` and `wailing_caverns` are `refused`, each with the field, the spawns or
-the segments its value names. `zul_gurub` is `todo (offline-checked ...)` on leg 0 (`high_priestess_jeklik`, the leg
-marked `forever_checked`; `plan-export --forever --last-leg high_priestess_jeklik` writes its module plan rows, while
-legs 1-8 are not remapped and a player-led run reads them from the plan), while `blackwing_lair`, `molten_core`,
-`naxxramas`, `onyxias_lair`, `ruins_of_ahnqiraj`, `temple_of_ahnqiraj` and `upper_blackrock_spire` remain `todo` (all
-seven are raids: `molten_core` and `onyxias_lair` carry Turtle-only entries and would be refused on ForeverCore data).
+the segments its value names. The seven raids `blackwing_lair`, `molten_core`, `naxxramas`, `onyxias_lair`,
+`ruins_of_ahnqiraj`, `temple_of_ahnqiraj` and `upper_blackrock_spire` are `refused` too (Turtle-only bosses, trash
+and phase targets, spawns the core lacks or stands far from — Blackwing Lair's Corrupted Whelps are one randomized
+family rather than missing placements, and Upper Blackrock Spire's Lord Valthalak is a core encounter with a quest
+summon and no static row — fields the module's plan table cannot carry, and no leg a Forever check has remapped; a
+raid export needs one). `zul_gurub` is the only `todo` plan: `todo (offline-checked ...)` on
+leg 0 (`high_priestess_jeklik`, the leg marked `forever_checked`; `plan-export --forever --last-leg
+high_priestess_jeklik` writes its module plan rows, while legs 1-8 are not remapped and a player-led run reads them
+from the plan).
 
 A naming rule that bites: `plan-export` refuses a `draft` plan unless `--allow-draft` is passed, and
 `--all-live` exports only `live-checked` plans. The plan check does not care about the status: it walks the file as

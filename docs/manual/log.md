@@ -2,6 +2,7 @@
 
 ## 2026-11-27
 
+* **Update**: Corrected the Forever check of the raid plans in [dungeon plans](dungeons/plans.md) and `docs/forever/PLAN-STATUS.md`: Blackwing Lair's Corrupted Whelps are one randomized family (14022-14025) with 36 of 273 pack unit rows still off their rows' radius, Upper Blackrock Spire's Lord Valthalak is a registered core encounter whose quest summon leaves no static spawn rather than Turtle-only content, Molten Core's Smoldaris is kept beside Basalthar, and Onyxia's Cindarion and Onyxian Hatchers are named Turtle-only with the core's Onyxian Whelps as the replacement.
 * **Update**: `plan-scout --apply-fixes` keeps an accepted stand repair: a stand move runs before the other point moves, and a later point move that resolves to the same plan point (a `snap_point` of a pull row's final approach point, for one) is dropped into `dropped.json` with the conflict named instead of overwriting the stand. A replay also drops a fix whose kind or payload `--apply-fixes` does not apply (a `snap_point` with only vias, an unsupported kind) with its reason, and the rest of the list still lands. Both are documented in [plan tools](dungeons/plan-tools.md).
 
 ## 2026-11-26
