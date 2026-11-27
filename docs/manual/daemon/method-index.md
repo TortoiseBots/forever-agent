@@ -179,6 +179,8 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `accept_guild_invite` | `{}` | Accept a guild invite | [Groups](../player-actions/groups-raids-and-guild.md) |
 | `decline_guild_invite` | `{}` | Decline a guild invite | [Groups](../player-actions/groups-raids-and-guild.md) |
 | `guild_leave` | `{}` | Leave the guild | [Groups](../player-actions/groups-raids-and-guild.md) |
+| `guild_invite` | `name` | Invite a character to this character's guild | [Groups](../player-actions/groups-raids-and-guild.md#invite-a-character-and-offer-a-charter) |
+| `offer_charter` | `guid`, `name`, `item` | Offer a guild charter for signing | [Groups](../player-actions/groups-raids-and-guild.md#invite-a-character-and-offer-a-charter) |
 
 # Dungeon runs
 

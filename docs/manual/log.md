@@ -2,6 +2,8 @@
 
 ## 2026-11-27
 
+* **Creation**: Added `guild_invite` and `offer_charter` to [Groups, raids and guilds](player-actions/groups-raids-and-guild.md#invite-a-character-and-offer-a-charter): the first sends the client's guild invite (`CMSG_GUILD_INVITE_BY_NAME`) and waits for the core's command result, the second sends a charter offer (`CMSG_OFFER_PETITION`) with a charter from the inventory to a player in view. The answers are `guild` events: `joined` for an accepted invite, `declined`/`expired` for the client's two invite packets (this core sends neither), and `signed`/`sign_refused` for `SMSG_PETITION_SIGN_RESULTS`, also listed on [Events and logs](daemon/events-and-logs.md) and the [method index](daemon/method-index.md).
+
 * **Update**: `plan-scout --apply-fixes` keeps an accepted stand repair: a stand move runs before the other point moves, and a later point move that resolves to the same plan point (a `snap_point` of a pull row's final approach point, for one) is dropped into `dropped.json` with the conflict named instead of overwriting the stand. A replay also drops a fix whose kind or payload `--apply-fixes` does not apply (a `snap_point` with only vias, an unsupported kind) with its reason, and the rest of the list still lands. Both are documented in [plan tools](dungeons/plan-tools.md).
 
 ## 2026-11-26

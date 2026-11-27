@@ -14,7 +14,7 @@
 # Other players
 
 * [Trade](trade.md) - Trade items and gold with another player, in one call or step by step through the trade window.
-* [Groups, raids and guilds](groups-raids-and-guild.md) - Invite and leave a group, read the party roster, lead a party (promote, loot method, marks, disband), convert it to a raid, handle guild invites, and check the group code live.
+* [Groups, raids and guilds](groups-raids-and-guild.md) - Invite and leave a group, read the party roster, lead a party (promote, loot method, marks, disband), convert it to a raid, invite a character to a guild, offer a charter, handle guild invites, and check the group code live.
 * [Pets](pets.md) - Read the character's pet and the state of its control bar, and give it orders: attack, follow, stay, react mode, cast and autocast.
 
 # Scripting

@@ -136,6 +136,64 @@ func ParseCommandResult(p []byte) (CommandResult, error) {
 	return r, nil
 }
 
+// GuildCharterItem is the guild charter's item entry (#define GUILD_CHARTER_ITEM_ID 5863,
+// PetitionsHandler.cpp:36): the item an offer petition names.
+const GuildCharterItem int32 = 5863
+
+// The guild command and result values this flow names (GuildCommandType and GuildCommandError, Guild.h:131-166).
+const (
+	CommandInvitePlayer uint8 = 1 // GUILD_COMMAND_INVITE_PLAYER
+	ResultSuccess       uint8 = 0 // ERR_GUILD_COMMAND_SUCCESS
+)
+
+// BuildInviteByName is CMSG_GUILD_INVITE_BY_NAME (GuildInviteByName::Read, GuildPackets.cpp:175-183): the name's
+// 9-bit length, the absent arena-team bit, then the name's bytes. The server normalises the name before its lookup.
+func BuildInviteByName(name string) []byte {
+	b := wire.NewWriter()
+	b.WriteBits(uint64(len(name)), 9)
+	b.WriteBit(false) // no arena team
+	b.FlushBits()
+	b.WriteString(name)
+	return b.Bytes()
+}
+
+// BuildOfferCharter is CMSG_OFFER_PETITION (OfferPetition::Read, PetitionPackets.cpp:164-168): the charter item's
+// packed GUID, then the target player's.
+func BuildOfferCharter(item, target wire.GUID) []byte {
+	b := wire.NewWriter()
+	wire.WritePackedGUID(b, item)
+	wire.WritePackedGUID(b, target)
+	return b.Bytes()
+}
+
+// PetitionSignResults is SMSG_PETITION_SIGN_RESULTS (PetitionSignResults::Write, PetitionPackets.cpp:128-137): the
+// charter item, the player whose signature it reports and the four-bit PetitionSigns result.
+type PetitionSignResults struct {
+	Item   wire.GUID
+	Player wire.GUID
+	Error  int32
+}
+
+// Signed reports PETITION_SIGN_OK: the player signed this charter.
+func (r PetitionSignResults) Signed() bool { return r.Error == 0 }
+
+// ParsePetitionSignResults decodes SMSG_PETITION_SIGN_RESULTS.
+func ParsePetitionSignResults(p []byte) (PetitionSignResults, error) {
+	var r PetitionSignResults
+	b := wire.NewReader(p)
+	r.Item = wire.ReadPackedGUID(b)
+	r.Player = wire.ReadPackedGUID(b)
+	r.Error = int32(b.ReadBits(4))
+	b.FlushBits()
+	if err := fail("SMSG_PETITION_SIGN_RESULTS", b); err != nil {
+		return r, err
+	}
+	if b.Remaining() != 0 {
+		return r, fmt.Errorf("guild: SMSG_PETITION_SIGN_RESULTS: %d trailing byte(s)", b.Remaining())
+	}
+	return r, nil
+}
+
 // BuildAccept is CMSG_ACCEPT_GUILD_INVITE (GuildPackets.cpp:159-162): the packed GUID of the guild the invite
 // named. The core's handler ignores it and joins the invite's own guild (GuildHandler.cpp:75); the real client
 // sends the invite's guild, which is what the session passes.

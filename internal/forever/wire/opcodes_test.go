@@ -386,6 +386,59 @@ func TestGuildOpcodesTranslate(t *testing.T) {
 	}
 }
 
+// TestGuildOfferOpcodesTranslate: #290's invite and charter offer are the client's explicit numbers, and the three
+// answers are the core's server numbers translated like every other guild packet.
+func TestGuildOfferOpcodesTranslate(t *testing.T) {
+	for _, build := range []uint32{realmBuild70707, clientBuild70938} {
+		table := NewOpcodeTable(build, realmBuild70707)
+		for _, c := range []struct {
+			core uint32
+			name string
+			wire uint32
+		}{
+			{CMSGGuildInviteByName, "CMSG_GUILD_INVITE_BY_NAME", 0x440034},
+			{CMSGOfferPetition, "CMSG_OFFER_PETITION", 0x3E028C},
+		} {
+			if got := ClientName(c.core); got != c.name {
+				t.Errorf("ClientName(0x%06X) = %q, want %q", c.core, got, c.name)
+			}
+			w, ok := table.WireForClient(c.core)
+			if !ok || w != c.wire {
+				t.Errorf("build %d %s: wire 0x%06X (ok=%v), want 0x%06X", build, c.name, w, ok, c.wire)
+				continue
+			}
+			if got := table.TranslateClientWire(w); got != c.core {
+				t.Errorf("build %d: client wire 0x%06X named 0x%06X, want %s", build, w, got, c.name)
+			}
+		}
+		signWire := uint32(0x4701F7)
+		if build >= build70790First {
+			signWire = 0x4701F8
+		}
+		for _, c := range []struct {
+			core uint32
+			name string
+			wire uint32
+		}{
+			{SMSGGuildInviteDeclined, "SMSG_GUILD_INVITE_DECLINED", 0x53002F},
+			{SMSGGuildInviteExpired, "SMSG_GUILD_INVITE_EXPIRED", 0x530030},
+			{SMSGPetitionSignResults, "SMSG_PETITION_SIGN_RESULTS", signWire},
+		} {
+			if got := ServerName(c.core); got != c.name {
+				t.Errorf("ServerName(0x%06X) = %q, want %q", c.core, got, c.name)
+			}
+			w := table.TranslateServerCore(c.core)
+			if w != c.wire {
+				t.Errorf("build %d %s: wire 0x%06X, want 0x%06X", build, c.name, w, c.wire)
+				continue
+			}
+			if got := table.TranslateServerWire(w); got != c.core {
+				t.Errorf("build %d: server wire 0x%06X named 0x%06X, want %s", build, w, got, c.name)
+			}
+		}
+	}
+}
+
 // TestPetOpcodesTranslate: the seven pet opcodes of round P1 are in the core's tables and survive the translation
 // in both directions. The three client packets are explicit entries of the client's own table (0x3F0021, 0x3F0022
 // and 0x3F0026), not the plain group arithmetic, so a body is pinned to the number the real client sends.
