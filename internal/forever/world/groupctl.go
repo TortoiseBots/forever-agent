@@ -84,16 +84,15 @@ func ParseLootSpec(s string) (party.LootMethod, int, error) {
 // wrapped so the command layer needs no party import.
 func ParseRaidMark(s string) (party.Mark, bool) { return party.ParseMarkName(s) }
 
-// groupRoster checks the precondition every group call shares: a group the model holds a valid roster for. A raid is
-// refused by name: the raid ranks differ (an assistant may mark icons, GroupHandler.cpp:456-479) and the raid
-// operations come with the raid walk, so the party ranks below are not the raid's.
+// groupRoster checks the precondition every group call shares: a group the model holds a valid roster for. It takes
+// a party and a raid: the roster model holds both (party.State), and the core's group commands read the group's
+// leader and members whatever its size (GroupHandler.cpp:394-430). The ranks that differ in a raid are checked by the
+// call itself where they matter (an assistant may mark icons, GroupHandler.cpp:468-474).
 func (s *session) groupRoster(what string) error {
 	s.initChat()
 	switch {
 	case !s.party.InParty:
 		return fmt.Errorf("%s: not in a group", what)
-	case s.party.Raid:
-		return fmt.Errorf("%s: raid group control is not ported yet", what)
 	case !s.party.RosterValid:
 		return fmt.Errorf("%s: no valid party roster (%s)", what, s.party.LastInvalid)
 	}
@@ -220,6 +219,18 @@ func (s *session) groupAssistant(ctx context.Context, name string, apply bool) e
 		s.opts.logf("group: assistant %s: already %v", chat.SanitiseName(m.Name), apply)
 		return nil
 	}
+	if err := s.paceRaidPacket(ctx, what); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	// The wait handled what arrived: the flag may already have come from elsewhere, or the member may have left.
+	cur, ok := s.party.Members[m.GUID]
+	if !ok {
+		return fmt.Errorf("%s: %s left the roster while the packet was paced", what, chat.SanitiseName(m.Name))
+	}
+	if (cur.Flags&assistantFlag != 0) == apply {
+		s.opts.logf("group: assistant %s: already %v", chat.SanitiseName(m.Name), apply)
+		return nil
+	}
 	if err := s.Send(wire.CMSGSetAssistantLeader, party.BuildSetAssistantLeader(m.GUID, apply)); err != nil {
 		return err
 	}
@@ -235,7 +246,11 @@ func (s *session) groupAssistant(ctx context.Context, name string, apply bool) e
 
 // groupLootMethod sets the loot method, the master ("" for none) and the threshold (0 means uncommon), and waits for
 // the roster's loot block. The core takes the packet only from the leader, refuses an LFG group and refuses a master
-// loot without a member (GroupHandler.cpp:395-427); the builder refuses the same values before they are sent.
+// loot without a member (GroupHandler.cpp:395-427); the builder refuses the same values before they are sent. A
+// roster that already holds the settings costs no packet, and a real change is paced below the core's three a second
+// (CMSG_SET_LOOT_METHOD has its own counter, not the raid bucket, WorldSession.cpp:1875, :1902, and the fourth
+// inside one second kicks, WorldSession.cpp:1638-1653). The pace can deliver another roster, so the change is
+// re-checked against the group it was planned for before it goes out (checkLootPlan).
 func (s *session) groupLootMethod(ctx context.Context, method party.LootMethod, master string, threshold int) error {
 	const what = "loot_method"
 	if err := s.groupLeaderRank(what); err != nil {
@@ -255,27 +270,148 @@ func (s *session) groupLootMethod(ctx context.Context, method party.LootMethod, 
 		}
 		masterGUID = m.GUID
 	}
+	plan := lootPlan{party: s.party.PartyGUID, master: masterGUID, masterName: master}
 	payload, err := party.BuildSetLootMethod(method, masterGUID, uint32(threshold))
 	if err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
+	if s.lootHolds(method, masterGUID, threshold) {
+		s.opts.logf("group: loot %s, threshold %d, master %q: already set", party.LootName(method), threshold, chat.SanitiseName(master))
+		return nil
+	}
+	if err := s.paceLootPacket(ctx, what); err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	// The wait handled what arrived: the roster may be another group's, gone, or no longer led here. The core
+	// resolves the packet's group by its party index, so a change planned for this group must not reach the one
+	// that took the index, and the stale loot block of a group that is gone is neither a no-op nor a confirmation.
+	if err := s.checkLootPlan(what, plan); err != nil {
+		return err
+	}
+	// Another member's change may have set the loot already: then this packet is not needed either.
+	if s.lootHolds(method, masterGUID, threshold) {
+		s.opts.logf("group: loot %s, threshold %d, master %q: already set", party.LootName(method), threshold, chat.SanitiseName(master))
+		return nil
+	}
 	if err := s.Send(wire.CMSGSetLootMethod, payload); err != nil {
 		return err
 	}
+	s.noteLootSent()
 	s.opts.logf("group: loot %s, threshold %d, master %q", party.LootName(method), threshold, chat.SanitiseName(master))
 	return s.waitGroupConfirm(ctx, what, groupConfirmWait, func() bool {
-		return s.party.HasLoot && s.party.Loot.Method == method && int(s.party.Loot.Threshold) == threshold &&
-			(method != party.MasterLoot || s.party.Loot.Master == masterGUID)
+		return s.lootPlanHolds(plan, method, masterGUID, threshold)
 	})
 }
 
+// lootPlan is a loot change as the roster held it when the call was planned: the group it was planned in and, for
+// master loot, the master. The pace wait can deliver another roster, and the core resolves CMSG_SET_LOOT_METHOD's
+// group by the packet's party index: a change planned for one group must not reach the group that took its index.
+type lootPlan struct {
+	party      wire.GUID
+	master     wire.GUID
+	masterName string
+}
+
+// checkLootPlan re-reads the roster the loot change was planned from, after the pace: the same group, still led by
+// this character, still no LFG group, and a named master still in it. A change whose group went away is refused
+// before the packet, so nothing lands in a replacement group.
+func (s *session) checkLootPlan(what string, plan lootPlan) error {
+	if err := s.groupRoster(what); err != nil {
+		return err
+	}
+	if s.party.PartyGUID != plan.party {
+		return fmt.Errorf("%s: the group changed while the packet was paced", what)
+	}
+	if s.party.LeaderGUID != s.party.SelfGUID {
+		return fmt.Errorf("%s: the leader changed while the packet was paced (the leader is %s)", what, chat.SanitiseName(s.party.LeaderName()))
+	}
+	if s.party.Flags&party.FlagLFG != 0 {
+		return fmt.Errorf("%s: the group became LFG while the packet was paced", what)
+	}
+	if !plan.master.IsZero() {
+		if _, ok := s.party.Members[plan.master]; !ok {
+			return fmt.Errorf("%s: %s left the roster while the packet was paced", what, chat.SanitiseName(plan.masterName))
+		}
+	}
+	return nil
+}
+
+// lootPlanHolds reports whether the plan's own group holds the settings: the confirmation the loot change waits for.
+// A roster of another group, or one that stopped being valid, is not that confirmation, however its loot block reads.
+func (s *session) lootPlanHolds(plan lootPlan, method party.LootMethod, master wire.GUID, threshold int) bool {
+	if !s.party.InParty || !s.party.RosterValid || s.party.PartyGUID != plan.party {
+		return false
+	}
+	return s.lootHolds(method, master, threshold)
+}
+
+// lootHolds reports whether the roster's loot block already carries the settings: the readback the loot call waits
+// for, and the check that keeps a matching call off the wire.
+func (s *session) lootHolds(method party.LootMethod, master wire.GUID, threshold int) bool {
+	return s.party.HasLoot && s.party.Loot.Method == method && int(s.party.Loot.Threshold) == threshold &&
+		(method != party.MasterLoot || s.party.Loot.Master == master)
+}
+
+// lootStepCap is the core's own limit for CMSG_SET_LOOT_METHOD: three in one second, its own counter rather than the
+// ten-a-second raid bucket (WorldSession.cpp:1875, :1902), and the fourth inside one second kicks under
+// PacketSpoof.Policy = 1 (WorldSession.cpp:1638-1653).
+const lootStepCap = 3
+
+// lootStepWindow is the second the core counts its three loot changes in.
+const lootStepWindow = time.Second
+
+// lootPaceMargin is the slack under the core's cap. The core counts its three changes on the server's own clock, so
+// the fourth must reach it more than a second after the first did; spacing the client's writes exactly one second
+// apart leaves the server's timing variation to decide, and a first packet that reaches its handler late would put
+// four changes inside one of its seconds.
+const lootPaceMargin = 250 * time.Millisecond
+
+// lootPaceWindow is the client's own spacing: the core's second plus that margin.
+const lootPaceWindow = lootStepWindow + lootPaceMargin
+
+// paceLootPacket holds the session's loot changes below the core's three a second: it waits out the oldest change's
+// lootPaceWindow before the next goes, handling the packets that arrive during the wait. A session that changes the
+// settings once — the FORM step does — never waits. The change is booked by noteLootSent once its packet is on the
+// wire, not here: a slow write must not eat the margin.
+func (s *session) paceLootPacket(ctx context.Context, what string) error {
+	for {
+		now := time.Now()
+		kept := s.lootSentAt[:0]
+		for _, at := range s.lootSentAt {
+			if now.Sub(at) < lootPaceWindow {
+				kept = append(kept, at)
+			}
+		}
+		s.lootSentAt = kept
+		if len(s.lootSentAt) < lootStepCap {
+			return nil
+		}
+		wait := lootPaceWindow - now.Sub(s.lootSentAt[0])
+		if wait <= 0 {
+			continue
+		}
+		if err := s.pumpFor(ctx, what, wait); err != nil {
+			return err
+		}
+	}
+}
+
+// noteLootSent books a loot change that is on the wire: the pace counts from the write, so the next change keeps its
+// distance from when this packet left the client, whatever the send itself took.
+func (s *session) noteLootSent() {
+	s.lootSentAt = append(s.lootSentAt, time.Now())
+}
+
 // groupMark sets a raid target icon on a unit, or clears the icon with an empty target, and waits for the icon slot.
-// Any member of a party may set one; in a raid only the leader or an assistant (GroupHandler.cpp:456-479), so a raid
-// is refused by groupRoster until the raid ranks are modelled with the raid operations.
+// Any member of a party may set one; in a raid only the leader or an assistant (GroupHandler.cpp:456-479 drops anyone
+// else silently), so a raid checks that rank before the packet.
 func (s *session) groupMark(ctx context.Context, target wire.GUID, mark party.Mark) error {
 	const what = "mark"
 	if err := s.groupRoster(what); err != nil {
 		return err
+	}
+	if s.party.Raid && !s.raidLeader() && !s.raidAssistant() {
+		return fmt.Errorf("%s: needs the group leader or an assistant", what)
 	}
 	if mark < party.MarkStar || mark > party.MarkSkull {
 		return fmt.Errorf("%s: %d is not a raid target icon (0..7)", what, mark)

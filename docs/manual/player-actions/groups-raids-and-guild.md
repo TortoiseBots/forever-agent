@@ -4,7 +4,7 @@ title: Groups, raids and guilds
 description: Invite and leave a group, read the party roster, lead a party (promote, loot method, marks, disband), convert it to a raid, handle guild invites, and check the group code live.
 tags: [player-actions, party, raid, guild, group-control]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-27T02:00:00Z }
 sources:
   - id: serve-session
     resource: internal/forever/world/serve_session.go
@@ -64,17 +64,29 @@ no pending invite it is `no pending group invite`. `leave_group` needs a valid r
 | `marks` | none | Read the icons back. |
 | `disband` | none | End the party. |
 
-Only the leader may `promote`, `assistant`, `loot_method` and `disband`; in a party any member may `mark`. These
-calls are refused in a raid (`raid group control is not ported yet`), because the raid ranks differ and the raid
-operations come with the raid runs. The exception is `assistant`: the flag is a raid rank the core sets only in a
-raid and only from the leader, so `assistant` takes a raid and refuses a party with
+Only the leader may `promote`, `assistant`, `loot_method` and `disband`; in a party any member may `mark`, and in a
+raid only the leader or an assistant (`mark: needs the group leader or an assistant`, refused before any packet).
+Every one of these calls takes a party and a raid: the core reads the group's leader and members whatever the group's
+size, and the roster the readback comes from carries a raid's members and flags. `assistant` is the raid rank alone:
+the core sets the flag only in a raid and only from the leader, so a party reads
 `assistant: needs a raid: convert_raid first` (a non-leader reads `assistant: only the leader can (the leader is
 NAME)`).
 
 `loot_method.method` is one of `free-for-all`, `round-robin`, `master-loot`, `group-loot`, `need-before-greed`,
 `personal-loot` (or its number 0-5; the short forms `ffa`, `round`, `master`, `group`, `need`, `personal` are
 accepted too). `master` names the master looter for master loot. `threshold` is the item quality 2-6
-(uncommon-artifact), default 2.
+(uncommon-artifact), default 2. A call whose settings the roster already holds sends no packet, and a real change is
+paced below the core's three a second: the core counts `CMSG_SET_LOOT_METHOD` on its own three-a-second limit and
+closes the connection on the fourth inside one second, so the fourth change waits a second plus a margin.
+
+The pace reads the roster, and the loot change is re-checked against the group it was planned for before its packet
+goes out. The core resolves the packet's group by the party index it carries, so a roster that arrived during the
+wait — another group in the same slot, the lead taken, an LFG group, a named master who left, the group destroyed —
+is refused with `loot_method: the group changed while the packet was paced`, `... the leader changed while the packet
+was paced (the leader is NAME)`, `... the group became LFG while the packet was paced` or
+`loot_method: NAME left the roster while the packet was paced` (a destroyed or left group reads
+`loot_method: not in a group`), and no packet is sent. The confirmation is the same group's roster: another group's
+matching loot block never counts as the change having landed.
 
 `mark.icon` is one of `star`, `circle`, `diamond`, `triangle`, `moon`, `square`, `cross`, `skull`. `mark` names the
 unit by `guid` or by a roster member's `name` and sets that icon on it; the method has no way to clear an icon.
@@ -99,6 +111,23 @@ the module's `.bot lfg` and `.bot dungeon` commands).
 assistant. A subgroup holds five members: moving into a full one is refused, and `swap_with` names the member of the
 target subgroup who trades places instead. A swap needs a member of the target subgroup who is in another subgroup
 than the one being moved.
+
+The sub-group packets are paced at 8 a second (130 ms apart), and so are `convert_raid` and `assistant`, which the
+core counts in the same ten-a-second bucket: the core closes the connection on the 11th of them inside one second,
+which a raid layout of nineteen moves would reach in a moment. A layout therefore takes a few seconds, and the
+trace's `raid_move` events carry its moves as they go out.
+
+The pace reads the roster while it waits, and `raid_move` re-reads it right before the packet goes out. Another
+assistant can move a member meanwhile, and `CMSG_SWAP_SUB_GROUPS` names no expected subgroup: the core trades
+whatever the two members hold when it arrives, so a swap planned on a roster that moved would land them in subgroups
+the call never asked for. A swap whose two members no longer hold the planned subgroups is refused with
+`raid_move: the roster moved while the packet was paced: ... retry the move` and sends nothing; one whose outcome the
+roster already holds (the two members in each other's planned subgroups) answers without a packet. Both a swap and a
+plain move re-check the group as well: another group's roster reads `raid_move: the group changed while the packet
+was paced`, an ended raid reads `raid_move: the group is no longer a raid`, and a rank lost during the wait reads
+`raid_move: the rank changed while the packet was paced: needs the group leader or an assistant`; none of them sends
+a packet. A plain move also re-checks the member's presence, the target subgroup's room and the move another packet
+already made, and `convert_raid` re-checks the lead and the member count.
 
 # Guild
 
@@ -202,7 +231,8 @@ refused group command gets no answer)`.
 
 # Common problems
 
-- `promote: not in a group`; `promote: raid group control is not ported yet`.
+- `promote: not in a group`.
+- `mark: needs the group leader or an assistant` in a raid this character neither leads nor assists.
 - `mark: "skull " is not a raid target icon (star circle diamond triangle moon square cross skull)`.
 - `raid_move: subgroup 9: use 1 to 8`; `raid_move: subgroup 3 is full (5 members): pass swap_with to trade places
   with one of them`.

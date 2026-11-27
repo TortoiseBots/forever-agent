@@ -4,7 +4,7 @@ title: forever raid-watch
 description: Watch a raid the server's own bot module leads, from outside, with budgets and a raid summary at the end.
 tags: [bots-and-raids, raid, watch, bots]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-24T23:40:00Z }
+generated: { by: forever-agent docs, at: 2026-11-26T19:30:00Z }
 sources:
   - id: watch-cmd
     resource: cmd/forever-agent/forever_watch.go
@@ -60,7 +60,11 @@ forever-agent forever raid-watch --leader NAME --plan FILE [--layout FILE]
    flag), one `convert_raid` goes out and the card is read again.
 3. Applies `--layout`: each line moves one bot to its raid subgroup with
    `raid_move`, read back by the group layer. A member already in its subgroup gets
-   no packet.
+   no packet, and the moves are paced at 8 a second: the core closes the connection
+   on the 11th sub-group packet inside one second, so a forty-line layout takes some
+   seconds. The pace reads the roster while it waits, and a move or swap whose roster
+   changed under it (a member moved, the lead taken) is refused before its packet
+   ([groups, raids and guilds](../player-actions/groups-raids-and-guild.md#raid-control)).
 4. Sends `PREPARE` and enters (`--enter`), starts the module's run, then polls the
    module's run status and event ring at `--poll` seconds and writes trace frames.
 5. Applies the budgets: the watch's time, the wipe budget, the watchdog on new
