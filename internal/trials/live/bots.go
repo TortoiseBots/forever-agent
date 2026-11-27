@@ -57,21 +57,27 @@ type Provisioner struct {
 	// Timeout bounds one provisioning step; 0 means 20 s.
 	Timeout time.Duration
 
-	// Server names the test server the marks belong to (a character name
-	// may exist on two servers); RecoveryPath is the recovery mark file of
-	// the items this trial gives (see items.go); empty keeps the marks in
+	// Server names the test server the grants belong to (a character name
+	// may exist on two servers); GrantPath is the item grant file of the
+	// items this trial gives (see items.go); empty keeps the grants in
 	// memory only.
-	Server       string
-	RecoveryPath string
+	Server    string
+	GrantPath string
+
+	// CharGUIDs maps a hire's lower-case name to the character GUID the
+	// setup read, so a grant records the character beyond its name.
+	CharGUIDs map[string]string
 
 	// OnHire and OnExtra are told a hire's name as soon as it is logged in
 	// (or found already online), before any later step can fail, so a
-	// failed setup can still log it out.
-	OnHire  func(name string)
-	OnExtra func(name string)
+	// failed setup can still log it out. OnHireGUID adds the character GUID
+	// once the party roster proved it.
+	OnHire     func(name string)
+	OnExtra    func(name string)
+	OnHireGUID func(name, guid string)
 
 	markOnce sync.Once
-	recovery *recoveryMarks
+	grantLog *grantFile
 }
 
 // BotSpec is trial["bot"] (or one extra_bots entry): what to provision.
@@ -230,6 +236,7 @@ func (p *Provisioner) Provision(ctx context.Context, trial map[string]any, guids
 	}
 	out.HireGUID = guid
 	guids["bot"] = guid
+	p.setCharGUID(name, guid)
 
 	// The pool bot is reused across runs and may be left dead: revive it and
 	// refill it before anything is measured, proved by `.tb state`.
@@ -334,6 +341,7 @@ func (p *Provisioner) ProvisionExtras(ctx context.Context, trial map[string]any,
 		}
 		names = append(names, name)
 		guidList = append(guidList, guid)
+		p.setCharGUID(name, guid)
 		p.engineOn(ctx, name)
 		if r := p.ensureLevel(ctx, spec, name); r != nil && !rowOK(r) {
 			presentOK = false
@@ -751,12 +759,11 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 		return nil
 	}
 	// What an earlier trial (or a killed run) left behind is taken back
-	// before the new items go in, but only what the recovery grants prove:
-	// each grant's copies above the carried count read before that give. An
-	// id with no grant is never touched: nothing proves those copies are the
-	// trial's, and a missing baseline is not a floor of zero. A clear that
-	// cannot be proved fails this row closed instead of giving into bags it
-	// cannot certify.
+	// before the new items go in, but only the item instances those trials'
+	// grants recorded: each grant is one GUID the server named. A copy no
+	// record names is never touched: not the hire's own stack, not a copy
+	// that merged. A clear that cannot be proved fails this row closed
+	// instead of giving into bags it cannot certify.
 	clearEv, clearOK := p.ClearGiven(ctx, name)
 	if !clearOK {
 		p.Ledger.Add(map[string]any{"kind": "items_clear_failed", "bot": name, "evidence": clearEv})
@@ -847,11 +854,9 @@ func (p *Provisioner) wearKit(ctx context.Context, spec BotSpec, name string, ki
 			return rowOf("bot_items", false, ids, fmt.Sprintf(".tb equip %s %d (%s): %s %s", name, item.Entry, item.Name, eq.Result, eq.Why))
 		}
 		equipped++
-		// The piece left the bags: its grant is marked worn, so a later
-		// clear unequips only a proven slot instead of looking in the bags.
-		if err := p.marks().setWorn(p.Server, name, item.Entry); err != nil {
-			return rowOf("bot_items", false, ids, fmt.Sprintf("recovery mark not updated for the worn item %d (%s): %v", item.Entry, item.Name, err))
-		}
+		// The grant is the instance GUID: a worn piece keeps the same GUID,
+		// so the clear finds it in the server's instance list (worn, with
+		// its slot) and unequips exactly that copy.
 	}
 	return rowOf("bot_items", true, ids, fmt.Sprintf("%s kit: %d piece(s) scanned exists and equipped", spec.Gear, equipped))
 }

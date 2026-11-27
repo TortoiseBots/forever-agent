@@ -42,16 +42,21 @@ type Repeat struct {
 	Ledger  *Ledger
 	Guids   Guids
 
-	// BotName and ExtraNames are the hires the setup provisioned; the
-	// situation brings them into the arena and the teardown releases them.
+	// BotName and ExtraNames are the hires the setup provisioned and proved
+	// (the situation brings them into the arena); Hires is every character
+	// the repeat acquired, keyed by name and filled when the login
+	// succeeded, before any later check can fail. The teardown works from
+	// Hires, never from the setup document: a hire whose party identity was
+	// never proved is still logged out and cleared.
 	BotName    string
 	ExtraNames []string
+	Hires      []hireTarget
 
-	// RecoveryPath is the recovery mark file of the items the setup gave;
-	// the teardown clears them (see items.go). Empty: in-memory marks only.
-	RecoveryPath string
+	// GrantPath is the item grant file of the items the setup gave; the
+	// teardown clears them (see items.go). Empty: in-memory grants only.
+	GrantPath string
 
-	// Server is the test server's name (recovery marks are per server).
+	// Server is the test server's name (item grants are per server).
 	Server string
 
 	// Unidentified counts spawns the situation could not identify (an
@@ -442,6 +447,10 @@ func (r *Runner) runRepeat(ctx context.Context, trial map[string]any, trialArg, 
 			}
 		}
 	}
+	// rep.Hires (the teardown list) is filled by the provisioner's callbacks
+	// as each character logs in and its guid is read, never from this
+	// filtered document: a hire that failed its party identity check is
+	// still released.
 	if err := r.writeSetup(repDir, setupDoc); err != nil {
 		return err
 	}

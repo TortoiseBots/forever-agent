@@ -247,6 +247,19 @@ func (c *Client) Equip(ctx context.Context, target string, item uint32, replace 
 
 // ---- itemscan ----
 
+// ItemInstance is one copy (one item instance) of an item a character holds,
+// as the module names it in an itemscan record's instances= list: the item's
+// own GUID, where it sits and how many it holds. Bag is the container byte
+// (255 the character's own slots) and Slot the position in it; Worn is a copy
+// in an equipment slot (bag 255, slot 0-18).
+type ItemInstance struct {
+	GUID  string
+	Bag   int
+	Slot  int
+	Count int
+	Worn  bool
+}
+
 // ItemScanResult is one item line of an itemscan answer.
 type ItemScanResult struct {
 	Bot      string
@@ -267,12 +280,89 @@ type ItemScanResult struct {
 	Slot     int
 	HasSlot  bool
 	Why      string
-	Extra    map[string]string
+	// Instances are the item's copies the server named (the instances= list),
+	// each by its own GUID. HasInstances is false when the record carried no
+	// list at all: an empty list is "the character holds none", a missing one
+	// is "this module cannot say".
+	Instances    []ItemInstance
+	HasInstances bool
+	Extra        map[string]string
 }
 
 var itemScanRecordKeys = map[string]bool{"bot": true, "item": true, "exists": true, "name": true,
 	"class": true, "inv": true, "req": true, "quality": true, "ilvl": true,
-	"canequip": true, "slot": true, "why": true}
+	"canequip": true, "slot": true, "why": true, "instances": true}
+
+// itemInstances reads one itemscan record's instances= list. The list is
+// `;`-separated, each item `<32-hex guid>:<bag>:<slot>:<count>`; a worn copy
+// is bag 255 with a slot 0-18. An absent key is no list (the module cannot
+// name its copies); an empty value is the empty list; a malformed item is a
+// bad report, never a silently dropped instance.
+func itemInstances(rec record) ([]ItemInstance, bool, error) {
+	v, ok := rec.rawValue("instances")
+	if !ok {
+		return nil, false, nil
+	}
+	text, err := decodePart(v)
+	if err != nil {
+		return nil, true, fmt.Errorf("%w: itemscan instances=: %v", ErrBadValue, err)
+	}
+	if text == "" {
+		return nil, true, nil
+	}
+	out := make([]ItemInstance, 0, strings.Count(text, ";")+1)
+	for _, item := range strings.Split(text, ";") {
+		parts := strings.Split(item, ":")
+		if len(parts) != 4 {
+			return nil, true, fmt.Errorf("%w: itemscan instance %q is not guid:bag:slot:count", ErrBadReport, item)
+		}
+		guid, err := ItemGUID(parts[0])
+		if err != nil {
+			return nil, true, fmt.Errorf("%w: itemscan instance: %v", ErrBadReport, err)
+		}
+		nums := make([]int, 3)
+		for i, p := range parts[1:] {
+			n, perr := strconv.Atoi(p)
+			if perr != nil || n < 0 {
+				return nil, true, fmt.Errorf("%w: itemscan instance %q has a bad number", ErrBadReport, item)
+			}
+			nums[i] = n
+		}
+		inst := ItemInstance{GUID: guid, Bag: nums[0], Slot: nums[1], Count: nums[2]}
+		if inst.Count == 0 {
+			return nil, true, fmt.Errorf("%w: itemscan instance %q holds no copy", ErrBadReport, item)
+		}
+		inst.Worn = inst.Bag == ownContainer && inst.Slot <= equipmentSlotEnd
+		out = append(out, inst)
+	}
+	return out, true, nil
+}
+
+// ownContainer is the container byte of a character's own slots (bag 255);
+// equipmentSlotEnd bounds the equipment slots 0-18 (the last is the tabard).
+const (
+	ownContainer     = 255
+	equipmentSlotEnd = 18
+)
+
+// ItemGUID canonicalises an item instance GUID as the module prints it
+// (ObjectGuid::ToHexString: `0x` and 32 hex digits) and returns the bare
+// 32-hex text; a `0x` prefix is optional. Anything else is an error, never a
+// key that could match another copy.
+func ItemGUID(s string) (string, error) {
+	t := strings.TrimSpace(s)
+	t = strings.TrimPrefix(t, "0x")
+	t = strings.TrimPrefix(t, "0X")
+	if len(t) != 32 {
+		return "", fmt.Errorf("%q is not a 32-hex item GUID", s)
+	}
+	for _, r := range t {
+		if !(r >= '0' && r <= '9' || r >= 'a' && r <= 'f' || r >= 'A' && r <= 'F') {
+			return "", fmt.Errorf("%q is not a 32-hex item GUID", s)
+		}
+	}
+	return strings.ToLower(t), nil
+}
 
 // ItemScanReport is a whole itemscan answer: one record per id plus the end
 // line's exist/canequip tallies.
@@ -354,6 +444,9 @@ func parseItemScan(rep *command.Reply) (ItemScanReport, error) {
 			if res.Why, _, err = rec.text("why"); err != nil {
 				return out, err
 			}
+		}
+		if res.Instances, res.HasInstances, err = itemInstances(rec); err != nil {
+			return out, err
 		}
 		if res.Extra, err = rec.extra(itemScanRecordKeys); err != nil {
 			return out, err

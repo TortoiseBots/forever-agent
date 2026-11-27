@@ -221,7 +221,7 @@ func TestTrialTeardownReportsWhatItCouldNotProve(t *testing.T) {
 	}
 	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2"}
 	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal",
-		RecoveryPath: prov.RecoveryPath, TrialID: "t"}
+		GrantPath: prov.GrantPath, TrialID: "t"}
 	r.tbRunner = s.runner
 	problems := r.trialTeardown(context.Background(), rep, "t")
 	found := false

@@ -2,36 +2,31 @@ package live
 
 // items.go: the items a trial gives a hire are taken back again.
 //
-// One rule: never remove or unequip a copy that is not proved to be one the
-// trial added. The proof is a grant record, a file under the state dir so it
-// survives a killed run. The record is written BEFORE the `.tb additem`: it
-// names the server, the bot, the item id, its own grant serial, the carried
-// count read right before the give (the baseline: bags plus worn plus the
-// reagent bank) and the count the give asked for. A read-back that proves the
-// count grew turns the intent into a confirmed count; a give whose read-back
-// did not grow the count retires its own record. An id with no record is
-// never touched: no record means no baseline and no grant, so nothing proves
-// a copy there is the trial's.
+// One rule: a copy is deleted only when the server's own answer names it, as
+// the item instance it created, and only on the character it went to. The
+// proof is a grant record, a file under the state dir so it survives a killed
+// run: one line per copy the server named, holding the item's instance GUID,
+// its id, and the character. Nothing else is ever deleted: not a copy the
+// hire carried before the trial, not one that merged into the hire's own
+// stack, not one the server did not name. An id with no grant is the hire's.
 //
-// A record is scoped to one grant and retired when its copies are back. No
-// baseline outlives its grant, so a hire that acquires copies between trials
-// keeps them: the next give reads the holdings fresh, and they become its own
-// baseline. A clear takes back at most the copies the grant proved it added
-// (an unconfirmed grant's intent is never cleared: no copy is proved), never
-// lowers the carried count below that grant's baseline, and re-reads the count
-// in the very step that removes, one copy at a time: a count that changed
-// between reads can never be crossed by a stale budget. The count is always
-// the `ItemScan` inv (worn plus bag copies plus the reagent bank) and never a
-// parsed `.bot inv` reply, which the live server truncated (2026-11-26); only
-// the slot-occupant check reads `.bot inv`, and only a complete reply proves
-// anything.
+// A give is recorded at grant time: setup reads the item instances the hire
+// holds (`ItemScan`'s instances= list), sends `.tb additem`, reads the list
+// again, and records every GUID the give added. A give whose read-back is
+// missing, or added no instance (a merged stack), is reported and records
+// nothing: those copies are never the trial's to delete. The list is the
+// server's answer and the only evidence used; counts are never taken as
+// provenance, because a stack's count moves under the trial's feet (the live
+// bench ate a Sweet Nectar between the read and the removal, 2026-11-27).
 //
-// A worn kit piece is unequipped only after a complete `.bot inv` reply proves
-// that the item sits in an equipment slot, through `.bot item <bot> unequip
-// 255 <slot>`; a slot that cannot be proved holding the item is never touched.
-// Bag copies are removed first so unequipping has free bag slots. A full bag
-// that stays full is the setup row's SKIPPED needs=bot_bag_space, never a
-// silent failure.
+// The clear deletes each recorded GUID with `.tb removeitem <character> guid
+// <guid>`, one copy at a time, only on the character the record names. A worn
+// copy is unequipped first, through the equipment slot the instance list
+// named, and the slot is read back before the unequip. A deletion that the
+// module refuses, or whose read-back cannot prove the GUID gone, is reported
+// and left in place: the clear never retries it, never deletes another copy
+// in its place, and never restores a budget. A recorded GUID the hire no
+// longer holds is retired: the copy is gone.
 
 import (
 	"context"
@@ -49,58 +44,47 @@ import (
 	"github.com/pjerra/forever-agent/internal/tbm"
 )
 
-// givenItem is one grant: Count is the increase a read-back proved, Base the
-// carried count read right before the additem, Intent the count it asked for.
-// Count 0 with a grant serial is a give whose read-back never confirmed it:
-// no copy is proved, so nothing of it may be cleared. Grant 0 marks a record
-// of an older build (which wrote only confirmed gives); a grant-less record
-// with Count 0 is a kept baseline of an older build and is dropped on load,
-// because it proves no outstanding copy.
-type givenItem struct {
-	Server string `json:"server"`
-	Bot    string `json:"bot"`
-	Item   uint32 `json:"item"`
-	Grant  uint64 `json:"grant,omitempty"`
-	Base   uint32 `json:"base"`
-	Intent uint32 `json:"intent,omitempty"`
-	Count  uint32 `json:"count"`
-	Worn   bool   `json:"worn,omitempty"`
+// ItemGrant is one item instance a trial gave a character: the GUID the
+// server named for it, the item it is, and who received it. There is no
+// count: the instance is the copy (or the stack) the give created, and the
+// clear deletes exactly that instance.
+type ItemGrant struct {
+	Server    string `json:"server"`
+	Character string `json:"character"`
+	CharGUID  string `json:"char_guid,omitempty"`
+	Item      uint32 `json:"item"`
+	GUID      string `json:"guid"`
+	Grant     uint64 `json:"grant,omitempty"`
 }
 
-// sameGive reports whether two records name the same server, bot and item.
-func sameGive(a givenItem, server, bot string, item uint32) bool {
-	return strings.EqualFold(a.Server, server) && strings.EqualFold(a.Bot, bot) && a.Item == item
+// sameGrant reports whether two records are the same stored grant.
+func sameGrant(a, b ItemGrant) bool {
+	return strings.EqualFold(a.Server, b.Server) && strings.EqualFold(a.Character, b.Character) &&
+		a.Item == b.Item && strings.EqualFold(a.GUID, b.GUID)
 }
 
-// sameRecord reports whether two records are the same stored record.
-func sameRecord(a, b givenItem) bool {
-	return strings.EqualFold(a.Server, b.Server) && strings.EqualFold(a.Bot, b.Bot) &&
-		a.Item == b.Item && a.Grant == b.Grant && a.Base == b.Base &&
-		a.Intent == b.Intent && a.Count == b.Count
-}
-
-// recoveryMarks is the recovery mark file of one player's trials.
-type recoveryMarks struct {
+// grantFile is the item grants of one player's trials on one server.
+type grantFile struct {
 	path string
 	mu   sync.Mutex
-	mem  []givenItem // used when path is empty
+	mem  []ItemGrant // used when path is empty
 }
 
-var recoveryMu sync.Mutex // one process, one file: serialise read-modify-write
+var grantMu sync.Mutex // one process, one file: serialise read-modify-write
 
 var grantSeq atomic.Uint64
 
-// nextGrant is a serial unique in the process: a later grant of the same item
-// never shares a record with an earlier one.
+// nextGrant is a serial unique in the process: two grants of the same item
+// never share an identity beyond their own GUIDs.
 func nextGrant() uint64 {
 	return uint64(time.Now().UnixNano())<<8 | (grantSeq.Add(1) & 0xff)
 }
 
-// RecoveryPathFor is the recovery mark file of a player's trials on one
-// server: <state dir>/items-recovery-<server>-<player>.json, beside the
-// arena locks. The server is in the name: the same character name on two
-// servers must not share marks.
-func RecoveryPathFor(server, player string) string {
+// GrantPathFor is the item grant file of a player's trials on one server:
+// <state dir>/items-grants-<server>-<player>.json, beside the arena locks.
+// The server is in the name: the same character name on two servers must not
+// share grants.
+func GrantPathFor(server, player string) string {
 	safe := func(in string) string {
 		return strings.Map(func(r rune) rune {
 			if r == '/' || r == '\\' || r == 0 || r == ':' {
@@ -109,624 +93,382 @@ func RecoveryPathFor(server, player string) string {
 			return r
 		}, in)
 	}
-	return filepath.Join(ArenaStateDir(), "items-recovery-"+safe(server)+"-"+safe(player)+".json")
+	return filepath.Join(ArenaStateDir(), "items-grants-"+safe(server)+"-"+safe(player)+".json")
 }
 
-// load reads the mark file. A missing file is no marks; an unreadable file or
-// one that is not a valid list is an error, never an empty list: an empty list
-// would read as "nothing was ever given" and authorize clearing.
-func (m *recoveryMarks) load() ([]givenItem, error) {
-	if m.path == "" {
-		return append([]givenItem(nil), m.mem...), nil
+// load reads the grant file. A missing file is no grants; an unreadable file,
+// or one that is not a valid list of grants, is an error, never an empty
+// list: an empty list would read as "nothing was ever given" and a clear
+// could not report the copies it leaves behind.
+func (g *grantFile) load() ([]ItemGrant, error) {
+	if g.path == "" {
+		return append([]ItemGrant(nil), g.mem...), nil
 	}
-	raw, err := os.ReadFile(m.path)
+	raw, err := os.ReadFile(g.path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("%s: %w", m.path, err)
+		return nil, fmt.Errorf("%s: %w", g.path, err)
 	}
-	var out []givenItem
+	var out []ItemGrant
 	if err := json.Unmarshal(raw, &out); err != nil {
-		return nil, fmt.Errorf("%s: %w", m.path, err)
+		return nil, fmt.Errorf("%s: %w", g.path, err)
 	}
-	kept := out[:0]
-	for i, g := range out {
-		if g.Item == 0 || strings.TrimSpace(g.Server) == "" || strings.TrimSpace(g.Bot) == "" {
-			return nil, fmt.Errorf("%s: record %d names no server, bot or item", m.path, i+1)
+	for i, rec := range out {
+		if rec.Item == 0 || strings.TrimSpace(rec.Server) == "" || strings.TrimSpace(rec.Character) == "" {
+			return nil, fmt.Errorf("%s: record %d names no server, character or item", g.path, i+1)
 		}
-		// A grant-less zero-count record is a kept baseline of an older
-		// build: it proves no outstanding copy and must never act as a
-		// floor another id is cleared against.
-		if g.Grant == 0 && g.Count == 0 {
-			continue
-		}
-		kept = append(kept, g)
-	}
-	return kept, nil
-}
-
-func (m *recoveryMarks) store(list []givenItem) error {
-	if m.path == "" {
-		m.mem = append([]givenItem(nil), list...)
-		return nil
-	}
-	if len(list) == 0 {
-		if err := os.Remove(m.path); err != nil && !os.IsNotExist(err) {
-			return err
-		}
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
-		return err
-	}
-	raw, _ := json.Marshal(list)
-	tmp := m.path + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, m.path)
-}
-
-// begin records a grant before its additem is sent and returns it with its
-// grant serial; nothing about the give is proved yet.
-func (m *recoveryMarks) begin(g givenItem) (givenItem, error) {
-	recoveryMu.Lock()
-	defer recoveryMu.Unlock()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	list, err := m.load()
-	if err != nil {
-		return g, err
-	}
-	if g.Grant == 0 {
-		g.Grant = nextGrant()
-	}
-	g.Count, g.Worn = 0, false
-	list = append(list, g)
-	if err := m.store(list); err != nil {
-		return g, err
-	}
-	return g, nil
-}
-
-// confirm records the copies a read-back proved the grant added.
-func (m *recoveryMarks) confirm(grant uint64, gained uint32) error {
-	recoveryMu.Lock()
-	defer recoveryMu.Unlock()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	list, err := m.load()
-	if err != nil {
-		return err
-	}
-	for i := range list {
-		if list[i].Grant == grant {
-			list[i].Count = gained
-			return m.store(list)
-		}
-	}
-	return fmt.Errorf("grant %d is not in the recovery marks", grant)
-}
-
-// retireAll removes the settled records, in one write. A record that changed
-// since it was read is left in place.
-func (m *recoveryMarks) retireAll(settled []givenItem) error {
-	if len(settled) == 0 {
-		return nil
-	}
-	recoveryMu.Lock()
-	defer recoveryMu.Unlock()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	list, err := m.load()
-	if err != nil {
-		return err
-	}
-	keep := list[:0]
-	for _, e := range list {
-		drop := false
-		for _, s := range settled {
-			if sameRecord(e, s) {
-				drop = true
-				break
-			}
-		}
-		if !drop {
-			keep = append(keep, e)
-		}
-	}
-	return m.store(keep)
-}
-
-// setWorn flags one marked item as equipped (out of the bags).
-func (m *recoveryMarks) setWorn(server, bot string, item uint32) error {
-	recoveryMu.Lock()
-	defer recoveryMu.Unlock()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	list, err := m.load()
-	if err != nil {
-		return err
-	}
-	for i := range list {
-		if sameGive(list[i], server, bot, item) {
-			list[i].Worn = true
-		}
-	}
-	return m.store(list)
-}
-
-// forBot lists the marks of one bot on one server. It is the read-only view;
-// a clear uses forBotErr and fails closed on an unreadable file.
-func (m *recoveryMarks) forBot(server, bot string) []givenItem {
-	list, _ := m.forBotErr(server, bot)
-	return list
-}
-
-// forBotErr is forBot with the file error: a clear must not read an
-// unreadable mark file as "nothing to clear".
-func (m *recoveryMarks) forBotErr(server, bot string) ([]givenItem, error) {
-	recoveryMu.Lock()
-	defer recoveryMu.Unlock()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	list, err := m.load()
-	if err != nil {
-		return nil, err
-	}
-	var out []givenItem
-	for _, g := range list {
-		if strings.EqualFold(g.Server, server) && strings.EqualFold(g.Bot, bot) {
-			out = append(out, g)
+		if guid, err := tbcmd.ItemGUID(rec.GUID); err != nil {
+			return nil, fmt.Errorf("%s: record %d: %w", g.path, i+1, err)
+		} else if guid != rec.GUID {
+			out[i].GUID = guid
 		}
 	}
 	return out, nil
 }
 
-func (p *Provisioner) marks() *recoveryMarks {
-	p.markOnce.Do(func() { p.recovery = &recoveryMarks{path: p.RecoveryPath} })
-	return p.recovery
+func (g *grantFile) store(list []ItemGrant) error {
+	if g.path == "" {
+		g.mem = append([]ItemGrant(nil), list...)
+		return nil
+	}
+	if len(list) == 0 {
+		if err := os.Remove(g.path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(g.path), 0o755); err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(list)
+	tmp := g.path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, g.path)
 }
 
-// scanItem reads one item's `ItemScan` record: its id, whether it exists, the
-// carried count (the core's GetItemCount over equipment and bags) and the
-// equipment slot the core would put it in (when equippable). ok is false when
-// the reply cannot be read or does not hold the record.
-func (p *Provisioner) scanItem(ctx context.Context, bot string, item uint32) (tbcmd.ItemScanResult, string, bool) {
+// add records grants in one write; a record already stored (same server,
+// character, item and GUID) is not written twice.
+func (g *grantFile) add(grants []ItemGrant) error {
+	if len(grants) == 0 {
+		return nil
+	}
+	grantMu.Lock()
+	defer grantMu.Unlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	list, err := g.load()
+	if err != nil {
+		return err
+	}
+	for _, n := range grants {
+		known := false
+		for _, have := range list {
+			if sameGrant(have, n) {
+				known = true
+				break
+			}
+		}
+		if !known {
+			list = append(list, n)
+		}
+	}
+	return g.store(list)
+}
+
+// retire removes the settled grants in one write. A record that changed since
+// it was read is left in place.
+func (g *grantFile) retire(settled []ItemGrant) error {
+	if len(settled) == 0 {
+		return nil
+	}
+	grantMu.Lock()
+	defer grantMu.Unlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	list, err := g.load()
+	if err != nil {
+		return err
+	}
+	keep := list[:0]
+	for _, have := range list {
+		drop := false
+		for _, s := range settled {
+			if sameGrant(have, s) {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			keep = append(keep, have)
+		}
+	}
+	return g.store(keep)
+}
+
+// forCharacter lists one character's grants on one server. The clear must
+// never read an unreadable file as "nothing to clear", so the error is
+// returned, not swallowed.
+func (g *grantFile) forCharacter(server, character string) ([]ItemGrant, error) {
+	grantMu.Lock()
+	defer grantMu.Unlock()
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	list, err := g.load()
+	if err != nil {
+		return nil, err
+	}
+	var out []ItemGrant
+	for _, rec := range list {
+		if strings.EqualFold(rec.Server, server) && strings.EqualFold(rec.Character, character) {
+			out = append(out, rec)
+		}
+	}
+	return out, nil
+}
+
+func (p *Provisioner) grants() *grantFile {
+	p.markOnce.Do(func() { p.grantLog = &grantFile{path: p.GrantPath} })
+	return p.grantLog
+}
+
+// setCharGUID remembers a hire's character GUID once the setup read it, so
+// every grant of that character records the character beyond its name.
+func (p *Provisioner) setCharGUID(name, guid string) {
+	if strings.TrimSpace(name) == "" {
+		return
+	}
+	if p.CharGUIDs == nil {
+		p.CharGUIDs = map[string]string{}
+	}
+	g := normGUIDOf(guid)
+	p.CharGUIDs[strings.ToLower(name)] = g
+	if g != "" && p.OnHireGUID != nil {
+		p.OnHireGUID(name, g)
+	}
+}
+
+func (p *Provisioner) charGUID(name string) string {
+	return p.CharGUIDs[strings.ToLower(name)]
+}
+
+// itemInstances reads the item instances the server says the character holds
+// (the `ItemScan` record's instances= list): each copy's own GUID, its place
+// and its count. ok is false when the answer cannot be read or names no
+// instance list: the module cannot say which copies are there, so nothing may
+// be recorded or deleted on that answer.
+func (p *Provisioner) itemInstances(ctx context.Context, character string, item uint32) ([]tbcmd.ItemInstance, string, bool) {
 	tctx, cancel := p.ctxOf(ctx)
-	rep, err := p.TB.ItemScan(tctx, bot, item)
+	rep, err := p.TB.ItemScan(tctx, character, item)
 	cancel()
 	if err != nil {
-		return tbcmd.ItemScanResult{}, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s: %v)", item, bot, err), false
+		return nil, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s: %v)", item, character, err), false
 	}
 	for _, r := range rep.Results {
 		if r.Item != item {
 			continue
 		}
 		if !r.Exists {
-			// The server holds no such template: no copy can be carried, so
-			// the count is 0 (a later exist read still fails a give of it).
-			return r, "", true
+			return nil, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s: the server holds no such item)", item, character), false
 		}
-		if r.HasInv {
-			return r, "", true
+		if !r.HasInstances {
+			return nil, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s named no item instance list, so no copy's GUID is known)", item, character), false
 		}
-		return tbcmd.ItemScanResult{}, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s named no carried count)", item, bot), false
+		return r.Instances, "", true
 	}
-	return tbcmd.ItemScanResult{}, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s held no record for it)", item, bot), false
+	return nil, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s held no record for it)", item, character), false
 }
 
-// carriedCountNote reads how many of item the bot carries: the `ItemScan`
-// inv, which is the core's GetItemCount over equipment, bags and the reagent
-// bank (never the bank storage). The note names the failed read.
-func (p *Provisioner) carriedCountNote(ctx context.Context, bot string, item uint32) (int, string, bool) {
-	r, note, ok := p.scanItem(ctx, bot, item)
-	if !ok {
-		return 0, note, false
-	}
-	return r.Inv, "", true
-}
-
-// carriedCount is carriedCountNote without its note.
-func (p *Provisioner) carriedCount(ctx context.Context, bot string, item uint32) (int, bool) {
-	n, _, ok := p.carriedCountNote(ctx, bot, item)
-	return n, ok
-}
-
-// giveItem sends one `.tb additem` and records it: the grant record with the
-// baseline and the intent is on disk before the send, and a read-back that
-// proves the count grew turns it into a confirmed grant. A give whose count
-// did not grow retires its record, so a clear can never remove what it did not
-// add. Without a readable baseline nothing is given and no record is written.
+// giveItem sends one `.tb additem` and records every item instance the give
+// created: the instances read after the give that were not there before. The
+// grant is written before the next server call. Without a readable instance
+// list nothing is given; a give whose read-back names no new instance (a
+// merged stack, an unreadable answer) is reported and records nothing, so a
+// clear can never delete a copy the server did not name.
 func (p *Provisioner) giveItem(ctx context.Context, bot string, item uint32, count uint32) ([]string, error) {
 	if count == 0 {
 		count = 1
 	}
-	base, known := p.carriedCount(ctx, bot, item)
-	if !known {
-		return nil, fmt.Errorf("nothing given: the carried count of item %d on %s is unreadable (no baseline for the recovery mark)", item, bot)
+	before, note, ok := p.itemInstances(ctx, bot, item)
+	if !ok {
+		return nil, fmt.Errorf("nothing given: %s", note)
 	}
-	intent, merr := p.marks().begin(givenItem{Server: p.Server, Bot: bot, Item: item, Base: uint32(base), Intent: count})
-	if merr != nil {
-		return nil, fmt.Errorf("nothing given: the recovery mark of item %d on %s was not written before additem: %w", item, bot, merr)
+	have := map[string]bool{}
+	for _, inst := range before {
+		have[inst.GUID] = true
 	}
 	tctx, cancel := p.ctxOf(ctx)
 	lines, err := p.TB.FreeTextAddItem(tctx, bot, item, count)
 	cancel()
-	after, ok := p.carriedCount(ctx, bot, item)
-	if ok && after > base {
-		gained := uint32(after - base)
-		if cerr := p.marks().confirm(intent.Grant, gained); cerr != nil {
-			return lines, fmt.Errorf("recovery mark not confirmed for %d given item(s) %d: %w", gained, item, cerr)
-		}
+	after, note, ok := p.itemInstances(ctx, bot, item)
+	if !ok {
 		if err != nil {
 			return lines, err
 		}
-		if gained < count {
-			return lines, fmt.Errorf("only %d of %d item %d reached the bags", gained, count, item)
-		}
-		return lines, nil
+		return lines, fmt.Errorf("the give of item %d on %s is UNVERIFIED: %s; its copies are not recorded and will not be deleted", item, bot, note)
 	}
-	if ok {
-		// The count did not grow above the baseline read before the give, so
-		// this give added nothing: its record proves nothing and is retired.
-		if rerr := p.marks().retireAll([]givenItem{intent}); rerr != nil {
-			return lines, fmt.Errorf("the recovery mark of the give of item %d on %s was not retired: %w", item, bot, rerr)
+	var fresh []tbcmd.ItemInstance
+	for _, inst := range after {
+		if !have[inst.GUID] {
+			fresh = append(fresh, inst)
 		}
+	}
+	if len(fresh) == 0 {
+		if err != nil {
+			return lines, err
+		}
+		return lines, fmt.Errorf("the give of item %d on %s created no item instance of its own (merged into a copy the hire carried, or the server named none): nothing recorded, nothing will be deleted", item, bot)
+	}
+	grants := make([]ItemGrant, 0, len(fresh))
+	for _, inst := range fresh {
+		grants = append(grants, ItemGrant{Server: p.Server, Character: bot, CharGUID: p.charGUID(bot),
+			Item: item, GUID: inst.GUID, Grant: nextGrant()})
+	}
+	if aerr := p.grants().add(grants); aerr != nil {
+		return lines, fmt.Errorf("the give of %d item instance(s) %d on %s was not recorded: %w", len(grants), item, bot, aerr)
 	}
 	if err != nil {
 		return lines, err
 	}
-	if !ok {
-		return lines, fmt.Errorf("the give of item %d on %s is UNVERIFIED: the carried count is unreadable afterwards", item, bot)
-	}
-	return lines, fmt.Errorf("additem answered but the hire carries no more item %d on %s (%d before, %d after)", item, bot, base, after)
+	// A stack give names one instance; a give asking for several copies that
+	// landed in several stacks names several. Fewer instances than the
+	// copies asked for is fine when they hold every copy the read-back shows
+	// (merges are not evidence either way); the give itself already failed
+	// above when it created nothing.
+	return lines, nil
 }
 
-// ClearGiven takes back what earlier grants left on bot, and only that: each
-// grant record is proved by an `ItemScan` read-back, capped at the copies its
-// give proved and floored at the carried count read before that give. An
-// unconfirmed grant's intent is never cleared (no copy is proved), and an
-// unmarked id is never touched. A settled grant is retired; an unconfirmed
-// grant whose count is back at its baseline is retired with it. The evidence
-// is one line; ok is false when any grant could not be proved handled (its
-// record stays for the next run).
-func (p *Provisioner) ClearGiven(ctx context.Context, bot string) (string, bool) {
-	marks, err := p.marks().forBotErr(p.Server, bot)
+// ClearGiven deletes every item instance a trial recorded for character, and
+// only those: each grant is one GUID the server named at grant time, deleted
+// on that exact character. A worn copy is unequipped first, in the slot the
+// instance list proved. A recorded copy the character no longer holds is
+// retired (it is gone). A deletion the module refuses, or one whose read-back
+// cannot prove the GUID gone, is reported and left in place: it is not
+// retried, no other copy is deleted in its place, and the grant stays for the
+// next run. The evidence is one line; ok is false when any recorded copy
+// could not be proved handled.
+func (p *Provisioner) ClearGiven(ctx context.Context, character string) (string, bool) {
+	grants, err := p.grants().forCharacter(p.Server, character)
 	if err != nil {
-		return "recovery marks unreadable: " + err.Error(), false
+		return "item grants unreadable: " + err.Error(), false
 	}
-	if len(marks) == 0 {
+	if len(grants) == 0 {
 		return "no items to clear", true
 	}
-	groups := grantGroups(marks)
+	// One pass per item: the server's instance list is read once for the ids
+	// that batch, and every recorded GUID is deleted on its own.
+	byItem := map[uint32][]ItemGrant{}
+	var ids []uint32
+	for _, g := range grants {
+		if _, ok := byItem[g.Item]; !ok {
+			ids = append(ids, g.Item)
+		}
+		byItem[g.Item] = append(byItem[g.Item], g)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	allOK := true
 	var notes []string
 	cleared := 0
-	for i := range groups {
-		g := &groups[i]
-		if !p.prepareGrantGroup(ctx, bot, g) {
-			allOK = false
-			notes = append(notes, g.note)
-		}
-	}
-	// Bag copies of every item go first: they free the slots an unequip
-	// needs, and their count is the part of a grant that is in the bags.
-	for i := range groups {
-		g := &groups[i]
-		if !g.ok {
-			continue
-		}
-		if !p.clearGrantBags(ctx, bot, g) {
-			allOK = false
-			notes = append(notes, g.note)
-		}
-	}
-	// A worn grant then takes its remaining copies off the equipment, one at
-	// a time, each slot proved holding the item first.
-	for i := range groups {
-		g := &groups[i]
-		if !g.ok || !g.worn {
-			continue
-		}
-		if !p.clearGrantWorn(ctx, bot, g) {
-			allOK = false
-			notes = append(notes, g.note)
-		}
-	}
-	var settled []givenItem
-	for i := range groups {
-		g := &groups[i]
-		cleared += g.removed
-		if !g.ok {
-			continue
-		}
-		inv, note, ok := p.carriedCountNote(ctx, bot, g.item)
+	var settled []ItemGrant
+	for _, item := range ids {
+		itemGrants := byItem[item]
+		instances, note, ok := p.itemInstances(ctx, character, item)
 		if !ok {
 			allOK = false
 			notes = append(notes, note)
 			continue
 		}
-		switch {
-		case inv <= g.floor:
-			// Back at the pre-grant count: every copy the grant added is gone.
-			settled = append(settled, g.records...)
-		case g.removed >= g.cap:
-			// Every copy the grant proved it added is back; anything above the
-			// floor left is not this grant's, so the record is settled and the
-			// hire keeps those copies.
-			settled = append(settled, g.records...)
-		case !g.worn:
-			allOK = false
-			notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (%d above the baseline not in the bags; a non-worn grant never touches equipment)", g.item, inv-g.floor))
-		default:
-			allOK = false
-			notes = append(notes, fmt.Sprintf("item %d: UNVERIFIED (%d above the baseline not proved removed)", g.item, inv-g.floor))
+		held := map[string]tbcmd.ItemInstance{}
+		for _, inst := range instances {
+			held[inst.GUID] = inst
+		}
+		for _, grant := range itemGrants {
+			inst, present := held[grant.GUID]
+			if !present {
+				// The copy is gone: nothing to delete, the grant is settled.
+				settled = append(settled, grant)
+				continue
+			}
+			if inst.Worn {
+				// A worn copy goes to the bags first, in the slot the server
+				// proved it occupies; a slot that is refused is reported and
+				// the copy stays worn.
+				if err := p.unequipBotSlot(ctx, character, inst.Slot, item); err != nil {
+					allOK = false
+					notes = append(notes, fmt.Sprintf("item %d (item guid %s): unequip slot %d failed: %v; left worn",
+						item, grant.GUID, inst.Slot, err))
+					continue
+				}
+				now, note, ok := p.itemInstances(ctx, character, item)
+				if !ok {
+					allOK = false
+					notes = append(notes, note+"; the unequipped copy is left in place")
+					continue
+				}
+				moved := tbcmd.ItemInstance{}
+				for _, cur := range now {
+					if cur.GUID == grant.GUID {
+						moved = cur
+						break
+					}
+				}
+				if moved.GUID == "" || moved.Worn {
+					allOK = false
+					notes = append(notes, fmt.Sprintf("item %d (item guid %s): unequip slot %d did not put the copy into the bags; left in place",
+						item, grant.GUID, inst.Slot))
+					continue
+				}
+			}
+			res, _, rerr := p.TB.RemoveItemInstance(ctx, character, grant.GUID)
+			if rerr != nil {
+				allOK = false
+				notes = append(notes, fmt.Sprintf("item %d (item guid %s): remove refused: %s; left in place", item, grant.GUID, tbErrText(rerr, nil)))
+				continue
+			}
+			if res.Removed != 1 {
+				allOK = false
+				notes = append(notes, fmt.Sprintf("item %d (item guid %s): the module removed no copy; left in place", item, grant.GUID))
+				continue
+			}
+			// The answer is not the proof: the instance list must no longer
+			// hold the GUID. An unreadable read-back leaves the copy in place.
+			now, note, ok := p.itemInstances(ctx, character, item)
+			if !ok {
+				allOK = false
+				notes = append(notes, note+fmt.Sprintf("; item guid %s: the removal is UNVERIFIED and the copy is left in place", grant.GUID))
+				continue
+			}
+			still := false
+			for _, cur := range now {
+				if cur.GUID == grant.GUID {
+					still = true
+					break
+				}
+			}
+			if still {
+				allOK = false
+				notes = append(notes, fmt.Sprintf("item %d (item guid %s): UNVERIFIED (the module answered removed=1 but the copy is still held)", item, grant.GUID))
+				continue
+			}
+			settled = append(settled, grant)
+			cleared++
 		}
 	}
-	if err := p.marks().retireAll(settled); err != nil {
+	if err := p.grants().retire(settled); err != nil {
 		allOK = false
-		notes = append(notes, "recovery marks not retired: "+err.Error())
+		notes = append(notes, "item grants not retired: "+err.Error())
 	}
 	return formatClearSummary(cleared, notes), allOK
 }
 
-// grantGroup is the cleanup view of one item id's grants.
-type grantGroup struct {
-	item    uint32
-	floor   int         // the lowest baseline: the carried count before the first grant
-	cap     int         // copies the confirmed grants proved they added
-	removed int         // copies taken back so far
-	worn    bool        // a grant was equipped
-	ok      bool        // still clearable (a failed read leaves it false)
-	note    string      // why it is not ok
-	records []givenItem // the confirmed records to retire when settled
-}
-
-// grantGroups groups the marks of one bot by item, newest baseline first. A
-// group holding an unconfirmed grant is prepared (and may be retired or
-// failed) before its confirmed grants are cleared.
-func grantGroups(marks []givenItem) []grantGroup {
-	byItem := map[uint32]*grantGroup{}
-	var ids []uint32
-	for _, g := range marks {
-		grp := byItem[g.Item]
-		if grp == nil {
-			grp = &grantGroup{item: g.Item, floor: int(g.Base), ok: true}
-			byItem[g.Item] = grp
-			ids = append(ids, g.Item)
-		}
-		if int(g.Base) < grp.floor {
-			grp.floor = int(g.Base)
-		}
-	}
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-	out := make([]grantGroup, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, *byItem[id])
-	}
-	return out
-}
-
-// prepareGrantGroup settles the unconfirmed grants of one item: a grant whose
-// read-back never proved a copy may have left copies, but nothing proves they
-// are the trial's, so the group fails closed and nothing is cleared. A grant
-// whose carried count is back at its own baseline added nothing that remains
-// and is retired. The confirmed grants then form the group's budget.
-func (p *Provisioner) prepareGrantGroup(ctx context.Context, bot string, g *grantGroup) bool {
-	// The group's records are rebuilt from the marks of this item.
-	all, err := p.marks().forBotErr(p.Server, bot)
-	if err != nil {
-		g.ok = false
-		g.note = "recovery marks unreadable: " + err.Error()
-		return false
-	}
-	var unconfirmed, confirmed []givenItem
-	for _, r := range all {
-		if r.Item != g.item {
-			continue
-		}
-		if r.Grant != 0 && r.Count == 0 {
-			unconfirmed = append(unconfirmed, r)
-			continue
-		}
-		confirmed = append(confirmed, r)
-	}
-	if len(unconfirmed) > 0 {
-		inv, note, ok := p.carriedCountNote(ctx, bot, g.item)
-		if !ok {
-			g.ok = false
-			g.note = note
-			return false
-		}
-		for _, r := range unconfirmed {
-			if inv > int(r.Base) {
-				g.ok = false
-				g.note = fmt.Sprintf("item %d: UNVERIFIED (a give whose read-back never confirmed it left %d copy/copies above its recorded baseline; nothing is cleared)", g.item, inv-int(r.Base))
-				return false
-			}
-		}
-		if err := p.marks().retireAll(unconfirmed); err != nil {
-			g.ok = false
-			g.note = "recovery marks not retired: " + err.Error()
-			return false
-		}
-	}
-	g.records = confirmed
-	g.cap = 0
-	g.worn = false
-	g.floor = 0
-	first := true
-	for _, r := range confirmed {
-		g.cap += int(r.Count)
-		g.worn = g.worn || r.Worn
-		if first || int(r.Base) < g.floor {
-			g.floor = int(r.Base)
-			first = false
-		}
-	}
-	if g.cap == 0 {
-		g.records = nil
-	}
-	return true
-}
-
-// clearGrantBags removes one grant group's bag copies, up to its proved cap
-// and never below its floor. Each removal re-reads the count first and asks
-// for the whole remaining budget in one call, so a full stack clears in one
-// step instead of one call per copy. A module removal of zero means the bags
-// hold no copy (the rest of the grant is worn) and is not an error.
-func (p *Provisioner) clearGrantBags(ctx context.Context, bot string, g *grantGroup) bool {
-	for g.removed < g.cap {
-		inv, note, ok := p.carriedCountNote(ctx, bot, g.item)
-		if !ok {
-			g.ok = false
-			g.note = note
-			return false
-		}
-		if inv <= g.floor {
-			return true
-		}
-		want := g.cap - g.removed
-		if above := inv - g.floor; want > above {
-			want = above
-		}
-		n, note, ok := p.removeCopies(ctx, bot, g.item, want, g.floor)
-		if !ok {
-			g.ok = false
-			g.note = note
-			return false
-		}
-		if n == 0 {
-			return true
-		}
-		g.removed += n
-	}
-	return true
-}
-
-// clearGrantWorn unequips and destroys a worn grant's remaining copies, one
-// at a time. The slot is read from a complete `.bot inv` reply and must hold
-// the item before the unequip is sent; a slot that cannot be proved is never
-// touched.
-func (p *Provisioner) clearGrantWorn(ctx context.Context, bot string, g *grantGroup) bool {
-	for g.removed < g.cap {
-		inv, note, ok := p.carriedCountNote(ctx, bot, g.item)
-		if !ok {
-			g.ok = false
-			g.note = note
-			return false
-		}
-		if inv <= g.floor {
-			return true
-		}
-		scan, note, ok := p.scanItem(ctx, bot, g.item)
-		if !ok {
-			g.ok = false
-			g.note = note
-			return false
-		}
-		if !scan.CanEquip || !scan.HasSlot {
-			why := scan.Why
-			if why == "" {
-				why = "the item is not equippable"
-			}
-			g.ok = false
-			g.note = fmt.Sprintf("item %d: UNVERIFIED (%d above the baseline not in the bags: %s)", g.item, inv-g.floor, why)
-			return false
-		}
-		slot, note, ok := p.provenEquipSlot(ctx, bot, g.item, scan.Slot)
-		if !ok {
-			g.ok = false
-			g.note = note
-			return false
-		}
-		if err := p.unequipBotSlot(ctx, bot, slot, g.item); err != nil {
-			g.ok = false
-			g.note = fmt.Sprintf("item %d: unequip slot %d failed: %v", g.item, slot, err)
-			return false
-		}
-		n, note, ok := p.removeOneAbove(ctx, bot, g.item, g.floor)
-		if !ok {
-			g.ok = false
-			g.note = note
-			return false
-		}
-		if n != 1 {
-			g.ok = false
-			g.note = fmt.Sprintf("item %d: unequip slot %d did not put a copy into the bags", g.item, slot)
-			return false
-		}
-		g.removed += n
-	}
-	return true
-}
-
-// removeCopies takes up to want copies of item out of the bags in one module
-// call, never below floor. The carried count is re-read here, in the same
-// step that removes: when it is already at or below floor nothing may be
-// removed, so a budget measured against an earlier read can never cross the
-// baseline. The module's own removed count must match the drop in the
-// read-back and the count must stay at or above the floor. A module answer of
-// 0 with an unchanged count means the bags hold no copy (the rest is worn):
-// (0, "", true), so the caller's worn pass decides.
-func (p *Provisioner) removeCopies(ctx context.Context, bot string, item uint32, want, floor int) (int, string, bool) {
-	if want <= 0 {
-		return 0, "", true
-	}
-	before, known := p.carriedCount(ctx, bot, item)
-	if !known {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (carried count unreadable before removing)", item), false
-	}
-	if before <= floor {
-		return 0, "", true
-	}
-	if want > before-floor {
-		want = before - floor
-	}
-	tctx, cancel := p.ctxOf(ctx)
-	res, lines, rerr := p.TB.FreeTextRemoveItem(tctx, bot, item, uint32(want))
-	cancel()
-	p.Ledger.Add(map[string]any{"kind": "removeitem", "bot": bot, "item_id": item, "count": want,
-		"removed": res.Removed, "left": res.Left, "reply": firstLines(lines)})
-	if rerr != nil {
-		return 0, fmt.Sprintf("item %d: remove refused: %s", item, tbErrText(rerr, lines)), false
-	}
-	after, ok := p.carriedCount(ctx, bot, item)
-	if !ok {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (carried count unreadable after removing)", item), false
-	}
-	removed := int(res.Removed)
-	if removed < 0 || removed > want {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (the module removed %d of %d)", item, res.Removed, want), false
-	}
-	if removed == 0 {
-		if after != before {
-			return 0, fmt.Sprintf("item %d: UNVERIFIED (the module removed none but the carried count moved %d -> %d)", item, before, after), false
-		}
-		return 0, "", true
-	}
-	if after != before-removed {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (carried %d before, %d after the module removed %d of %d)", item, before, after, res.Removed, want), false
-	}
-	if after < floor {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (the carried count %d fell below the baseline %d)", item, after, floor), false
-	}
-	return removed, "", true
-}
-
-// removeOneAbove is removeCopies for one copy.
-func (p *Provisioner) removeOneAbove(ctx context.Context, bot string, item uint32, floor int) (int, string, bool) {
-	return p.removeCopies(ctx, bot, item, 1, floor)
-}
-
-// provenEquipSlot reads the hire's inventory and returns an equipment slot
-// that holds item. preferred is the itemscan's candidate, used when it holds
-// the item; otherwise the first occupied slot that does. Only a complete
-// `.bot inv` reply proves an occupant, so a truncated reply proves nothing and
-// the unequip is refused.
-func (p *Provisioner) provenEquipSlot(ctx context.Context, bot string, item uint32, preferred int) (int, string, bool) {
+// provenEquipSlot reads the hire's inventory and returns the equipment slot
+// the instance list named when a complete `.bot inv` reply proves it holds
+// item. Only a complete reply proves an occupant, so a truncated reply proves
+// nothing and the unequip is refused.
+func (p *Provisioner) provenEquipSlot(ctx context.Context, bot string, item uint32, slot int) (int, string, bool) {
 	if p.Client == nil {
 		return 0, fmt.Sprintf("item %d: UNVERIFIED (no client for .bot inv)", item), false
 	}
@@ -745,27 +487,26 @@ func (p *Provisioner) provenEquipSlot(ctx context.Context, bot string, item uint
 		return 0, fmt.Sprintf("item %d: UNVERIFIED (.bot inv %s: the reply is truncated, no INV_END)", item, bot), false
 	}
 	if inv.Bot != "" && !strings.EqualFold(inv.Bot, bot) {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (.bot inv answered for %q, asked for %q)", item, inv.Bot, bot), false
+		return 0, fmt.Sprintf("item %d: UNVERIFIED (.bot inv answered for %q, asked for %q)", item, bot, inv.Bot), false
 	}
-	if inv.Equipped[preferred] == item {
-		return preferred, "", true
+	if slot < 0 || inv.Equipped[slot] != item {
+		return 0, fmt.Sprintf("item %d: UNVERIFIED (the slot %d the instance list named is not proved to hold it)", item, slot), false
 	}
-	for slot := range 19 {
-		if inv.Equipped[slot] == item {
-			return slot, "", true
-		}
-	}
-	return 0, fmt.Sprintf("item %d: UNVERIFIED (no equipment slot is proved to hold it)", item), false
+	return slot, "", true
 }
 
 func (p *Provisioner) unequipBotSlot(ctx context.Context, bot string, slot int, item uint32) error {
+	proved, note, ok := p.provenEquipSlot(ctx, bot, item, slot)
+	if !ok {
+		return fmt.Errorf("%s", note)
+	}
 	if p.Client == nil {
 		return fmt.Errorf("no client for .bot item unequip")
 	}
 	tctx, cancel := p.ctxOf(ctx)
-	res, err := p.Client.botLine(tctx, fmt.Sprintf(".bot item %s unequip 255 %d", bot, slot), 5000)
+	res, err := p.Client.botLine(tctx, fmt.Sprintf(".bot item %s unequip 255 %d", bot, proved), 5000)
 	cancel()
-	p.Ledger.Add(map[string]any{"kind": "unequip", "bot": bot, "bag": 255, "slot": slot, "item_id": item, "reply": firstLines(res.Lines)})
+	p.Ledger.Add(map[string]any{"kind": "unequip", "bot": bot, "bag": 255, "slot": proved, "item_id": item, "reply": firstLines(res.Lines)})
 	if err != nil {
 		return err
 	}
@@ -777,7 +518,7 @@ func (p *Provisioner) unequipBotSlot(ctx context.Context, bot string, slot int, 
 			return nil
 		}
 	}
-	return fmt.Errorf("no ACTION_ACK for .bot item %s unequip 255 %d", bot, slot)
+	return fmt.Errorf("no ACTION_ACK for .bot item %s unequip 255 %d", bot, proved)
 }
 
 // isBagsFull reports the module's "bags full" refusal.
@@ -795,7 +536,7 @@ func isBagsFull(err error, lines []string) bool {
 func itemsGiveRow(bot, item string, ids any, err error, lines []string, clearEvidence string, clearOK bool) map[string]any {
 	if isBagsFull(err, lines) {
 		return rowOf("bot_items", false, ids, fmt.Sprintf(
-			"SKIPPED needs=bot_bag_space: .tb additem %s %s: bags full (clearing leftover items: %s)", bot, item, clearEvidence))
+			"SKIPPED needs=bot_bag_space: .tb additem %s %s: bags full (clearing recorded items: %s)", bot, item, clearEvidence))
 	}
 	return rowOf("bot_items", false, ids, ".tb additem "+bot+" "+item+": "+tbErrText(err, lines))
 }
@@ -803,7 +544,7 @@ func itemsGiveRow(bot, item string, ids any, err error, lines []string, clearEvi
 func formatClearSummary(cleared int, notes []string) string {
 	var parts []string
 	if cleared > 0 {
-		parts = append(parts, fmt.Sprintf("cleared %d marked item(s)", cleared))
+		parts = append(parts, fmt.Sprintf("cleared %d recorded item instance(s)", cleared))
 	}
 	parts = append(parts, notes...)
 	if len(parts) == 0 {

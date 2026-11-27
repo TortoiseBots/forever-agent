@@ -182,13 +182,24 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// fakeItem is one copy (one item instance) the fake server holds: its own
+// GUID, the item it is and where it sits (a bag slot, or an equipment slot
+// when worn).
+type fakeItem struct {
+	guid  string
+	item  uint32
+	bag   int
+	slot  int
+	count int
+	worn  bool
+}
+
 // bagModel is a hire's bags as the real module shows them: itemscan reports
-// the bag count, `.tb additem <bot> <id> [n]` adds n (bags full past cap),
-// `.tb removeitem <bot> <id> [n]` takes out n (all when no n) and answers the
-// real record shape. The old negative-count additem is NOT a removal here
-// (the real module answers a usage line that names no bot, so the typed
-// layer sees nothing): a clear that still used it changes nothing and its
-// read-back fails.
+// the copies by their own GUIDs (instances=), `.tb additem <bot> <id> [n]`
+// adds n (bags full past cap), `.tb removeitem <bot> guid <hex>` destroys one
+// named instance and answers the real record shape, and `.tb equip` wears a
+// copy without changing its GUID. The old negative-count additem is NOT a
+// removal here.
 type bagModel struct {
 	mu       sync.Mutex
 	inv      map[uint32]int
@@ -197,10 +208,56 @@ type bagModel struct {
 	cap      int
 	bagSlots int
 	lines    []string
+	items    []*fakeItem
+	nextGUID uint64
+	// noGuids makes itemscan answer without an instances= list (a module that
+	// cannot name its copies); mergeAdds makes an additem merge into the
+	// hire's existing bag stack (no new instance); refuseRemoval makes the
+	// guid removal answer a refusal; ignoreRemoval acknowledges one but
+	// leaves the copy.
+	noGuids       bool
+	mergeAdds     bool
+	refuseRemoval bool
+	ignoreRemoval bool
 }
 
 func newBagModel() *bagModel {
 	return &bagModel{inv: map[uint32]int{}, worn: map[int]uint32{}, itemSlot: map[uint32]int{}, cap: 1000}
+}
+
+// newItemLocked creates one instance with a deterministic, unique GUID.
+func (b *bagModel) newItemLocked(item uint32, bag, slot, count int, worn bool) *fakeItem {
+	b.nextGUID++
+	it := &fakeItem{guid: fmt.Sprintf("%032x", 0x4000000000000000+b.nextGUID), item: item, bag: bag, slot: slot, count: count, worn: worn}
+	b.items = append(b.items, it)
+	return it
+}
+
+// freeBagSlotLocked is the first bag slot (23 upward, as the fake's
+// `.bot inv` shows them) no instance holds.
+func (b *bagModel) freeBagSlotLocked() int {
+	used := map[int]bool{}
+	for _, it := range b.items {
+		if !it.worn {
+			used[it.slot] = true
+		}
+	}
+	for slot := 23; ; slot++ {
+		if !used[slot] {
+			return slot
+		}
+	}
+}
+
+// dropItemLocked forgets every instance of item.
+func (b *bagModel) dropItemLocked(item uint32) {
+	keep := b.items[:0]
+	for _, it := range b.items {
+		if it.item != item {
+			keep = append(keep, it)
+		}
+	}
+	b.items = keep
 }
 
 func (b *bagModel) count(item uint32) int {
@@ -231,6 +288,15 @@ func (b *bagModel) setWorn(slot int, item uint32) {
 		delete(b.worn, slot)
 	} else {
 		b.worn[slot] = item
+		keep := b.items[:0]
+		for _, it := range b.items {
+			if it.worn && it.slot == slot {
+				continue
+			}
+			keep = append(keep, it)
+		}
+		b.items = keep
+		b.newItemLocked(item, 255, slot, 1, true)
 	}
 	b.mu.Unlock()
 }
@@ -247,10 +313,12 @@ func (b *bagModel) usedBagSlotsLocked() int {
 
 func (b *bagModel) set(item uint32, n int) {
 	b.mu.Lock()
+	b.dropItemLocked(item)
 	if n == 0 {
 		delete(b.inv, item)
 	} else {
 		b.inv[item] = n
+		b.newItemLocked(item, 255, b.freeBagSlotLocked(), n, false)
 	}
 	b.mu.Unlock()
 }
@@ -265,6 +333,19 @@ func (b *bagModel) seen(prefix string) []string {
 		}
 	}
 	return out
+}
+
+// instanceListLocked renders the item's copies as the module's instances=
+// value: `<guid>:<bag>:<slot>:<count>` separated by `;`.
+func (b *bagModel) instanceListLocked(item uint32) string {
+	var parts []string
+	for _, it := range b.items {
+		if it.item != item {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s:%d:%d:%d", it.guid, it.bag, it.slot, it.count))
+	}
+	return strings.Join(parts, ";")
 }
 
 // answer is a setupFake.tbFn: nil for a line the model does not own.
@@ -295,11 +376,15 @@ func (b *bagModel) answer(line string) []string {
 			// The core's itemscan inv is Player::GetItemCount over
 			// equipment, bags and the reagent bank, so worn copies count.
 			total := b.inv[uint32(id)] + b.wornCountLocked(uint32(id))
+			instances := ""
+			if !b.noGuids {
+				instances = " instances=" + b.instanceListLocked(uint32(id))
+			}
 			if slot, ok := b.itemSlot[uint32(id)]; ok {
 				canEquip++
-				out = append(out, fmt.Sprintf("itemscan bot=%s item=%d exists=yes name=Item%%20%d class=4:1 inv=%d req=0 quality=3 ilvl=40 canequip=yes slot=%d why= #T", f[2], id, id, total, slot))
+				out = append(out, fmt.Sprintf("itemscan bot=%s item=%d exists=yes name=Item%%20%d class=4:1 inv=%d req=0 quality=3 ilvl=40 canequip=yes slot=%d why=%s #T", f[2], id, id, total, slot, instances))
 			} else {
-				out = append(out, fmt.Sprintf("itemscan bot=%s item=%d exists=yes name=Item%%20%d class=0:5 inv=%d req=0 quality=1 ilvl=5 canequip=no why= #T", f[2], id, id, total))
+				out = append(out, fmt.Sprintf("itemscan bot=%s item=%d exists=yes name=Item%%20%d class=0:5 inv=%d req=0 quality=1 ilvl=5 canequip=no why=%s #T", f[2], id, id, total, instances))
 			}
 		}
 		return append(out, fmt.Sprintf("itemscan-end bot=%s count=%d records=%d exist=%d canequip=%d #T", f[2], len(out)-1, len(out)-1, len(out)-1, canEquip))
@@ -313,26 +398,50 @@ func (b *bagModel) answer(line string) []string {
 		if !ok1 || n < 1 {
 			return []string{} // usage refusal: names no bot, nothing happens
 		}
-		if b.inv[uint32(id)]+n > b.cap || (b.bagSlots > 0 && b.inv[uint32(id)] == 0 && b.usedBagSlotsLocked() >= b.bagSlots) {
+		item := uint32(id)
+		if b.inv[item]+n > b.cap || (b.bagSlots > 0 && b.inv[item] == 0 && b.usedBagSlotsLocked() >= b.bagSlots) {
 			return []string{"TortoiseBots: " + f[2] + ": bags full, the item was not stored."}
 		}
-		b.inv[uint32(id)] += n
-		return []string{fmt.Sprintf("TortoiseBots: %s now has %d of item %d.", f[2], b.inv[uint32(id)], id)}
+		merged := false
+		if b.mergeAdds {
+			for _, it := range b.items {
+				if it.item == item && !it.worn {
+					it.count += n
+					merged = true
+					break
+				}
+			}
+		}
+		if !merged {
+			b.newItemLocked(item, 255, b.freeBagSlotLocked(), n, false)
+		}
+		b.inv[item] += n
+		return []string{fmt.Sprintf("TortoiseBots: %s now has %d of item %d.", f[2], b.inv[item], item)}
 	case "removeitem":
 		b.lines = append(b.lines, line)
-		id, ok1 := num(3)
-		if !ok1 {
-			return []string{}
+		if len(f) > 3 && f[3] == "guid" {
+			want := strings.ToLower(f[4])
+			for i, it := range b.items {
+				if it.guid != want {
+					continue
+				}
+				if b.refuseRemoval {
+					return []string{"TortoiseBots: item guid " + want + " is not in the bags."}
+				}
+				if !b.ignoreRemoval {
+					if !it.worn {
+						b.inv[it.item] -= it.count
+						if b.inv[it.item] <= 0 {
+							delete(b.inv, it.item)
+						}
+					}
+					b.items = append(b.items[:i], b.items[i+1:]...)
+				}
+				return []string{fmt.Sprintf("removeitem bot=%s item=%d guid=%s removed=1 left=%d", f[2], it.item, want, b.inv[it.item])}
+			}
+			return []string{"TortoiseBots: item guid " + want + " is not held."}
 		}
-		n, ok2 := num(4)
-		if !ok2 || n > b.inv[uint32(id)] {
-			n = b.inv[uint32(id)]
-		}
-		b.inv[uint32(id)] -= n
-		if b.inv[uint32(id)] == 0 {
-			delete(b.inv, uint32(id))
-		}
-		return []string{fmt.Sprintf("removeitem bot=%s item=%d removed=%d left=%d", f[2], id, n, b.inv[uint32(id)])}
+		return []string{}
 	case "equip":
 		b.lines = append(b.lines, line)
 		id, ok1 := num(3)
@@ -343,14 +452,36 @@ func (b *bagModel) answer(line string) []string {
 		if !hasSlot {
 			slot = int(id) % 19
 		}
+		// The first bag instance moves to the slot; the copy keeps its GUID.
+		var moved *fakeItem
+		for _, it := range b.items {
+			if it.item == uint32(id) && !it.worn {
+				moved = it
+				break
+			}
+		}
 		prev := b.worn[slot]
+		if prev != 0 {
+			b.inv[prev]++
+			b.newItemLocked(prev, 255, b.freeBagSlotLocked(), 1, false)
+			var keep []*fakeItem
+			for _, it := range b.items {
+				if it.worn && it.slot == slot {
+					continue
+				}
+				keep = append(keep, it)
+			}
+			b.items = keep
+		}
 		b.worn[slot] = uint32(id)
 		b.inv[uint32(id)]--
 		if b.inv[uint32(id)] == 0 {
 			delete(b.inv, uint32(id))
 		}
-		if prev != 0 {
-			b.inv[prev]++
+		if moved != nil {
+			moved.worn = true
+			moved.slot = slot
+			moved.count = 1
 		}
 		return []string{"equip-begin #T", fmt.Sprintf("equip bot=%s item=%d result=equipped slot=%d why= #T", f[2], id, slot), fmt.Sprintf("equip-end bot=%s count=1 records=1 #T", f[2])}
 	}
@@ -405,6 +536,14 @@ func (b *bagModel) botAnswer(line string) []string {
 		}
 		delete(b.worn, slot)
 		b.inv[item]++
+		for _, it := range b.items {
+			if it.worn && it.slot == slot && it.item == item {
+				it.worn = false
+				it.bag = 255
+				it.slot = b.freeBagSlotLocked()
+				break
+			}
+		}
 		return []string{fmt.Sprintf("TBM:ACTION_ACK|item unequip|bot:%s|1|%d", bot, item)}
 	}
 	return nil
@@ -418,392 +557,6 @@ func bagProv(t *testing.T) (*Provisioner, *setupFake, *bagModel) {
 	f.botFn = bags.botAnswer
 	prov := levelProv(s)
 	prov.Server = "test2"
-	prov.RecoveryPath = filepath.Join(t.TempDir(), "mark.json")
+	prov.GrantPath = filepath.Join(t.TempDir(), "grants.json")
 	return prov, s, bags
-}
-
-// Finding 2/3: what the trial gave is taken back with the module's
-// `.tb removeitem` (never the negative additem), the mark is written only
-// after the give was read back, and the clear is proved by an itemscan.
-func TestClearGivenUsesRemoveItemAndReadsBack(t *testing.T) {
-	prov, _, bags := bagProv(t)
-	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
-		t.Fatal(err)
-	}
-	got := prov.marks().forBot("test2", "Bheal")
-	if len(got) != 1 || got[0].Item != 1708 || got[0].Count != 20 || got[0].Server != "test2" {
-		t.Fatalf("mark after a confirmed give: %+v", got)
-	}
-	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if !ok || bags.count(1708) != 0 {
-		t.Fatalf("clear must be proved and empty the bags: ok=%v bags=%d %s", ok, bags.count(1708), ev)
-	}
-	if got := bags.seen(".tb removeitem Bheal 1708 20"); len(got) != 1 {
-		t.Fatalf("the whole proved stack must go in one removal naming 20 copies, saw %v", bags.lines)
-	}
-	for _, l := range bags.seen(".tb additem") {
-		if strings.Contains(l, " -") {
-			t.Fatalf("the negative-count additem must never be sent: %s", l)
-		}
-	}
-	if got := prov.marks().forBot("test2", "Bheal"); len(got) != 0 {
-		t.Fatalf("the mark must be dropped after a proved clear: %v", got)
-	}
-}
-
-// A refused give (bags full) is never marked: a later clear must not remove
-// the items the hire already carried.
-func TestRefusedGiveWritesNoMarkAndClearKeepsOldStack(t *testing.T) {
-	prov, _, bags := bagProv(t)
-	bags.set(1708, 5) // the hire already carried 5
-	bags.cap = 10     // 20 more do not fit
-	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err == nil {
-		t.Fatal("a refused give must be an error")
-	}
-	if got := prov.marks().forBot("test2", "Bheal"); len(got) != 0 {
-		t.Fatalf("a refused give must write no mark: %+v", got)
-	}
-	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if !ok || bags.count(1708) != 5 {
-		t.Fatalf("the hire's own 5 items must stay: ok=%v bags=%d %s", ok, bags.count(1708), ev)
-	}
-	if len(bags.seen(".tb removeitem")) != 0 {
-		t.Fatalf("nothing may be removed without a mark: %v", bags.lines)
-	}
-}
-
-// A clear removes at most what the trial gave on top of the baseline.
-func TestClearNeverRemovesWhatTheHireHadBefore(t *testing.T) {
-	prov, _, bags := bagProv(t)
-	bags.set(1708, 5)
-	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := prov.ClearGiven(context.Background(), "Bheal"); !ok {
-		t.Fatal("clear must be proved")
-	}
-	if bags.count(1708) != 5 {
-		t.Fatalf("the hire's own 5 must remain, bags=%d", bags.count(1708))
-	}
-	// The hire used 3 of the gift: only the 17 still above the baseline go.
-	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
-		t.Fatal(err)
-	}
-	bags.set(1708, 22) // 25 - 3 used
-	if _, ok := prov.ClearGiven(context.Background(), "Bheal"); !ok {
-		t.Fatal("clear must be proved")
-	}
-	if bags.count(1708) != 5 {
-		t.Fatalf("clear must stop at the baseline, bags=%d", bags.count(1708))
-	}
-}
-
-// A removal the read-back does not show stays marked and is reported.
-func TestClearGivenUnprovedStaysMarked(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
-		t.Fatal(err)
-	}
-	// The module acknowledges the removal but the bags keep the items.
-	s.tbFn = func(line string) []string {
-		if strings.HasPrefix(line, ".tb removeitem") {
-			return []string{"removeitem bot=Bheal item=1708 removed=20 left=0"}
-		}
-		return bags.answer(line)
-	}
-	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if ok || !strings.Contains(ev, "UNVERIFIED") {
-		t.Fatalf("an unproved clear must not read ok: ok=%v %s", ok, ev)
-	}
-	if len(prov.marks().forBot("test2", "Bheal")) != 1 {
-		t.Fatal("the mark must stay for the next run")
-	}
-}
-
-// A fake that still accepts the old negative additem as a removal must not
-// make the clear pass: the agent never sends that form, so a fake that only
-// understands it leaves the bags full and the clear reads UNVERIFIED.
-func TestClearFailsAgainstAFakeThatOnlyKnowsTheOldForm(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
-		t.Fatal(err)
-	}
-	s.tbFn = func(line string) []string {
-		if strings.HasPrefix(line, ".tb additem Bheal 1708 -") {
-			bags.set(1708, 0)
-			return []string{"TortoiseBots: Bheal now has 0 of item 1708."}
-		}
-		if strings.HasPrefix(line, ".tb removeitem") {
-			return []string{}
-		}
-		return bags.answer(line)
-	}
-	if _, ok := prov.ClearGiven(context.Background(), "Bheal"); ok {
-		t.Fatal("a clear that needs the old negative additem form must not pass")
-	}
-}
-
-// Marks name the server: the same character on another server is not touched.
-func TestMarksAreScopedToTheServer(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
-		t.Fatal(err)
-	}
-	other := levelProv(s)
-	other.Server = "test3"
-	other.RecoveryPath = prov.RecoveryPath
-	if got := other.marks().forBot("test3", "Bheal"); len(got) != 0 {
-		t.Fatalf("a mark of test2 must not show on test3: %+v", got)
-	}
-	if _, ok := other.ClearGiven(context.Background(), "Bheal"); !ok || bags.count(1708) != 20 {
-		t.Fatalf("test3's clear must leave test2's items alone (bags=%d)", bags.count(1708))
-	}
-	if RecoveryPathFor("test2", "Atank") == RecoveryPathFor("test3", "Atank") {
-		t.Fatal("the recovery file path must carry the server")
-	}
-}
-
-// An unreadable itemscan fails the clear of a marked grant closed: nothing
-// is removed from bags the trial cannot read.
-func TestClearGivenUnreadableItemscanFailsClosed(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
-		t.Fatal(err)
-	}
-	s.tbFn = fastTypedError // every typed read times out unscripted
-	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if ok || !strings.Contains(ev, "itemscan") {
-		t.Fatalf("an unreadable itemscan must fail closed: ok=%v %q", ok, ev)
-	}
-	if bags.count(1708) != 20 {
-		t.Fatalf("nothing may be removed from an unreadable bag, bags=%d", bags.count(1708))
-	}
-	if len(prov.marks().forBot("test2", "Bheal")) != 1 {
-		t.Fatal("the grant must stay marked")
-	}
-}
-
-// The setup row fails closed when the count cannot be read: it never gives
-// into bags it cannot read.
-func TestSetupFailsClosedWhenTheItemScanIsUnreadable(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	bags.set(1708, 20)
-	s.tbFn = fastTypedError // every typed read times out unscripted
-	spec := BotSpec{Class: "priest", Level: 40, Items: []TrialItem{{Name: "Sweet Nectar", Count: 20}}}
-	row := prov.ensureBotGear(context.Background(), spec, "Bheal")
-	if row == nil || rowOK(row) {
-		t.Fatalf("an unreadable bag read must fail the bot_items row: %v", row)
-	}
-	if ev := rowEvidence(row); !strings.Contains(ev, "unreadable") && !strings.Contains(ev, "itemscan") {
-		t.Fatalf("the row must say the baseline could not be read: %q", ev)
-	}
-	if got := bags.seen(".tb additem"); len(got) != 0 {
-		t.Fatalf("the setup must not give into bags it cannot read: %v", got)
-	}
-}
-
-// The teardown clears only what a grant record proves: a hire's stack of an
-// id the trial never gives, and a copy of an id the trial does give but no
-// grant names, are the hire's own and stay. Teardown may never touch an item
-// it did not create in this trial.
-func TestTrialTeardownNeverTouchesCopiesNoGrantNames(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	bags.set(9999, 20) // not one of the trial's ids
-	bags.set(1708, 7)  // a leftover of the trial's own consumable, no grant
-	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2"}
-	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal",
-		RecoveryPath: prov.RecoveryPath, TrialID: "t",
-		Trial: map[string]any{"bot": map[string]any{"class": "priest", "level": int64(40),
-			"items": []any{map[string]any{"name": "Sweet Nectar", "count": int64(20)}}}}}
-	r.tbRunner = s.runner
-	r.trialTeardown(context.Background(), rep, "t")
-	if got := bags.count(9999); got != 20 {
-		t.Fatalf("an id the trial never gives must not be touched, bags=%d", got)
-	}
-	if got := bags.count(1708); got != 7 {
-		t.Fatalf("a copy no grant record names must stay, bags=%d", got)
-	}
-	if got := bags.seen(".tb removeitem"); len(got) != 0 {
-		t.Fatalf("the teardown must send no removal without a grant record, saw %v", got)
-	}
-}
-
-// A killed run's mark (a file) is cleaned by the next run before it gives
-// new items.
-func TestNextRunClearsAKilledRunsMark(t *testing.T) {
-	first, s, bags := bagProv(t)
-	if _, err := first.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
-		t.Fatal(err)
-	}
-	// the run is killed here: a brand new Provisioner reads the file.
-	next := levelProv(s)
-	next.Server = "test2"
-	next.RecoveryPath = first.RecoveryPath
-	got := next.marks().forBot("test2", "Bheal")
-	if len(got) != 1 || got[0].Item != 1708 || got[0].Count != 20 {
-		t.Fatalf("the killed run's mark must be on disk: %v", got)
-	}
-	if _, ok := next.ClearGiven(context.Background(), "Bheal"); !ok || bags.count(1708) != 0 {
-		t.Fatalf("the next run must clear the killed run's items (bags=%d)", bags.count(1708))
-	}
-}
-
-// "bags full" that clearing does not free: SKIPPED with the reason, never a
-// silent failure and never ok.
-func TestBagsFullIsSkippedWithReason(t *testing.T) {
-	prov, _, bags := bagProv(t)
-	bags.cap = 0
-	spec := BotSpec{Class: "priest", Level: 40, Items: []TrialItem{{Name: "Sweet Nectar", Count: 20}}}
-	row := prov.ensureBotGear(context.Background(), spec, "Bheal")
-	if row == nil || rowOK(row) {
-		t.Fatalf("a refused give must not be ok: %v", row)
-	}
-	if skippedIn(rowEvidence(row)) != "bot_bag_space" {
-		t.Fatalf("bags full must be SKIPPED needs=bot_bag_space with a reason, got %q", rowEvidence(row))
-	}
-}
-
-// The trial's teardown clears what it gave while the hire is still online.
-func TestTrialTeardownClearsGivenItems(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
-		t.Fatal(err)
-	}
-	var seen []string
-	inner := s.tbFn
-	s.tbFn = func(line string) []string {
-		seen = append(seen, line)
-		return inner(line)
-	}
-	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2"}
-	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal", RecoveryPath: prov.RecoveryPath, TrialID: "t"}
-	r.tbRunner = s.runner
-	r.trialTeardown(context.Background(), rep, "t")
-	idx := func(prefix string) int {
-		for i, l := range seen {
-			if strings.HasPrefix(l, prefix) {
-				return i
-			}
-		}
-		return -1
-	}
-	rm, logout := idx(".tb removeitem Bheal 1708"), idx(".tb logout")
-	if rm < 0 || (logout >= 0 && rm > logout) {
-		t.Fatalf("items must be cleared before the logout: %v", seen)
-	}
-	if bags.count(1708) != 0 || len(prov.marks().forBot("test2", "Bheal")) != 0 {
-		t.Fatal("the bags and the mark must be empty after the teardown clear")
-	}
-}
-
-// The grant clear deliberately keeps the copies the hire owned before the
-// trial's give (it stops at the recorded baseline); the teardown must not
-// take them back afterwards. A sweep over the trial's template ids would.
-func TestTrialTeardownKeepsTheHiresOwnCopiesOfAGivenItem(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	bags.set(1708, 5) // the hire owned 5 before the trial's give
-	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
-		t.Fatal(err)
-	}
-	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2"}
-	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal",
-		RecoveryPath: prov.RecoveryPath, TrialID: "t",
-		Trial: map[string]any{"bot": map[string]any{"class": "priest", "level": int64(40),
-			"items": []any{map[string]any{"name": "Sweet Nectar", "count": int64(20)}}}}}
-	r.tbRunner = s.runner
-	r.trialTeardown(context.Background(), rep, "t")
-	if got := bags.count(1708); got != 5 {
-		t.Fatalf("the hire's own 5 copies must stay after the clear, bags=%d", got)
-	}
-	if got := bags.seen(".tb removeitem Bheal 1708 20"); len(got) != 1 {
-		t.Fatalf("only the 20 granted copies may go, removals: %v", bags.seen(".tb removeitem"))
-	}
-}
-
-// A failed extra-hire slot compacts the name list (run.go drops empty names),
-// so the second extra is no longer the second name. Its cleanup is keyed by
-// the character it was granted to, never by the slot whose kit it might
-// resemble: holding a copy of the first slot's kit item must not authorize
-// destructive cleanup with the first hire's kit.
-func TestTrialTeardownKeysCleanupToTheCharacterNotTheExtraSlot(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	// The first slot's kit item and the trial's consumable, both carried
-	// by the second hire with no grant record naming them.
-	bags.set(7720, 1)
-	bags.set(1708, 3)
-	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2"}
-	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, TrialID: "t",
-		RecoveryPath: prov.RecoveryPath, ExtraNames: []string{"Bsecond"},
-		Trial: map[string]any{"extra_bots": []any{
-			map[string]any{"class": "priest", "level": int64(40), "gear": "blue",
-				"items": []any{map[string]any{"name": "Sweet Nectar", "count": int64(20)}}},
-			map[string]any{"class": "warrior", "level": int64(40),
-				"items": []any{map[string]any{"name": "Sweet Nectar", "count": int64(1)}}},
-		}}}
-	r.tbRunner = s.runner
-	r.trialTeardown(context.Background(), rep, "t")
-	if got := bags.count(7720); got != 1 {
-		t.Fatalf("the first slot's kit item must not be taken off another hire, bags=%d", got)
-	}
-	if got := bags.count(1708); got != 3 {
-		t.Fatalf("a copy no grant record names must stay, bags=%d", got)
-	}
-	if got := bags.seen(".tb removeitem"); len(got) != 0 {
-		t.Fatalf("the teardown must send no removal for copies no grant names, saw %v", got)
-	}
-}
-
-// Item (1) of #278: teardown unequips and destroys only the worn items this
-// trial added (leaving pre-existing worn/bag items untouched) and frees bag
-// space first so the next trial's equip does not hit bags full.
-func TestClearGivenUnequipsAndDestroysOnlyTrialAddedWornItems(t *testing.T) {
-	prov, _, bags := bagProv(t)
-	bags.set(9999, 1)      // pre-existing bag item (not given by trial, must stay)
-	bags.setWorn(14, 5555) // pre-existing cloak (must stay)
-	bags.setWorn(10, 6666) // pre-existing ring (duplicate entry also equipped in slot 11 below)
-	bags.itemSlot[7720] = 0
-	bags.itemSlot[9434] = 4
-	bags.itemSlot[6666] = 11
-
-	// Trial gives a consumable (1708) and kit items (7720, 9434, 6666) and equips them.
-	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range []uint32{7720, 9434, 6666} {
-		if _, err := prov.giveItem(context.Background(), "Bheal", entry, 1); err != nil {
-			t.Fatal(err)
-		}
-		if eq, err := prov.TB.Equip(context.Background(), "Bheal", entry, true); err != nil || eq.Result != "equipped" {
-			t.Fatalf("equip %d failed: %v %+v", entry, err, eq)
-		}
-		prov.marks().setWorn("test2", "Bheal", entry)
-	}
-	// Now enforce tight 2-slot bag capacity: 9999 (untouchable) + 1708 (trial bag item) occupy
-	// all 2 slots, so unequip would fail bags-full unless ClearGiven removes 1708 from bags
-	// before unequipping and destroys each unequipped piece before the next unequip.
-	bags.bagSlots = 2
-
-	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if !ok {
-		t.Fatalf("ClearGiven must unequip and clear worn trial items: ok=%v %s", ok, ev)
-	}
-	if bags.count(9999) != 1 || bags.wornAt(14) != 5555 || bags.wornAt(10) != 6666 {
-		t.Fatalf("pre-existing items touched: bag9999=%d slot14=%d slot10=%d", bags.count(9999), bags.wornAt(14), bags.wornAt(10))
-	}
-	if bags.wornAt(0) != 0 || bags.wornAt(4) != 0 || bags.wornAt(11) != 0 {
-		t.Fatalf("trial-added worn items still equipped: slot0=%d slot4=%d slot11=%d", bags.wornAt(0), bags.wornAt(4), bags.wornAt(11))
-	}
-	if bags.count(1708) != 0 || bags.count(7720) != 0 || bags.count(9434) != 0 || bags.count(6666) != 0 {
-		t.Fatalf("trial-added items still in bags: 1708=%d 7720=%d 9434=%d 6666=%d",
-			bags.count(1708), bags.count(7720), bags.count(9434), bags.count(6666))
-	}
-	// The settled grants are retired: the hire's own ring is not marked, so a
-	// later run never treats it as a copy to take back.
-	if left := prov.marks().forBot("test2", "Bheal"); len(left) != 0 {
-		t.Fatalf("a settled grant must be retired, marks: %+v", left)
-	}
-	// Next trial's give+equip must fit in the freed bag slot without bags-full.
-	if _, err := prov.giveItem(context.Background(), "Bheal", 7720, 1); err != nil {
-		t.Fatalf("next trial give hit bags full: %v", err)
-	}
 }

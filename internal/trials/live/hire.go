@@ -14,8 +14,72 @@ type hireTarget struct {
 	name, guid string
 }
 
-// hireTargets lists the hire and the extras of a repeat, each with the guid the setup read from the hire reply (the
-// extras' guids are in the setup's order).
+// noteHire records a character the repeat acquired, keyed by name, the moment
+// its login succeeded; a later call fills its character GUID. It never
+// removes an entry: a hire whose party identity check failed is still in the
+// teardown list.
+func (rep *Repeat) noteHire(name, guid string) {
+	if strings.TrimSpace(name) == "" {
+		return
+	}
+	g := canonGUID(guid)
+	for i := range rep.Hires {
+		if strings.EqualFold(rep.Hires[i].name, name) {
+			if g != "" {
+				rep.Hires[i].guid = g
+			}
+			return
+		}
+	}
+	rep.Hires = append(rep.Hires, hireTarget{name: name, guid: g})
+}
+
+// acquiredHires is the teardown list: every character the repeat acquired,
+// in acquisition order. The setup document's filtered names are never used
+// for it.
+func acquiredHires(rep *Repeat) []hireTarget {
+	if len(rep.Hires) > 0 {
+		return rep.Hires
+	}
+	// A repeat whose provisioner had no callbacks (older tests, a dry run)
+	// still releases the households the setup named.
+	var out []hireTarget
+	if rep.BotName != "" {
+		out = append(out, hireTarget{name: rep.BotName, guid: canonGUID(rep.Guids.Bot)})
+	}
+	for _, name := range rep.ExtraNames {
+		out = append(out, hireTarget{name: name})
+	}
+	return out
+}
+
+// resolveHireGUID finds a hire's guid at teardown: the registry's own record
+// first, then the party roster (a hire that failed the setup's identity
+// check is usually still in it), by name. It returns "" when neither read
+// proves one.
+func (r *Runner) resolveHireGUID(ctx context.Context, rep *Repeat, h hireTarget) string {
+	if h.guid != "" {
+		return h.guid
+	}
+	if strings.EqualFold(h.name, rep.BotName) && canonGUID(rep.Guids.Bot) != "" {
+		return canonGUID(rep.Guids.Bot)
+	}
+	tctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	info, err := rep.Client.Party(tctx)
+	if err != nil {
+		return ""
+	}
+	for _, m := range info.Members {
+		if strings.EqualFold(m.Name, h.name) {
+			return normGUIDOf(m.GUID)
+		}
+	}
+	return ""
+}
+
+// hireTargets lists the hire and the extras of a repeat, each with the guid the setup read from the setup's guid
+// table (the extras' guids are in the setup's order): the situation's list, not the teardown's registry.
 func hireTargets(r *Repeat) []hireTarget {
 	var out []hireTarget
 	if strings.TrimSpace(r.BotName) != "" {

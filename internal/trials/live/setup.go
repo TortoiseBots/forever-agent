@@ -81,11 +81,11 @@ type LiveSetup struct {
 	EquipWait time.Duration
 	EquipPoll time.Duration
 
-	// Server is the test server's name (the recovery marks' word);
-	// RecoveryPath is the recovery mark file of the items the trial gives;
-	// empty means RecoveryPathFor(server, player) under the state dir.
+	// Server is the test server's name (the item grants' word);
+	// GrantPath is the item grant file of the items the trial gives; empty
+	// means GrantPathFor(server, player) under the state dir.
 	Server       string
-	RecoveryPath string
+	GrantPath string
 
 	// TBRunner overrides the `.tb` transport (tests inject the scripted
 	// fake); nil means the serve-backed runner over Client.
@@ -153,16 +153,17 @@ func (s *LiveSetup) Run(ctx context.Context, r *Repeat) (map[string]any, error) 
 	}
 	wanted := wantedChecks(trial)
 	tb := tbcmd.NewClient(s.runnerOr(r))
-	recovery := s.RecoveryPath
-	if recovery == "" {
-		recovery = RecoveryPathFor(s.Server, s.playerOr(r))
+	grants := s.GrantPath
+	if grants == "" {
+		grants = GrantPathFor(s.Server, s.playerOr(r))
 	}
-	r.RecoveryPath = recovery
+	r.GrantPath = grants
 	prov := &Provisioner{Client: s.clientOr(r), TB: tb, Guard: r.Guard, Ledger: s.ledgerOr(r),
-		Player: s.playerOr(r), Pool: s.Pool, Timeout: s.Timeout, Server: s.Server, RecoveryPath: recovery}
+		Player: s.playerOr(r), Pool: s.Pool, Timeout: s.Timeout, Server: s.Server, GrantPath: grants, CharGUIDs: map[string]string{}}
 	// The hires are known to the repeat the moment they log in: a setup that
-	// fails or is SKIPPED later still gets them logged out and cleared.
-	prov.OnHire = func(name string) { r.BotName = name }
+	// fails or is SKIPPED later still gets them logged out and cleared, and
+	// the guid joins the registry as soon as the party roster proves it.
+	prov.OnHire = func(name string) { r.BotName = name; r.noteHire(name, "") }
 	prov.OnExtra = func(name string) {
 		for _, have := range r.ExtraNames {
 			if have == name {
@@ -170,7 +171,9 @@ func (s *LiveSetup) Run(ctx context.Context, r *Repeat) (map[string]any, error) 
 			}
 		}
 		r.ExtraNames = append(r.ExtraNames, name)
+		r.noteHire(name, "")
 	}
+	prov.OnHireGUID = func(name, guid string) { r.noteHire(name, guid) }
 	ps := &PlayerSetup{Client: s.clientOr(r), TB: tb, Guard: r.Guard, Ledger: s.ledgerOr(r),
 		Player: s.playerOr(r), Timeout: s.Timeout}
 

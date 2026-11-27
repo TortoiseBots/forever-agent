@@ -439,34 +439,33 @@ func (c *Client) FreeTextAddItem(ctx context.Context, bot string, item uint32, c
 	return raws, nil
 }
 
-// RemoveItemResult is the module's `removeitem` answer: how many of the item
-// it took out of the bot's bags and how many the bags still hold.
+// RemoveItemResult is the module's `removeitem` answer for one item instance:
+// the GUID it acted on, that instance's id, whether the copy is gone, and how
+// many of the item the bags still hold afterwards.
 type RemoveItemResult struct {
 	Bot     string
 	Item    uint32
+	GUID    string
 	Removed int
 	Left    int
 }
 
-// FreeTextRemoveItem sends `.tb removeitem <bot> <item id> [count]`: the
-// module takes count of an item out of the bot's bags (no count removes
-// every one). The module answers one line,
-// `removeitem bot=<name> item=<id> removed=<n> left=<n>`; that line is
-// parsed and must name the asked bot and item. The old negative-count
-// `.tb additem` form is not a removal and is never sent. The caller still
-// proves the result with `ItemScan`.
-func (c *Client) FreeTextRemoveItem(ctx context.Context, bot string, item uint32, count uint32) (RemoveItemResult, []string, error) {
+// RemoveItemInstance sends `.tb removeitem <bot> guid <32-hex item guid>`: the
+// module destroys the one item instance the GUID names (a worn copy must be
+// unequipped first) and answers
+// `removeitem bot=<name> item=<id> guid=<32hex> removed=<0|1> left=<n>`. The
+// answer must name the asked bot and GUID; it is not the proof. The caller
+// proves the copy gone with `ItemScan`'s instances= list.
+func (c *Client) RemoveItemInstance(ctx context.Context, bot, guid string) (RemoveItemResult, []string, error) {
 	setup, err := setupName("removeitem", bot)
 	if err != nil {
 		return RemoveItemResult{}, nil, err
 	}
-	if item == 0 {
-		return RemoveItemResult{}, nil, fmt.Errorf("tbcmd: removeitem item id 0 is not an id")
+	want, err := ItemGUID(guid)
+	if err != nil {
+		return RemoveItemResult{}, nil, fmt.Errorf("tbcmd: removeitem: %w", err)
 	}
-	line := ".tb removeitem " + setup + " " + strconv.FormatUint(uint64(item), 10)
-	if count > 0 {
-		line += " " + strconv.FormatUint(uint64(count), 10)
-	}
+	line := ".tb removeitem " + setup + " guid " + want
 	raws, rep, err := c.freeTextNamed(ctx, line, bot)
 	if err != nil {
 		return RemoveItemResult{}, raws, err
@@ -475,9 +474,10 @@ func (c *Client) FreeTextRemoveItem(ctx context.Context, bot string, item uint32
 		if perr != nil {
 			return RemoveItemResult{}, raws, perr
 		}
-		if !strings.EqualFold(res.Bot, setup) || res.Item != item {
-			return res, raws, fmt.Errorf("%w: removeitem answered for %q item %d, asked for %q item %d",
-				ErrBadReport, res.Bot, res.Item, setup, item)
+		got, gerr := ItemGUID(res.GUID)
+		if !strings.EqualFold(res.Bot, setup) || gerr != nil || got != want {
+			return res, raws, fmt.Errorf("%w: removeitem answered for %q item guid %q, asked for %q guid %s",
+				ErrBadReport, res.Bot, res.GUID, setup, want)
 		}
 		return res, raws, nil
 	}
@@ -491,9 +491,9 @@ func (c *Client) FreeTextRemoveItem(ctx context.Context, bot string, item uint32
 	return RemoveItemResult{}, raws, fmt.Errorf("%w: .tb %s: no removeitem record in the answer", ErrBadReport, line)
 }
 
-// parseRemoveItem finds the `removeitem bot= item= removed= left=` line. ok
-// is false when no line starts with the record word; err is set when the
-// record is there but a key is missing or not a number.
+// parseRemoveItem finds the `removeitem bot= item= guid= removed= left=`
+// line. ok is false when no line starts with the record word; err is set when
+// the record is there but a key is missing or not a number.
 func parseRemoveItem(raws []string) (RemoveItemResult, bool, error) {
 	for _, raw := range raws {
 		fields := strings.Fields(raw)
@@ -519,12 +519,13 @@ func parseRemoveItem(raws []string) (RemoveItemResult, bool, error) {
 		var res RemoveItemResult
 		res.Bot = kv["bot"]
 		item, ierr := strconv.ParseUint(kv["item"], 10, 32)
+		guid, gerr := ItemGUID(kv["guid"])
 		removed, rerr := strconv.Atoi(kv["removed"])
 		left, lerr := strconv.Atoi(kv["left"])
-		if res.Bot == "" || ierr != nil || rerr != nil || lerr != nil || removed < 0 || left < 0 {
-			return res, true, fmt.Errorf("%w: removeitem record needs bot=, item=, removed=, left=: %q", ErrBadReport, raw)
+		if res.Bot == "" || ierr != nil || gerr != nil || rerr != nil || lerr != nil || removed < 0 || removed > 1 || left < 0 {
+			return res, true, fmt.Errorf("%w: removeitem record needs bot=, item=, guid= (32 hex), removed= (0 or 1), left=: %q", ErrBadReport, raw)
 		}
-		res.Item, res.Removed, res.Left = uint32(item), removed, left
+		res.Item, res.GUID, res.Removed, res.Left = uint32(item), guid, removed, left
 		return res, true, nil
 	}
 	return RemoveItemResult{}, false, nil

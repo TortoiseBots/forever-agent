@@ -139,6 +139,54 @@ func TestTestkitItemScan(t *testing.T) {
 	if rep.Results[1].Exists {
 		t.Fatalf("ItemScan second: %+v", rep.Results[1])
 	}
+	if rep.Results[0].HasInstances || len(rep.Results[0].Instances) != 0 {
+		t.Fatalf("a record with no instances= has no list: %+v", rep.Results[0])
+	}
+}
+
+// TestTestkitItemScanInstances: the record's instances= list is the item's
+// copies by their own GUIDs, each with its container, slot and count; a worn
+// copy is one in an equipment slot (bag 255, slot 0-18). A malformed list is
+// a bad report, never a silently dropped copy.
+func TestTestkitItemScanInstances(t *testing.T) {
+	const a = "0000000000000000000000000000beef"
+	const w = "00000000000000000000000000000042"
+	r := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		return reply(o, "itemscan-begin #T",
+			"itemscan bot=Bheal item=7720 exists=yes name=Hat class=4:1 inv=2 req=0 quality=3 ilvl=40 canequip=yes slot=0 why= instances="+a+":255:23:1;"+w+":255:0:1 #T",
+			"itemscan-end bot=Bheal count=1 records=1 exist=1 canequip=1 #T"), nil
+	}}
+	rep, err := NewClient(r).ItemScan(context.Background(), "Bheal", 7720)
+	if err != nil {
+		t.Fatalf("ItemScan: %v", err)
+	}
+	got := rep.Results[0]
+	if !got.HasInstances || len(got.Instances) != 2 {
+		t.Fatalf("instances: %+v", got)
+	}
+	if got.Instances[0].GUID != a || got.Instances[0].Bag != 255 || got.Instances[0].Slot != 23 ||
+		got.Instances[0].Count != 1 || got.Instances[0].Worn {
+		t.Fatalf("bag instance: %+v", got.Instances[0])
+	}
+	if !got.Instances[1].Worn || got.Instances[1].Slot != 0 || got.Instances[1].GUID != w {
+		t.Fatalf("worn instance: %+v", got.Instances[1])
+	}
+
+	for name, list := range map[string]string{
+		"no count":   a + ":255:23",
+		"short guid": "beef:255:23:1",
+		"no copies":  a + ":255:23:0",
+		"bad number": a + ":x:23:1",
+	} {
+		r := &fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+			return reply(o, "itemscan-begin #T",
+				"itemscan bot=Bheal item=7720 exists=yes name=Hat class=4:1 inv=1 req=0 quality=3 ilvl=40 canequip=no why= instances="+list+" #T",
+				"itemscan-end bot=Bheal count=1 records=1 exist=1 canequip=0 #T"), nil
+		}}
+		if _, err := NewClient(r).ItemScan(context.Background(), "Bheal", 7720); err == nil {
+			t.Errorf("%s: %q must not parse", name, list)
+		}
+	}
 }
 
 func TestTestkitKillGM(t *testing.T) {

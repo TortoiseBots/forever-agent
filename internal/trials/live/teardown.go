@@ -400,10 +400,10 @@ func (r *Runner) waitFull(ctx context.Context, client *Client, guid string) (hp,
 }
 
 // trialTeardown releases the trial's hires at trial end: stay, free, logout
-// for each, with the module's own answers ledgered. It returns what it could
-// not prove (items not cleared, a logout the module refused, the forced role
-// not cleared): the runner records it and a sweep stops on it. It never
-// changes a verdict.
+// for every character the trial acquired, with the module's own answers
+// ledgered. It returns what it could not prove (items not cleared, a logout
+// the module refused, the forced role not cleared): the runner records it and
+// a sweep stops on it. It never changes a verdict.
 func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string) []string {
 	if r.dry() {
 		return nil
@@ -413,60 +413,51 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 	}
 	var problems []string
 	tb := r.tbOf(rep)
-	names := []string{}
-	if rep.BotName != "" {
-		names = append(names, rep.BotName)
-	}
-	names = append(names, rep.ExtraNames...)
-	prov := &Provisioner{Client: rep.Client, TB: tb, Ledger: rep.Ledger, Server: r.Server, RecoveryPath: rep.RecoveryPath}
-	// Items first, on the teardown context. What the trial's grants gave goes
-	// back out of the bags while the hire is still online. Only the copies a
-	// grant proved are taken back, each capped at that grant's proved count
-	// and floored at the carried count read before its give; an id with no
-	// grant is the hire's own and is never touched, and neither is any copy a
-	// proved grant deliberately kept (a hire's own copies above a settled
-	// grant's floor stay). A clear that cannot be proved is ledgered, the
-	// grant record stays for the next run, and the teardown reports it. The
-	// count comes from `.tb itemscan` by item id; the slot for an unequip
-	// comes from a complete `.bot inv` reply.
-	for _, name := range names {
-		if name == "" {
-			continue
-		}
-		clearEv, cleared := prov.ClearGiven(ctx, name)
-		rep.Ledger.Add(map[string]any{"kind": "items_cleared", "bot": name, "ok": cleared, "evidence": clearEv})
+	// The list is the acquired-character registry (filled at login), never a
+	// filtered setup document: a hire that logged in and then failed its
+	// party identity check is still logged out and cleared here.
+	hires := acquiredHires(rep)
+	prov := &Provisioner{Client: rep.Client, TB: tb, Ledger: rep.Ledger, Server: r.Server, GrantPath: rep.GrantPath}
+	// Items first, on the teardown context. Only the item instances a grant
+	// recorded are deleted, each by its own GUID on the exact character the
+	// grant names; a copy no record names (the hire's own, a merged stack) is
+	// never touched. A clear that cannot be proved is ledgered, its grants
+	// stay for the next run, and the teardown reports it. No count is read or
+	// used: the server's instance list is the only evidence.
+	for _, h := range hires {
+		clearEv, cleared := prov.ClearGiven(ctx, h.name)
+		rep.Ledger.Add(map[string]any{"kind": "items_cleared", "bot": h.name, "ok": cleared, "evidence": clearEv})
 		if !cleared {
-			r.logf("%s: items of %s not cleared: %s", trialID, name, clearEv)
-			problems = append(problems, "items of "+name+" not cleared: "+trimReason(clearEv))
+			r.logf("%s: items of %s not cleared: %s", trialID, h.name, clearEv)
+			problems = append(problems, "items of "+h.name+" not cleared: "+trimReason(clearEv))
 		}
 	}
 	// The release steps then run on a fresh teardown context whose clock
-	// starts only now: the clear may use its whole window (a 20-copy stack did
-	// on 2026-11-27), and starting the release budget beside it left stay,
-	// free and logout on an expired context, so the pool hire stayed online.
+	// starts only now: the clear may use its whole window, and starting the
+	// release budget beside it left stay, free and logout on an expired
+	// context, so the pool hire stayed online.
 	releaseCtx, cancelRelease := r.teardownCtx(ctx)
 	defer cancelRelease()
-	for _, name := range names {
-		if name == "" {
-			continue
+	for _, h := range hires {
+		if _, err := tb.Stay(releaseCtx, h.name); err != nil {
+			r.logf("%s: .tb order %s stay: %v", trialID, h.name, err)
 		}
-		if _, err := tb.Stay(releaseCtx, name); err != nil {
-			r.logf("%s: .tb order %s stay: %v", trialID, name, err)
-		}
-		if _, err := tb.Free(releaseCtx, name); err != nil {
-			r.logf("%s: .tb order %s free: %v", trialID, name, err)
+		if _, err := tb.Free(releaseCtx, h.name); err != nil {
+			r.logf("%s: .tb order %s free: %v", trialID, h.name, err)
 		}
 		// The module answers `.tb logout` before the character is gone: a
 		// teardown that returned on the answer left the hire online and the
 		// next trial's login found it "already logged in" (2026-11-25). A
 		// roster drop alone is no proof (a kick or a disband drops it too), so
-		// the hire's own unit row must stop answering as well.
-		lines, ev, proved := r.logoutProved(releaseCtx, rep.Client, tb, name, hireGUID(rep, name))
+		// the hire's own unit row must stop answering as well. The guid is
+		// resolved now, from the registry or the party roster.
+		guid := r.resolveHireGUID(releaseCtx, rep, h)
+		lines, ev, proved := r.logoutProved(releaseCtx, rep.Client, tb, h.name, guid)
 		if !proved {
-			r.logf("%s: .tb logout %s: %s", trialID, name, ev)
-			problems = append(problems, "logout of "+name+" not confirmed: "+ev)
+			r.logf("%s: .tb logout %s: %s", trialID, h.name, ev)
+			problems = append(problems, "logout of "+h.name+" not confirmed: "+ev)
 		}
-		rep.Ledger.Add(map[string]any{"kind": "logged_out", "bot": name, "reply": firstLines(lines),
+		rep.Ledger.Add(map[string]any{"kind": "logged_out", "bot": h.name, "guid": guid, "reply": firstLines(lines),
 			"error": ev})
 	}
 	if _, err := tb.RoleSelf(releaseCtx, "clear"); err != nil {
@@ -474,27 +465,6 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		problems = append(problems, "forced role not cleared: "+trimReason(err.Error()))
 	}
 	return problems
-}
-
-// hireGUID is the guid setup recorded for the named hire (the main hire or an
-// extra, aligned by name with rep.Guids.Extras): the logout proof's unit read
-// keys on it.
-func hireGUID(rep *Repeat, name string) string {
-	if strings.EqualFold(name, rep.BotName) {
-		return canonGUID(rep.Guids.Bot)
-	}
-	// The extras' names and guids are separate lists: only equal lengths
-	// prove the same order (a slot without a guid drops out of the guid
-	// list), so a mismatch is no guid at all rather than a neighbour's.
-	if len(rep.Guids.Extras) != len(rep.ExtraNames) {
-		return ""
-	}
-	for i, extra := range rep.ExtraNames {
-		if strings.EqualFold(name, extra) {
-			return canonGUID(rep.Guids.Extras[i])
-		}
-	}
-	return ""
 }
 
 // logoutProved sends `.tb logout` and waits for the hire to leave both the

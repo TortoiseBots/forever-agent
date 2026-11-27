@@ -268,16 +268,11 @@ func TestTrialTeardownReleaseBudgetStartsAfterTheClear(t *testing.T) {
 		}
 		return nil
 	}
-	// A grant record gives the clear a count to read; the itemscan below
+	// A grant record gives the clear an instance to read; the itemscan below
 	// blocks on the clear's own deadline.
-	prov := &Provisioner{Server: "test2", RecoveryPath: filepath.Join(t.TempDir(), "mark.json")}
-	g, err := prov.marks().begin(givenItem{Server: "test2", Bot: "Bheal", Item: 1708, Base: 0, Intent: 20})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := prov.marks().confirm(g.Grant, 20); err != nil {
-		t.Fatal(err)
-	}
+	prov := &Provisioner{Server: "test2", GrantPath: filepath.Join(t.TempDir(), "grants.json")}
+	writeGrants(t, prov.GrantPath, []ItemGrant{{Server: "test2", Character: "Bheal", Item: 1708,
+		GUID: "00000000000000000000000000000001"}})
 	inner := s.runner.bot
 	s.runner.bot = func(ctx context.Context, line string, waitMS int) (BotResult, error) {
 		if strings.HasPrefix(line, ".tb itemscan") {
@@ -299,7 +294,7 @@ func TestTrialTeardownReleaseBudgetStartsAfterTheClear(t *testing.T) {
 		LogoutWait: time.Second}
 	r.tbRunner = s.runner
 	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal", TrialID: "t",
-		Guids: Guids{Bot: gHire}, RecoveryPath: prov.RecoveryPath}
+		Guids: Guids{Bot: gHire}, GrantPath: prov.GrantPath}
 	// The clear starts on a deadline far longer than the release budget and
 	// holds it until it expires: a release clock started beside it is dead.
 	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
