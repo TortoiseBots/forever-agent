@@ -1,7 +1,7 @@
 ---
 type: Method Reference
 title: Groups, raids and guilds
-description: Invite and leave a group, read the party roster, lead a party (promote, loot method, marks, disband), convert it to a raid, invite a character to a guild, offer a charter, handle guild invites, and check the group code live.
+description: Invite and leave a group, read the party roster, lead a party (promote, ready check, loot method, marks, disband), convert it to a raid, invite a character to a guild, offer a charter, handle guild invites, and check the group code live.
 tags: [player-actions, party, raid, guild, group-control]
 status: stable
 generated: { by: forever-agent docs, at: 2026-11-27T00:00:00Z }
@@ -14,6 +14,8 @@ sources:
     resource: internal/forever/world/groupctl.go
   - id: raidctl
     resource: internal/forever/world/raidctl.go
+  - id: readycheck
+    resource: internal/forever/world/readycheck.go
   - id: guild-session
     resource: internal/forever/world/guild_session.go
   - id: guild-offer
@@ -66,14 +68,16 @@ no pending invite it is `no pending group invite`. `leave_group` needs a valid r
 | `loot_method` | `method`, `master`, `threshold` | Set the loot method. |
 | `mark` | `guid` or `name`, `icon` | Put a raid target icon on a unit. |
 | `marks` | none | Read the icons back. |
+| `ready_check` | none | Start a ready check as the leader. |
 | `disband` | none | End the party. |
 
-Only the leader may `promote`, `assistant`, `loot_method` and `disband`; in a party any member may `mark`. These
-calls are refused in a raid (`raid group control is not ported yet`), because the raid ranks differ and the raid
-operations come with the raid runs. The exception is `assistant`: the flag is a raid rank the core sets only in a
-raid and only from the leader, so `assistant` takes a raid and refuses a party with
+Only the leader may `promote`, `assistant`, `loot_method`, `ready_check` and `disband`; in a party any member may
+`mark`. `promote`, `loot_method` and `disband` are refused in a raid (`raid group control is not ported yet`),
+because the raid ranks differ and the raid operations come with the raid runs. `assistant` is the first exception:
+the flag is a raid rank the core sets only in a raid and only from the leader, so `assistant` takes a raid and
+refuses a party with
 `assistant: needs a raid: convert_raid first` (a non-leader reads `assistant: only the leader can (the leader is
-NAME)`).
+NAME)`). `ready_check` is the second: it takes a party or a raid, as long as this character leads it.
 
 `loot_method.method` is one of `free-for-all`, `round-robin`, `master-loot`, `group-loot`, `need-before-greed`,
 `personal-loot` (or its number 0-5; the short forms `ffa`, `round`, `master`, `group`, `need`, `personal` are
@@ -91,6 +95,34 @@ The older daemon's group-finder methods (`lfg_join`, `lfg_leave`, `lfg_listings`
 proposal answers and `lfg_listing_role`) are refused by `forever serve` with a `-32003` error: the client dungeon
 finder is not built on Forever, and the module's own finder fills the party and queues (`forever fb-dungeon`, and
 the module's `.bot lfg` and `.bot dungeon` commands).
+
+# Ready check
+
+`ready_check` sends the client's ready check start (`CMSG_DO_READY_CHECK`, the core's `0x43005E`, wire `0x44005E`)
+as the playing character and answers once the core's broadcast start arrived. The character must lead the group; a
+raid is allowed. (The core also takes the start from an assistant, but this method sends only as the leader.)
+Outside a group, without a valid roster, or as a non-leader the call is refused before anything is sent
+(`ready_check: not in a group`, `ready_check: no valid party roster (...)`, `ready_check: only the leader can (the
+leader is NAME)`). A start the core refuses (for example another check already runs) gets no answer, so the call
+fails with `ready_check: the server did not confirm it within 5s (...)`.
+
+The members' answers and the finish are packets the core broadcasts; they arrive as `party` events in the session's
+event stream (an offline member's answer, or a one-member check's finish, can arrive before the call returns):
+
+| `data.state` | Fields | Meaning |
+|---|---|---|
+| `ready_check_started` | `index`, `party_guid`, `duration_ms` | The broadcast start; `source_guid` is the member who started it. |
+| `ready_check_response` | `ready`, `party_guid` | One member's answer; `source_guid` is that member. |
+| `ready_check_completed` | `index`, `party_guid`, `ready`, `not_ready` | The finish, with the answers seen so far; the two counts are absent when the finish arrived before its start. |
+
+The core ends a check itself once every member has answered or its 35 s timer runs out. It broadcasts the offline
+members' answers (and a one-member check's finish) before the `ready_check_started` row, so the rows keep that order;
+the session applies those early answers to the check when its start names the same party. The core marks the member
+who starts the check ready at the start and broadcasts no answer row for them, so a two-member check with one answer
+reads one answer.
+
+Read the rows with the `events` method (`forever rpc DIR events '{"since": 0}'`) or the event stream on
+[Events and logs](../daemon/events-and-logs.md).
 
 # Raid control
 
@@ -155,8 +187,8 @@ what came back and logs out.
 ```bash
 forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
     --character NAME [--stay 5s] [--invite NAME | --accept-from NAME | --decline-from NAME] \
-    [--uninvite NAME] [--promote NAME [--promote-back DURATION]] [--loot METHOD[:THRESHOLD]] \
-    [--mark ICON] [--wait-join DURATION] [--settle 4s] [--capture-dir DIR]
+    [--uninvite NAME] [--promote NAME [--promote-back DURATION]] [--ready-check [--ready-wait DURATION]] \
+    [--loot METHOD[:THRESHOLD]] [--mark ICON] [--wait-join DURATION] [--settle 4s] [--capture-dir DIR]
 ```
 
 | Flag | Default | Meaning |
@@ -168,15 +200,18 @@ forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FIL
 | `--uninvite NAME` | none | After the group formed, uninvite this member, `--invite` only (only the inviter can). |
 | `--promote NAME` | none | Promote this member to leader and wait for the roster that shows it. |
 | `--promote-back DURATION` | `0` | With `--promote`: then wait up to this long for the new leader to promote this character back (an agent session on the other side); at most 2m. |
+| `--ready-check` | off | Start a ready check as the group leader and log every member's answer; the same packets the `ready_check` method sends. |
+| `--ready-wait DURATION` | `40s` | With `--ready-check`: wait up to this long for the members' answers and the finish (the core ends the check at 35 s; `0` returns after the start); at most 2m. |
 | `--loot METHOD[:THRESHOLD]` | none | Set the loot method and read the roster back: `free-for-all`, `round-robin`, `master-loot`, `group-loot`, `need-before-greed`, `personal-loot`, or `0..5`; threshold 2-6, default 2. |
 | `--mark ICON` | none | Set this raid target icon on the nearest attackable creature and read the icon list back: `star`, `circle`, `diamond`, `triangle`, `moon`, `square`, `cross`, `skull`. |
 | `--wait-join DURATION` | `0` | With `--invite`: wait up to this long for the group to form (stats, party line, stay); at most 2m. |
 | `--capture-dir DIR` | none | Write every packet the combat, chat and party handlers see into a new run directory under this path; keep it outside the repository. |
 
-The summary is the roster the session saw, in the same fields as the `party` method:
+The summary is the roster the session saw, in the same fields as the `party` method, plus the last ready check:
 
 ```text
 party-check: in a group, 2 member(s), leader Mychar, loot free-for-all
+party-check: ready check finished, 1 answer(s), 1 ready, 0 not ready
   Mychar connected=true subgroup=0 class=1 roles=0 assistant 1500/1500 hp 100/100 power level 12 auras 2
   Otherchar connected=true subgroup=0 class=4 roles=0
 ```
@@ -220,6 +255,19 @@ forever-agent forever rpc ./slots/ACCOUNT convert_raid '{}'
 forever-agent forever rpc ./slots/ACCOUNT raid_move '{"name": "Otherchar", "subgroup": 3}'
 ```
 
+Start a ready check and read the answers from the event stream:
+
+```
+forever-agent forever rpc ./slots/ACCOUNT ready_check '{}'
+forever-agent forever rpc ./slots/ACCOUNT events '{"since": 0}'
+```
+
+Or start it from a one-shot live check and log every answer:
+
+```
+forever-agent forever party-check --account EMAIL --character Mychar --ready-check
+```
+
 Leave the group:
 
 ```
@@ -242,5 +290,7 @@ refused group command gets no answer)`.
   with one of them`.
 - `raid_move: needs the group leader or an assistant`.
 - `convert_raid: the group has 1 member(s): the core converts a group of two or more`.
+- `ready_check: only the leader can (the leader is Otherchar)`; `ready_check: the server did not confirm it within
+  5s (...)`, which is what a core that refused the start (another check running) answers.
 - `accept_guild_invite: no pending guild invite`.
 - `leave_group: not in a group`; `no valid party roster (...)` when the roster lost an update.

@@ -237,6 +237,9 @@ func TestClientOpcodeTranslation(t *testing.T) {
 		{0x430016, "CMSG_PLAYER_LOGIN", 0x440016, 0x440016},
 		// arithmetic group+1: 0x43 -> 0x44
 		{0x430024, "CMSG_LOADING_SCREEN_NOTIFY", 0x440024, 0x440024},
+		// #288: CMSG_DO_READY_CHECK is not in ClassicClientOpcodes.inc, so the pure group arithmetic names it:
+		// 0x43 -> 0x44, index 0x5E below the main-group insert (0x13B) on both client builds.
+		{0x43005E, "CMSG_DO_READY_CHECK", 0x44005E, 0x44005E},
 		{0x4300AB, "CMSG_KEEP_ALIVE", 0x4400AB, 0x4400AD},
 		{0x430000, "CMSG_CONNECT_TO_FAILED", 0x440000, 0x440000},
 		// .inc 0x420064/0x42005C -> 0x410064/0x41005C (groups below 0x44: no shift)
@@ -646,6 +649,23 @@ func TestQuestShareOpcodesTranslate(t *testing.T) {
 			if got := table.TranslateClientWire(w); got != c.core {
 				t.Errorf("%s build %d: wire 0x%06X named 0x%06X, want 0x%06X", c.name, build, w, got, c.core)
 			}
+		}
+	}
+}
+
+// TestReadyCheckClientOpcode: #288's CMSG_DO_READY_CHECK is named and translated on both supported client builds.
+func TestReadyCheckClientOpcode(t *testing.T) {
+	if got := ClientName(CMSGDoReadyCheck); got != "CMSG_DO_READY_CHECK" {
+		t.Fatalf("ClientName(0x%06X) = %q, want CMSG_DO_READY_CHECK", CMSGDoReadyCheck, got)
+	}
+	for _, build := range []uint32{realmBuild70707, clientBuild70938} {
+		table := NewOpcodeTable(build, realmBuild70707)
+		w, ok := table.WireForClient(CMSGDoReadyCheck)
+		if !ok || w != 0x44005E {
+			t.Errorf("build %d: wire 0x%06X (ok=%v), want 0x44005E", build, w, ok)
+		}
+		if back := table.TranslateClientWire(0x44005E); back != CMSGDoReadyCheck {
+			t.Errorf("build %d: wire 0x44005E named 0x%06X, want 0x%06X", build, back, CMSGDoReadyCheck)
 		}
 	}
 }

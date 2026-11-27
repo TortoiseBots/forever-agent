@@ -3,6 +3,7 @@ package party
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
@@ -28,7 +29,37 @@ const (
 	EventLostInvite
 	EventInvalidRoster
 	EventUnexpectedRoster
+	EventReadyCheckStarted
+	EventReadyCheckResponse
+	EventReadyCheckCompleted
 )
+
+// ReadyCheck is the group's current or last ready check: the core starts one per group state and broadcasts the
+// answers until every member has one (Group.cpp:1472-1560). Answers keeps what each member said, Answered their
+// order, so a reader can name who answered and who never did.
+type ReadyCheck struct {
+	Active    bool
+	Complete  bool
+	Index     int8
+	PartyGUID wire.GUID
+	Initiator wire.GUID
+	Duration  time.Duration
+	Answers   map[wire.GUID]bool
+	Answered  []wire.GUID
+}
+
+// Counts returns how many of the recorded answers are ready and how many are not.
+func (r *ReadyCheck) Counts() (ready, notReady int) {
+	if r == nil {
+		return 0, 0
+	}
+	for _, isReady := range r.Answers {
+		if isReady {
+			ready++
+		}
+	}
+	return ready, len(r.Answers) - ready
+}
 
 // Event is one change the model made from a packet.
 type Event struct {
@@ -85,6 +116,14 @@ type State struct {
 	Order   []wire.GUID
 
 	Invite *Invite
+	// ReadyCheck is the current or last ready check, nil before the first one.
+	ReadyCheck *ReadyCheck
+	// pendingReady holds the answers and the finish that arrived before the start they belong to.
+	// Group::StartReadyCheck marks the offline members and may end a one-member check before it broadcasts
+	// SMSG_READY_CHECK_STARTED (Group.cpp:1484-1493), so the core's packets arrive completed/response first.
+	// They are bounded like the check's own answers and replayed when the start names the same party.
+	pendingReady         []ReadyCheckResponse
+	pendingReadyComplete *ReadyCheckCompleted
 
 	// pending is the first roster a transition must produce: the accepted invite's leader, or the name of an
 	// outgoing invite the server confirmed. The first roster after the transition is checked against it, and a
@@ -100,18 +139,21 @@ type State struct {
 	events []Event
 	next   int
 
-	Updates        int
-	States         int
-	OrphanStates   int
-	PartialStates  int
-	ReadyChecks    int
-	CommandResults int
-	Declines       int
-	Kicks          int
-	Destroys       int
-	HeldRosters    int // rosters that arrived before this character's own GUID was known (applied by SetSelf)
-	LeaderChanges  int
-	Invites        int
+	Updates       int
+	States        int
+	OrphanStates  int
+	PartialStates int
+	// ReadyChecks counts the starts; ReadyCheckAnswers and ReadyCheckCompletes count the packets that follow.
+	ReadyChecks         int
+	ReadyCheckAnswers   int
+	ReadyCheckCompletes int
+	CommandResults      int
+	Declines            int
+	Kicks               int
+	Destroys            int
+	HeldRosters         int // rosters that arrived before this character's own GUID was known (applied by SetSelf)
+	LeaderChanges       int
+	Invites             int
 
 	// Marks is the group's raid target icons, indexed by Mark: what the client shows and the mark commands read
 	// back. The core sends one single update per change and the whole list on request (Group.cpp:820-852).
@@ -338,8 +380,14 @@ func (s *State) apply(u Update) bool {
 	s.Type = u.Type
 	s.MyIndex = u.MyIndex
 	if s.PartyGUID != u.PartyGUID {
-		// A roster of another group is another group's icon list: the slots cannot carry over.
+		// A roster of another group is another group's icon list: the slots cannot carry over. Its ready check
+		// cannot either, and a running one will get no finish from the group that replaced it.
 		s.clearMarks()
+		if s.ReadyCheck != nil {
+			s.ReadyCheck.Active = false
+		}
+		s.pendingReady = nil
+		s.pendingReadyComplete = nil
 	}
 	s.PartyGUID = u.PartyGUID
 	s.LeaderGUID = u.LeaderGUID
@@ -554,6 +602,12 @@ func (s *State) markDestroyed(why string) {
 	s.Members = make(map[wire.GUID]*Member, MaxPartyMembers)
 	s.Order = nil
 	s.LeaderGUID = wire.EmptyGUID
+	if s.ReadyCheck != nil {
+		// The group that ran the check is gone; nothing will broadcast its finish, so the last check is history.
+		s.ReadyCheck.Active = false
+	}
+	s.pendingReady = nil
+	s.pendingReadyComplete = nil
 	s.clearMarks()
 	s.addEvent(Event{Kind: EventDestroyed, Text: why})
 }
@@ -572,6 +626,89 @@ func (s *State) ApplyLeaderChanged(l LeaderChanged) {
 		}
 	}
 	s.addEvent(Event{Kind: EventLeaderChanged, Name: l.Name, Text: "leader is now " + l.Name})
+}
+
+// ApplyReadyCheckStarted records SMSG_READY_CHECK_STARTED: a new check replaces the last one and starts a fresh
+// answer list. The core refuses a second start while one runs (Group.cpp:1474-1475), so a start is authoritative.
+// The answers and the finish the core sent before this packet for the same party (the offline members' answers and
+// a one-member check's immediate finish, Group.cpp:1484-1493) are applied now, without new events: the event ring
+// already has the rows from when those packets arrived.
+func (s *State) ApplyReadyCheckStarted(r ReadyCheckStarted) {
+	s.ReadyChecks++
+	s.ReadyCheck = &ReadyCheck{
+		Active:    true,
+		Index:     r.Index,
+		PartyGUID: r.PartyGUID,
+		Initiator: r.Initiator,
+		Duration:  r.Duration,
+		Answers:   make(map[wire.GUID]bool, MaxPartyMembers),
+	}
+	for _, a := range s.pendingReady {
+		if a.PartyGUID == r.PartyGUID {
+			s.recordReadyResponse(a)
+		}
+	}
+	s.pendingReady = s.pendingReady[:0]
+	if c := s.pendingReadyComplete; c != nil && c.PartyGUID == r.PartyGUID {
+		s.ReadyCheck.Active = false
+		s.ReadyCheck.Complete = true
+	}
+	s.pendingReadyComplete = nil
+	s.addEvent(Event{Kind: EventReadyCheckStarted, Text: "ready check started"})
+}
+
+// ApplyReadyCheckResponse records SMSG_READY_CHECK_RESPONSE. An answer with no running check for its party is held
+// until that check's start arrives (see State.pendingReady); the row reaches the event stream either way.
+func (s *State) ApplyReadyCheckResponse(r ReadyCheckResponse) {
+	s.ReadyCheckAnswers++
+	text := "not ready"
+	if r.Ready {
+		text = "ready"
+	}
+	name := ""
+	if m, ok := s.Members[r.Player]; ok {
+		name = m.Name
+	}
+	s.addEvent(Event{Kind: EventReadyCheckResponse, Text: text, Name: name})
+	if s.ReadyCheck != nil && s.ReadyCheck.Active && s.ReadyCheck.PartyGUID == r.PartyGUID {
+		s.recordReadyResponse(r)
+		return
+	}
+	if len(s.pendingReady) < MaxRaidMembers {
+		s.pendingReady = append(s.pendingReady, r)
+	}
+}
+
+// recordReadyResponse merges one answer into the running check, bounded to the roster and to MaxRaidMembers.
+func (s *State) recordReadyResponse(r ReadyCheckResponse) {
+	// A valid roster bounds the answers to its members; the raid bound also keeps a hostile server from growing the
+	// map with unknown GUIDs when no roster is held.
+	if s.RosterValid {
+		if _, ok := s.Members[r.Player]; !ok {
+			return
+		}
+	}
+	if _, seen := s.ReadyCheck.Answers[r.Player]; !seen {
+		if len(s.ReadyCheck.Answers) >= MaxRaidMembers {
+			return
+		}
+		s.ReadyCheck.Answered = append(s.ReadyCheck.Answered, r.Player)
+	}
+	s.ReadyCheck.Answers[r.Player] = r.Ready
+}
+
+// ApplyReadyCheckCompleted records SMSG_READY_CHECK_COMPLETED: the core ends a check itself once every member has
+// answered or its timer ran out (Group.cpp:1496-1511), so the model keeps the answers and marks the check finished.
+// A finish for a check whose start has not arrived yet is held for that start.
+func (s *State) ApplyReadyCheckCompleted(r ReadyCheckCompleted) {
+	s.ReadyCheckCompletes++
+	if s.ReadyCheck != nil && s.ReadyCheck.Active && s.ReadyCheck.PartyGUID == r.PartyGUID {
+		s.ReadyCheck.Active = false
+		s.ReadyCheck.Complete = true
+	} else {
+		s.pendingReadyComplete = &r
+	}
+	s.addEvent(Event{Kind: EventReadyCheckCompleted, Text: "ready check finished"})
 }
 
 // ApplyCommandResult records SMSG_PARTY_COMMAND_RESULT and, for a failed invite, records the failure. A successful

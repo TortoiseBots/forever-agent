@@ -750,6 +750,10 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("raid_move", serveCallTyped(st, func(s *session, ctx context.Context, p serveRaidMoveParams) (serveEmpty, error) {
 		return serveEmpty{}, s.raidMove(ctx, wire.GUID(p.GUID), p.Name, p.Subgroup, p.SwapWith)
 	}))
+	// The ready check (#288): the leader starts one and every member's answer and the finish arrive as party events.
+	srv.Register("ready_check", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
+		return serveEmpty{}, s.readyCheck(ctx)
+	}))
 	srv.Register("loot_method", serveCallTyped(st, func(s *session, ctx context.Context, p serveLootMethodParams) (serveEmpty, error) {
 		method, ok := ParseLootMethod(p.Method)
 		if !ok {

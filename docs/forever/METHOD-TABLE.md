@@ -238,6 +238,7 @@ sent is in the model.
 | `quest_share_accept` | implemented |
 | `quest_share_decline` | implemented |
 | `raid_move` | implemented |
+| `ready_check` | implemented |
 | `reclaim_corpse` | implemented |
 | `release_spirit` | implemented |
 | `roll` | implemented |

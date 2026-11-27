@@ -39,6 +39,14 @@ type PartyMark struct {
 	Name string
 }
 
+// PartyReadyCheck is the ready check the summary prints: its state and the answer counts.
+type PartyReadyCheck struct {
+	Complete bool
+	Answers  int
+	Ready    int
+	NotReady int
+}
+
 // PartySnapshot is the party model at the end of the run.
 type PartySnapshot struct {
 	InParty     bool
@@ -51,7 +59,9 @@ type PartySnapshot struct {
 	Members     []party.Member
 	Events      []party.Event
 	InviteFrom  string
-	Counters    map[string]int
+	// ReadyCheck is the last ready check the session saw: nil before the first one.
+	ReadyCheck *PartyReadyCheck
+	Counters   map[string]int
 }
 
 // maxChatListen bounds --listen: a chat-check is a short probe, not a bot session.
@@ -405,10 +415,69 @@ func (s *session) handleParty(p worldconn.Packet) error {
 		s.party.ApplyMarkAll(l)
 		s.eventRaidMarkList(l)
 		s.opts.logf("party: %d raid mark(s) listed", len(l.Marks))
-	case wire.SMSGReadyCheckStarted, wire.SMSGReadyCheckResponse, wire.SMSGReadyCheckCompleted:
-		s.party.ReadyChecks++
-		s.opts.logf("party: %s (detected, not answered in this round)", wire.ServerName(p.Core))
-		s.printParty()
+	case wire.SMSGReadyCheckStarted:
+		r, err := party.ParseReadyCheckStarted(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			break
+		}
+		s.party.ApplyReadyCheckStarted(r)
+		initiator := s.eventName("", r.Initiator)
+		if initiator == "" {
+			initiator = guidKind(r.Initiator)
+		}
+		s.eventPartyPacket("ready_check_started", map[string]any{
+			"index":       int(r.Index),
+			"party_guid":  eventGUID(r.PartyGUID),
+			"duration_ms": r.Duration.Milliseconds(),
+		}, r.Initiator, initiator)
+		s.opts.logf("party: ready check started by %s (%d member(s), %s)",
+			initiator, len(s.party.Members), r.Duration)
+	case wire.SMSGReadyCheckResponse:
+		r, err := party.ParseReadyCheckResponse(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			break
+		}
+		s.party.ApplyReadyCheckResponse(r)
+		who := s.eventName("", r.Player)
+		if who == "" {
+			who = guidKind(r.Player)
+		}
+		s.eventPartyPacket("ready_check_response", map[string]any{
+			"ready":      r.Ready,
+			"party_guid": eventGUID(r.PartyGUID),
+		}, r.Player, who)
+		if r.Ready {
+			s.opts.logf("party: ready check: %s is ready", who)
+		} else {
+			s.opts.logf("party: ready check: %s is not ready", who)
+		}
+	case wire.SMSGReadyCheckCompleted:
+		c, err := party.ParseReadyCheckCompleted(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			break
+		}
+		s.party.ApplyReadyCheckCompleted(c)
+		rc := s.party.ReadyCheck
+		data := map[string]any{
+			"index":      int(c.Index),
+			"party_guid": eventGUID(c.PartyGUID),
+		}
+		if rc != nil && rc.PartyGUID == c.PartyGUID {
+			ready, notReady := rc.Counts()
+			data["ready"] = ready
+			data["not_ready"] = notReady
+		}
+		s.eventPartyPacket("ready_check_completed", data, wire.EmptyGUID, "")
+		if rc != nil && rc.Complete && rc.PartyGUID == c.PartyGUID {
+			ready, notReady := rc.Counts()
+			s.opts.logf("party: ready check finished: %d answer(s), %d ready, %d not ready",
+				len(rc.Answers), ready, notReady)
+		} else {
+			s.opts.logf("party: ready check finished")
+		}
 	}
 	return nil
 }
@@ -732,8 +801,9 @@ func (s *session) partyCheck(ctx context.Context) error {
 	} else if s.party.LastInvalid != "" {
 		s.opts.logf("party-check: no party line sent: the roster is invalid (%s)", s.party.LastInvalid)
 	}
-	// Group control (#95 G2): --promote, --loot and --mark act on the group and end the run without leaving it.
-	if s.opts.PartyPromote != "" || s.opts.PartyLoot != "" || s.opts.PartyMark != "" {
+	// Group control (#95 G2): --promote, --ready-check, --loot and --mark act on the group and end the run without
+	// leaving it.
+	if s.opts.PartyPromote != "" || s.opts.PartyLoot != "" || s.opts.PartyMark != "" || s.opts.PartyReadyCheck {
 		return s.partyGroupControl(ctx)
 	}
 	stay := s.opts.PartyStay
@@ -1020,6 +1090,8 @@ func (s *session) summariseParty() {
 			"orphan states":      s.party.OrphanStates,
 			"partial states":     s.party.PartialStates,
 			"ready checks":       s.party.ReadyChecks,
+			"ready answers":      s.party.ReadyCheckAnswers,
+			"ready finishes":     s.party.ReadyCheckCompletes,
 			"command results":    s.party.CommandResults,
 			"declines":           s.party.Declines,
 			"kicks":              s.party.Kicks,
@@ -1045,6 +1117,15 @@ func (s *session) summariseParty() {
 	}
 	if s.party.Invite != nil {
 		snap.InviteFrom = s.party.Invite.InviterName
+	}
+	if rc := s.party.ReadyCheck; rc != nil {
+		ready, notReady := rc.Counts()
+		snap.ReadyCheck = &PartyReadyCheck{
+			Complete: rc.Complete,
+			Answers:  len(rc.Answers),
+			Ready:    ready,
+			NotReady: notReady,
+		}
 	}
 	s.report.Party = snap
 }

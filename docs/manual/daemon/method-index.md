@@ -179,6 +179,7 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `assistant` | `name`, `clear` | Set or clear a raid assistant (a raid only) | [Groups](../player-actions/groups-raids-and-guild.md#party-leader-controls) |
 | `convert_raid` | `{}` | Convert the party to a raid | [Groups](../player-actions/groups-raids-and-guild.md) |
 | `raid_move` | `guid`, `name`, `subgroup`, `swap_with` | Move a member to a subgroup | [Groups](../player-actions/groups-raids-and-guild.md) |
+| `ready_check` | `{}` | Start a ready check as the group leader; the answers and the finish are party events | [Groups](../player-actions/groups-raids-and-guild.md#ready-check) |
 | `loot_method` | `method`, `master`, `threshold` | Set the group's loot rule | [Groups](../player-actions/groups-raids-and-guild.md) |
 | `mark` | `guid`, `name`, `icon` | Set a raid target icon | [Groups](../player-actions/groups-raids-and-guild.md) |
 | `accept_guild_invite` | `{}` | Accept a guild invite | [Groups](../player-actions/groups-raids-and-guild.md) |
