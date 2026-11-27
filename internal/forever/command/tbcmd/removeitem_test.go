@@ -140,10 +140,19 @@ func TestUnequipItemInstanceSendsTheGuidForm(t *testing.T) {
 	if len(sent) != 1 || sent[0] != ".tb unequip Bheal guid "+testItemGUID {
 		t.Fatalf("the unequip must name the instance: %v", sent)
 	}
+	// The module's own refusal names the bot and is a refusal. A usage line
+	// names no character, so the name filter drops it: the call fails, as it
+	// does for any answer that proves no unequip happened.
 	c = NewClient(&fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
-		return reply(o, "TortoiseBots: usage: .tb unequip <character> guid <item guid>"), nil
+		return reply(o, "TortoiseBots: Bheal is not a logged-in bot."), nil
 	}})
 	if _, _, err := c.UnequipItemInstance(context.Background(), "Bheal", testItemGUID); !IsRefusal(err) {
-		t.Fatalf("a module without the instance unequip must refuse: %v", err)
+		t.Fatalf("a module that refuses the bot must refuse: %v", err)
+	}
+	c = NewClient(&fakeRunner{script: func(line string, o command.Options) (*command.Reply, error) {
+		return reply(o, "TortoiseBots: usage: .tb unequip <character> <slot>"), nil
+	}})
+	if _, _, err := c.UnequipItemInstance(context.Background(), "Bheal", testItemGUID); err == nil {
+		t.Fatal("a module without the instance unequip must fail the call")
 	}
 }
