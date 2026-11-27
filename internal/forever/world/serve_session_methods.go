@@ -752,7 +752,8 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}))
 	// The ready check (#288): the leader starts one and every member's answer and the finish arrive as party events.
 	srv.Register("ready_check", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
-		return serveEmpty{}, s.readyCheck(ctx)
+		_, err := s.readyCheck(ctx)
+		return serveEmpty{}, err
 	}))
 	srv.Register("loot_method", serveCallTyped(st, func(s *session, ctx context.Context, p serveLootMethodParams) (serveEmpty, error) {
 		method, ok := ParseLootMethod(p.Method)

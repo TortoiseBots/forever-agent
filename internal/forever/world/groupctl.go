@@ -367,14 +367,16 @@ func (s *session) partyGroupControl(ctx context.Context) error {
 		}
 	}
 	if s.opts.PartyReadyCheck {
-		if err := s.readyCheck(ctx); err != nil {
+		start, err := s.readyCheck(ctx)
+		if err != nil {
 			return fmt.Errorf("world: party-check: %w", err)
 		}
-		if s.opts.PartyReadyWait > 0 {
+		if s.opts.PartyReadyWait > 0 && start != nil {
 			// The core ends the check itself once every member has answered or its 35 s timer runs out, so a
-			// wait that runs out is reported and the run still ends normally.
+			// wait that runs out is reported and the run still ends normally. The wait follows the start this
+			// command confirmed: an earlier or a later check's finish never ends it.
 			if err := s.waitGroupConfirm(ctx, "ready check finish", s.opts.PartyReadyWait, func() bool {
-				return s.party.ReadyCheck != nil && s.party.ReadyCheck.Complete
+				return start.Complete
 			}); err != nil {
 				s.opts.logf("party-check: the ready check did not finish within %s: %v", s.opts.PartyReadyWait, err)
 			} else {

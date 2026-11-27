@@ -117,9 +117,11 @@ event stream (an offline member's answer, or a one-member check's finish, can ar
 
 The core ends a check itself once every member has answered or its 35 s timer runs out. It broadcasts the offline
 members' answers (and a one-member check's finish) before the `ready_check_started` row, so the rows keep that order;
-the session applies those early answers to the check when its start names the same party. The core marks the member
-who starts the check ready at the start and broadcasts no answer row for them, so a two-member check with one answer
-reads one answer.
+the session applies those early answers and that finish to the check this client asked for, and to no later one. A
+finish the character saw for a check it never started (it joined or reconnected during the check) stays an event: it
+never ends the next check. Checks are keyed by party, so a home check and an instance check reported to the same
+member at once never replace each other. The core marks the member who starts the check ready at the start and
+broadcasts no answer row for them, so a two-member check with one answer reads one answer.
 
 Read the rows with the `events` method (`forever rpc DIR events '{"since": 0}'`) or the event stream on
 [Events and logs](../daemon/events-and-logs.md).
@@ -201,7 +203,7 @@ forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FIL
 | `--promote NAME` | none | Promote this member to leader and wait for the roster that shows it. |
 | `--promote-back DURATION` | `0` | With `--promote`: then wait up to this long for the new leader to promote this character back (an agent session on the other side); at most 2m. |
 | `--ready-check` | off | Start a ready check as the group leader and log every member's answer; the same packets the `ready_check` method sends. |
-| `--ready-wait DURATION` | `40s` | With `--ready-check`: wait up to this long for the members' answers and the finish (the core ends the check at 35 s; `0` returns after the start); at most 2m. |
+| `--ready-wait DURATION` | `40s` | With `--ready-check`: wait up to this long for the members' answers and the finish of the check it started (the core ends the check at 35 s; `0` returns after the start); an earlier or a later check's finish never ends the wait. At most 2m. |
 | `--loot METHOD[:THRESHOLD]` | none | Set the loot method and read the roster back: `free-for-all`, `round-robin`, `master-loot`, `group-loot`, `need-before-greed`, `personal-loot`, or `0..5`; threshold 2-6, default 2. |
 | `--mark ICON` | none | Set this raid target icon on the nearest attackable creature and read the icon list back: `star`, `circle`, `diamond`, `triangle`, `moon`, `square`, `cross`, `skull`. |
 | `--wait-join DURATION` | `0` | With `--invite`: wait up to this long for the group to form (stats, party line, stay); at most 2m. |

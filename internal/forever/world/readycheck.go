@@ -12,21 +12,34 @@ import (
 	"github.com/pjerra/forever-agent/internal/forever/wire"
 )
 
-// readyCheck starts a ready check and waits for the start the core broadcasts to the group. This character must lead
-// the group; a raid is allowed, as GroupHandler.cpp's leader-or-assistant rule is the raid's own. The answers and the
-// finish arrive later as party events (ready_check_response, ready_check_completed).
-func (s *session) readyCheck(ctx context.Context) error {
+// readyCheck starts a ready check and waits for the start the core broadcasts to the group, returning that start's
+// check. This character must lead the group; a raid is allowed, as GroupHandler.cpp's leader-or-assistant rule is the
+// raid's own. The answers and the finish arrive later as party events (ready_check_response,
+// ready_check_completed); the returned check is the one a reader must wait on, never a later check of the party.
+func (s *session) readyCheck(ctx context.Context) (*party.ReadyCheck, error) {
 	const what = "ready_check"
 	if err := s.raidLeaderRank(what); err != nil {
-		return err
+		return nil, err
 	}
+	partyGUID, index := s.party.PartyGUID, s.party.Index
 	before := s.party.ReadyChecks
-	if err := s.Send(wire.CMSGDoReadyCheck, party.BuildDoReadyCheck(s.party.Index)); err != nil {
-		return err
+	// The answers and a one-member finish the core sends before the start belong to the check asked for here, and
+	// to no later one.
+	s.party.BeginReadyCheck(index)
+	if err := s.Send(wire.CMSGDoReadyCheck, party.BuildDoReadyCheck(index)); err != nil {
+		s.party.CancelReadyCheck()
+		return nil, err
 	}
-	s.opts.logf("party: sent a ready check for %d member(s) (index %d)", len(s.party.Members), s.party.Index)
-	return s.waitGroupConfirm(ctx, what, groupConfirmWait, func() bool {
-		rc := s.party.ReadyCheck
-		return s.party.ReadyChecks > before && rc != nil && rc.Initiator == s.party.SelfGUID && rc.PartyGUID == s.party.PartyGUID
+	s.opts.logf("party: sent a ready check for %d member(s) (index %d)", len(s.party.Members), index)
+	err := s.waitGroupConfirm(ctx, what, groupConfirmWait, func() bool {
+		rc := s.party.ReadyCheckOf(partyGUID)
+		return s.party.ReadyChecks > before && rc != nil && rc.Initiator == s.party.SelfGUID && rc.PartyGUID == partyGUID
 	})
+	if err != nil {
+		// The core refuses a second start while one runs and answers with nothing; its held packets must not reach
+		// the next check.
+		s.party.CancelReadyCheck()
+		return nil, err
+	}
+	return s.party.ReadyCheckOf(partyGUID), nil
 }

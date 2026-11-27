@@ -95,26 +95,34 @@ func TestReadyCheckPacketsReachTheEventStream(t *testing.T) {
 }
 
 // TestReadyCheckFinishBeforeTheStart: the core broadcasts a one-member check's finish before the started packet
-// (Group.cpp:1484-1493). Both rows stay in that order and the model still ends the check as finished.
+// (Group.cpp:1484-1493). The command's own request ties the finish to the start it asked for, so the rows keep
+// their order and the returned check ends as finished.
 func TestReadyCheckFinishBeforeTheStart(t *testing.T) {
 	s := newSession(Options{Logf: func(string, ...any) {}}, &Report{Counts: make(map[string]int)}, context.Background())
 	defer s.pumpCancel()
 	s.initChat()
-	for _, p := range []worldconn.Packet{
-		{Core: wire.SMSGReadyCheckCompleted, Payload: []byte{0x00, 0x03, 0x80, 0x22, 0x11, 0x08}},
-		{Core: wire.SMSGReadyCheckStarted, Payload: readyStartedPayload()},
-	} {
-		if err := s.handleParty(p); err != nil {
-			t.Fatalf("%s: %v", wire.ServerName(p.Core), err)
-		}
+	s.party.SelfGUID = readyTestInitiator
+	s.party.InParty = true
+	s.party.RosterValid = true
+	s.party.LeaderGUID = readyTestInitiator
+	s.party.PartyGUID = readyTestParty
+	s.party.Index = 0
+	s.fightSender = &talkFake{t: t, send: func(uint32, []byte) error { return nil }}
+	s.events <- event{side: sideInstance, p: worldconn.Packet{Core: wire.SMSGReadyCheckCompleted, Payload: []byte{0x00, 0x03, 0x80, 0x22, 0x11, 0x08}}}
+	s.events <- event{side: sideInstance, p: worldconn.Packet{Core: wire.SMSGReadyCheckStarted, Payload: readyStartedPayload()}}
+	start, err := s.readyCheck(context.Background())
+	if err != nil {
+		t.Fatalf("readyCheck: %v", err)
 	}
 	rows, _, _, _ := s.EventLog().Since(0, 10)
 	if len(rows) != 2 || rows[0].Data["state"] != "ready_check_completed" || rows[1].Data["state"] != "ready_check_started" {
 		t.Fatalf("rows: %+v", rows)
 	}
-	rc := s.party.ReadyCheck
-	if rc == nil || rc.Active || !rc.Complete {
-		t.Fatalf("the finish did not survive the late start: %+v", rc)
+	if start == nil || start.Active || !start.Complete {
+		t.Fatalf("the finish did not survive the late start: %+v", start)
+	}
+	if rc := s.party.ReadyCheckOf(readyTestParty); rc != start {
+		t.Fatalf("the party's check is not the returned start: %+v", rc)
 	}
 }
 
@@ -154,7 +162,7 @@ func TestReadyCheckSendsTheLeaderStart(t *testing.T) {
 		return nil
 	}}
 	s.events <- event{side: sideInstance, p: worldconn.Packet{Core: wire.SMSGReadyCheckStarted, Payload: readyStartedPayload()}}
-	if err := s.readyCheck(context.Background()); err != nil {
+	if _, err := s.readyCheck(context.Background()); err != nil {
 		t.Fatalf("readyCheck: %v", err)
 	}
 	if sentCore != wire.CMSGDoReadyCheck {
@@ -172,7 +180,7 @@ func TestReadyCheckSendsTheLeaderStart(t *testing.T) {
 func TestReadyCheckRefusesOutsideAGroup(t *testing.T) {
 	s := newSession(Options{}, &Report{Counts: make(map[string]int)}, context.Background())
 	defer s.pumpCancel()
-	err := s.readyCheck(context.Background())
+	_, err := s.readyCheck(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "ready_check: not in a group") {
 		t.Fatalf("readyCheck outside a group: %v", err)
 	}

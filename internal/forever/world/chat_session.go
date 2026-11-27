@@ -459,19 +459,19 @@ func (s *session) handleParty(p worldconn.Packet) error {
 			s.noteParseError(p, err)
 			break
 		}
-		s.party.ApplyReadyCheckCompleted(c)
-		rc := s.party.ReadyCheck
+		applied := s.party.ApplyReadyCheckCompleted(c)
+		rc := s.party.ReadyCheckOf(c.PartyGUID)
 		data := map[string]any{
 			"index":      int(c.Index),
 			"party_guid": eventGUID(c.PartyGUID),
 		}
-		if rc != nil && rc.PartyGUID == c.PartyGUID {
+		if applied && rc != nil {
 			ready, notReady := rc.Counts()
 			data["ready"] = ready
 			data["not_ready"] = notReady
 		}
 		s.eventPartyPacket("ready_check_completed", data, wire.EmptyGUID, "")
-		if rc != nil && rc.Complete && rc.PartyGUID == c.PartyGUID {
+		if applied && rc != nil && rc.Complete {
 			ready, notReady := rc.Counts()
 			s.opts.logf("party: ready check finished: %d answer(s), %d ready, %d not ready",
 				len(rc.Answers), ready, notReady)
@@ -1118,7 +1118,7 @@ func (s *session) summariseParty() {
 	if s.party.Invite != nil {
 		snap.InviteFrom = s.party.Invite.InviterName
 	}
-	if rc := s.party.ReadyCheck; rc != nil {
+	if rc := s.party.ReadyCheckOf(s.party.PartyGUID); rc != nil {
 		ready, notReady := rc.Counts()
 		snap.ReadyCheck = &PartyReadyCheck{
 			Complete: rc.Complete,

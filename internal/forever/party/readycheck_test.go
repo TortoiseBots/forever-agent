@@ -144,10 +144,16 @@ func TestApplyReadyCheck(t *testing.T) {
 
 // TestApplyReadyCheckBeforeTheStart: Group::StartReadyCheck broadcasts the offline members' answers and may finish
 // a one-member check before it broadcasts the started packet (Group.cpp:1484-1493), so a client sees those packets
-// first. The model holds them and applies them when the start names the same party.
+// first. They belong to the check this client asked for and are applied when that request's start arrives.
 func TestApplyReadyCheckBeforeTheStart(t *testing.T) {
 	s := NewState()
+	s.PartyGUID = readyPartyGUID
+	s.RosterValid = true
+	s.SelfGUID = readyInitiatorGUID
 	offline := wire.GUID{Low: 0x2222, High: 0x0800000000000000}
+	s.Members[readyInitiatorGUID] = &Member{GUID: readyInitiatorGUID}
+	s.Members[offline] = &Member{GUID: offline}
+	s.BeginReadyCheck(0)
 	s.ApplyReadyCheckResponse(ReadyCheckResponse{PartyGUID: readyPartyGUID, Player: offline, Ready: false})
 	s.ApplyReadyCheckCompleted(ReadyCheckCompleted{Index: 0, PartyGUID: readyPartyGUID})
 	if s.ReadyCheck != nil {
@@ -170,8 +176,10 @@ func TestApplyReadyCheckBeforeTheStart(t *testing.T) {
 	if ready := rc.Answers[offline]; ready {
 		t.Fatalf("another party's answer changed the check: %+v", rc.Answers)
 	}
-	// A second check in the same party follows the same order: its answer and finish arrive before its start, while
-	// the previous finished check is still the model's last one.
+	// A second check in the same party follows the same order, but only for its own request: the client asks
+	// again, and its answer and finish arrive before its start while the previous finished check is still the
+	// model's most recent one.
+	s.BeginReadyCheck(0)
 	s.ApplyReadyCheckResponse(ReadyCheckResponse{PartyGUID: readyPartyGUID, Player: offline, Ready: true})
 	s.ApplyReadyCheckCompleted(ReadyCheckCompleted{PartyGUID: readyPartyGUID})
 	s.ApplyReadyCheckStarted(ReadyCheckStarted{PartyGUID: readyPartyGUID, Initiator: readyInitiatorGUID})
@@ -184,6 +192,137 @@ func TestApplyReadyCheckBeforeTheStart(t *testing.T) {
 	}
 	if ready, ok := second.Answers[offline]; !ok || !ready {
 		t.Fatalf("the second check did not take the pre-start answer: %+v", second.Answers)
+	}
+}
+
+// TestReadyCheckUnmatchedFinishDoesNotEndTheNext: EndReadyCheck broadcasts the finish to every member
+// (Group.cpp:1496-1511), so a character that joined or reconnected during a check sees its finish without ever
+// seeing its start. That finish must stay an event; if the model handed it to the next start, --ready-wait would
+// report success and leave before the new check's answers arrived. The answers such a member sees mid-check are the
+// same: never the next check's answers.
+func TestReadyCheckUnmatchedFinishDoesNotEndTheNext(t *testing.T) {
+	s := NewState()
+	midCheckAnswer := wire.GUID{Low: 0x3333, High: 0x0800000000000000}
+	s.ApplyReadyCheckResponse(ReadyCheckResponse{PartyGUID: readyPartyGUID, Player: midCheckAnswer, Ready: true})
+	s.ApplyReadyCheckCompleted(ReadyCheckCompleted{Index: 0, PartyGUID: readyPartyGUID})
+	s.ApplyReadyCheckStarted(ReadyCheckStarted{Index: 0, PartyGUID: readyPartyGUID, Initiator: readyInitiatorGUID})
+	rc := s.ReadyCheck
+	if rc == nil {
+		t.Fatal("the start was not applied")
+	}
+	if rc.Complete || !rc.Active {
+		t.Fatalf("an earlier check's finish ended the new check: %+v", rc)
+	}
+	if len(rc.Answers) != 0 {
+		t.Fatalf("an earlier check's answer entered the new check: %+v", rc.Answers)
+	}
+	if s.ReadyCheckAnswers != 1 || s.ReadyCheckCompletes != 1 {
+		t.Fatalf("the packets were not counted: answers=%d completes=%d", s.ReadyCheckAnswers, s.ReadyCheckCompletes)
+	}
+	// The new check's own finish, after its start, still ends it.
+	s.ApplyReadyCheckCompleted(ReadyCheckCompleted{Index: 0, PartyGUID: readyPartyGUID})
+	if rc.Active || !rc.Complete {
+		t.Fatalf("the new check's own finish was lost: %+v", rc)
+	}
+}
+
+// TestReadyCheckRequestScopesTheEarlyPackets: the packets before a start are held for the check this client asked
+// for. A request replaces an earlier one, so a finish or an answer held from before the request can never be
+// handed to the check it starts.
+func TestReadyCheckRequestScopesTheEarlyPackets(t *testing.T) {
+	s := NewState()
+	s.PartyGUID = readyPartyGUID
+	s.RosterValid = true
+	s.SelfGUID = readyInitiatorGUID
+	offline := wire.GUID{Low: 0x2222, High: 0x0800000000000000}
+	// A check this client did not start and never saw start: its answer and finish arrive first.
+	s.ApplyReadyCheckResponse(ReadyCheckResponse{PartyGUID: readyPartyGUID, Player: offline, Ready: false})
+	s.ApplyReadyCheckCompleted(ReadyCheckCompleted{Index: 0, PartyGUID: readyPartyGUID})
+	// The client now asks for its own check; the start that answers the request must not inherit either packet.
+	s.BeginReadyCheck(0)
+	s.ApplyReadyCheckStarted(ReadyCheckStarted{Index: 0, PartyGUID: readyPartyGUID, Initiator: readyInitiatorGUID})
+	rc := s.ReadyCheck
+	if rc == nil || !rc.Active || rc.Complete || len(rc.Answers) != 0 {
+		t.Fatalf("the earlier check's packets reached the new one: %+v", rc)
+	}
+	// A request whose start never came (the core refuses a second start, Group.cpp:1474-1475) is cancelled, and
+	// its held answer cannot reach the next request either.
+	s.ApplyReadyCheckCompleted(ReadyCheckCompleted{Index: 0, PartyGUID: readyPartyGUID})
+	s.BeginReadyCheck(0)
+	s.ApplyReadyCheckResponse(ReadyCheckResponse{PartyGUID: readyPartyGUID, Player: offline, Ready: true})
+	s.CancelReadyCheck()
+	s.ApplyReadyCheckStarted(ReadyCheckStarted{Index: 0, PartyGUID: readyPartyGUID, Initiator: readyInitiatorGUID})
+	if next := s.ReadyCheck; next == rc || len(next.Answers) != 0 || next.Complete {
+		t.Fatalf("a cancelled request's answer reached the next check: %+v", next)
+	}
+}
+
+// TestReadyCheckAnswerAfterTheFinishDropsIt: a check's finish is its last packet (Group.cpp:1484-1493). A finish
+// held for this request that a later answer for the same party follows is therefore the previous check's finish,
+// still in flight when the request went out; it must not end the check this request starts.
+func TestReadyCheckAnswerAfterTheFinishDropsIt(t *testing.T) {
+	s := NewState()
+	s.PartyGUID = readyPartyGUID
+	s.RosterValid = true
+	s.SelfGUID = readyInitiatorGUID
+	offline := wire.GUID{Low: 0x2222, High: 0x0800000000000000}
+	s.Members[offline] = &Member{GUID: offline}
+	s.BeginReadyCheck(0)
+	// The previous check's finish, then this request's own offline answer.
+	s.ApplyReadyCheckCompleted(ReadyCheckCompleted{Index: 0, PartyGUID: readyPartyGUID})
+	s.ApplyReadyCheckResponse(ReadyCheckResponse{PartyGUID: readyPartyGUID, Player: offline, Ready: false})
+	s.ApplyReadyCheckStarted(ReadyCheckStarted{Index: 0, PartyGUID: readyPartyGUID, Initiator: readyInitiatorGUID})
+	rc := s.ReadyCheck
+	if rc == nil || !rc.Active || rc.Complete {
+		t.Fatalf("the previous check's finish ended this one: %+v", rc)
+	}
+	if ready, ok := rc.Answers[offline]; !ok || ready {
+		t.Fatalf("this request's answer was lost with the stale finish: %+v", rc.Answers)
+	}
+}
+
+// TestReadyCheckKeyedByParty: the core broadcasts ready-check packets to every member, whichever of the member's
+// groups is active (Group.cpp:975-985), so a home check and an instance check can interleave. Each answer, finish
+// and start belongs to its own party's check.
+func TestReadyCheckKeyedByParty(t *testing.T) {
+	s := NewState()
+	home, inst := readyPartyGUID, wire.GUID{Low: 0x7777, High: 0x0B00000000000000}
+	player := wire.GUID{Low: 0x8888, High: 0x0800000000000000}
+	s.ApplyReadyCheckStarted(ReadyCheckStarted{Index: 0, PartyGUID: home, Initiator: readyInitiatorGUID})
+	s.ApplyReadyCheckStarted(ReadyCheckStarted{Index: 1, PartyGUID: inst, Initiator: readyInitiatorGUID})
+	homeCheck, instCheck := s.ReadyCheckOf(home), s.ReadyCheckOf(inst)
+	if homeCheck == nil || instCheck == nil || homeCheck == instCheck {
+		t.Fatalf("the two starts were not kept apart: home=%+v inst=%+v", homeCheck, instCheck)
+	}
+	if s.ReadyCheck != instCheck {
+		t.Fatalf("ReadyCheck is not the last start: %+v", s.ReadyCheck)
+	}
+	// The home check's answer and finish arrive while the instance check is the most recent start.
+	s.ApplyReadyCheckResponse(ReadyCheckResponse{PartyGUID: home, Player: player, Ready: true})
+	s.ApplyReadyCheckCompleted(ReadyCheckCompleted{PartyGUID: home})
+	if homeCheck.Active || !homeCheck.Complete {
+		t.Fatalf("the home check did not finish: %+v", homeCheck)
+	}
+	if instCheck.Complete || !instCheck.Active {
+		t.Fatalf("the home finish ended the instance check: %+v", instCheck)
+	}
+	if _, ok := instCheck.Answers[player]; ok {
+		t.Fatalf("the home answer entered the instance check: %+v", instCheck.Answers)
+	}
+	if ready, ok := homeCheck.Answers[player]; !ok || !ready {
+		t.Fatalf("the home answer missed its check: %+v", homeCheck.Answers)
+	}
+	// The instance check's own answer and finish land on it.
+	s.ApplyReadyCheckResponse(ReadyCheckResponse{PartyGUID: inst, Player: player, Ready: false})
+	s.ApplyReadyCheckCompleted(ReadyCheckCompleted{PartyGUID: inst})
+	if instCheck.Active || !instCheck.Complete {
+		t.Fatalf("the instance check did not finish: %+v", instCheck)
+	}
+	if ready, ok := instCheck.Answers[player]; !ok || ready {
+		t.Fatalf("the instance answer missed its check: %+v", instCheck.Answers)
+	}
+	if s.ReadyCheckOf(wire.GUID{Low: 0x9999}) != nil {
+		t.Fatal("an unknown party has a check")
 	}
 }
 
