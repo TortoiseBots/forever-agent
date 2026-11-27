@@ -231,11 +231,15 @@ func (s *session) raidMove(ctx context.Context, g wire.GUID, name string, subgro
 	if err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
+	group := s.party.PartyGUID
 	if err := s.paceRaidPacket(ctx, what); err != nil {
 		return fmt.Errorf("%s: %w", what, err)
 	}
-	// The wait handled what arrived: a member that left the roster, reached the subgroup already or filled it is
-	// not the move that was planned.
+	// The wait handled what arrived: another group, an ended raid or a lost rank is not the move that was planned,
+	// and the core resolves the packet by its party index and rank.
+	if err := s.checkRaidGroup(what, group); err != nil {
+		return err
+	}
 	if cur, ok := s.party.Members[m.GUID]; !ok {
 		return fmt.Errorf("%s: %s left the roster while the packet was paced", what, chat.SanitiseName(m.Name))
 	} else if raidSubgroup(*cur) == subgroup {
@@ -263,21 +267,32 @@ type raidSwapPlan struct {
 	to      int
 }
 
+// checkRaidGroup re-reads the roster a raid packet was planned from, after the pace: still the same group, still a
+// raid, and still the rank to send. The core resolves a group packet by the party index it names, so a packet
+// planned for one group must not land in the replacement that took the index; a rank lost during the wait would make
+// the core drop the packet without an answer, and the call would wait out its confirmation for nothing.
+func (s *session) checkRaidGroup(what string, group wire.GUID) error {
+	if err := s.groupRoster(what); err != nil {
+		return err
+	}
+	if s.party.PartyGUID != group {
+		return fmt.Errorf("%s: the group changed while the packet was paced", what)
+	}
+	if !s.party.Raid {
+		return fmt.Errorf("%s: the group is no longer a raid", what)
+	}
+	if !s.raidLeader() && !s.raidAssistant() {
+		return fmt.Errorf("%s: the rank changed while the packet was paced: needs the group leader or an assistant", what)
+	}
+	return nil
+}
+
 // checkRaidSwap re-reads the roster the swapping move was planned from. A plan that no longer describes it is refused
 // before the packet; a plan whose outcome the roster already holds (the two members in each other's planned
 // subgroups) is done, so nothing is sent.
 func (s *session) checkRaidSwap(what string, plan raidSwapPlan) (bool, error) {
-	if err := s.groupRoster(what); err != nil {
+	if err := s.checkRaidGroup(what, plan.party); err != nil {
 		return false, err
-	}
-	if s.party.PartyGUID != plan.party {
-		return false, fmt.Errorf("%s: the group changed while the packet was paced", what)
-	}
-	if !s.party.Raid {
-		return false, fmt.Errorf("%s: the group is no longer a raid", what)
-	}
-	if !s.raidLeader() && !s.raidAssistant() {
-		return false, fmt.Errorf("%s: the rank changed while the packet was paced: needs the group leader or an assistant", what)
 	}
 	m, okM := s.party.Members[plan.mover]
 	o, okO := s.party.Members[plan.partner]

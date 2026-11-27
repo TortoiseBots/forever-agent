@@ -585,8 +585,8 @@ type session struct {
 	// raidSentAt is when the last raid-setup packet of the core's ten-a-second bucket went out (paceRaidPacket):
 	// CMSG_CONVERT_RAID, CMSG_CHANGE_SUB_GROUP, CMSG_SET_ASSISTANT_LEADER, and CMSG_SWAP_SUB_GROUPS with them.
 	raidSentAt time.Time
-	// lootSentAt holds when the last CMSG_SET_LOOT_METHOD changes went out: the core counts that opcode on its own
-	// three-a-second counter (paceLootPacket).
+	// lootSentAt holds when the last CMSG_SET_LOOT_METHOD changes were put on the wire: the core counts that opcode
+	// on its own three-a-second counter (paceLootPacket, noteLootSent).
 	lootSentAt []time.Time
 	// selfTeleports counts the server's own SMSG_MOVE_TELEPORT of this character (not another unit's).
 	selfTeleports int

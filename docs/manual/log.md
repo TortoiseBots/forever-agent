@@ -2,6 +2,8 @@
 
 ## 2026-11-27
 
+* **Update**: A paced group change is re-checked against the group it was planned for: `loot_method` refuses a roster that replaced the group, took the lead, turned LFG, lost the named master or ended (no packet goes out, and another group's loot block never confirms it), `raid_move`'s plain move refuses the same replacement, an ended raid or a lost rank before its packet, and the loot pace keeps a margin under the core's three-a-second `CMSG_SET_LOOT_METHOD` limit and books each change after its write ([groups, raids and guilds](player-actions/groups-raids-and-guild.md#raid-control)).
+
 * **Update**: `plan-scout --apply-fixes` keeps an accepted stand repair: a stand move runs before the other point moves, and a later point move that resolves to the same plan point (a `snap_point` of a pull row's final approach point, for one) is dropped into `dropped.json` with the conflict named instead of overwriting the stand. A replay also drops a fix whose kind or payload `--apply-fixes` does not apply (a `snap_point` with only vias, an unsupported kind) with its reason, and the rest of the list still lands. Both are documented in [plan tools](dungeons/plan-tools.md).
 
 ## 2026-11-26

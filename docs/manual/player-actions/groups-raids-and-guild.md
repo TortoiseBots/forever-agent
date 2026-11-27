@@ -4,7 +4,7 @@ title: Groups, raids and guilds
 description: Invite and leave a group, read the party roster, lead a party (promote, loot method, marks, disband), convert it to a raid, handle guild invites, and check the group code live.
 tags: [player-actions, party, raid, guild, group-control]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-26T19:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-27T02:00:00Z }
 sources:
   - id: serve-session
     resource: internal/forever/world/serve_session.go
@@ -76,8 +76,17 @@ NAME)`).
 `personal-loot` (or its number 0-5; the short forms `ffa`, `round`, `master`, `group`, `need`, `personal` are
 accepted too). `master` names the master looter for master loot. `threshold` is the item quality 2-6
 (uncommon-artifact), default 2. A call whose settings the roster already holds sends no packet, and a real change is
-paced at three a second: the core counts `CMSG_SET_LOOT_METHOD` on its own three-a-second limit and closes the
-connection on the fourth inside one second.
+paced below the core's three a second: the core counts `CMSG_SET_LOOT_METHOD` on its own three-a-second limit and
+closes the connection on the fourth inside one second, so the fourth change waits a second plus a margin.
+
+The pace reads the roster, and the loot change is re-checked against the group it was planned for before its packet
+goes out. The core resolves the packet's group by the party index it carries, so a roster that arrived during the
+wait — another group in the same slot, the lead taken, an LFG group, a named master who left, the group destroyed —
+is refused with `loot_method: the group changed while the packet was paced`, `... the leader changed while the packet
+was paced (the leader is NAME)`, `... the group became LFG while the packet was paced` or
+`loot_method: NAME left the roster while the packet was paced` (a destroyed or left group reads
+`loot_method: not in a group`), and no packet is sent. The confirmation is the same group's roster: another group's
+matching loot block never counts as the change having landed.
 
 `mark.icon` is one of `star`, `circle`, `diamond`, `triangle`, `moon`, `square`, `cross`, `skull`. `mark` names the
 unit by `guid` or by a roster member's `name` and sets that icon on it; the method has no way to clear an icon.
@@ -113,8 +122,12 @@ assistant can move a member meanwhile, and `CMSG_SWAP_SUB_GROUPS` names no expec
 whatever the two members hold when it arrives, so a swap planned on a roster that moved would land them in subgroups
 the call never asked for. A swap whose two members no longer hold the planned subgroups is refused with
 `raid_move: the roster moved while the packet was paced: ... retry the move` and sends nothing; one whose outcome the
-roster already holds (the two members in each other's planned subgroups) answers without a packet. A plain move and
-`convert_raid` re-check the roster the same way: the member's presence, the target subgroup's room, and the lead.
+roster already holds (the two members in each other's planned subgroups) answers without a packet. Both a swap and a
+plain move re-check the group as well: another group's roster reads `raid_move: the group changed while the packet
+was paced`, an ended raid reads `raid_move: the group is no longer a raid`, and a rank lost during the wait reads
+`raid_move: the rank changed while the packet was paced: needs the group leader or an assistant`; none of them sends
+a packet. A plain move also re-checks the member's presence, the target subgroup's room and the move another packet
+already made, and `convert_raid` re-checks the lead and the member count.
 
 # Guild
 

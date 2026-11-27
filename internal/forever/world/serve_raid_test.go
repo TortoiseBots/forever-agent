@@ -669,6 +669,74 @@ func TestServeRaidSwapRevalidatesAfterPace(t *testing.T) {
 	f.wait(t)
 }
 
+// TestServeRaidMoveRevalidatesAfterPace is the second fix round's MEDIUM finding: the plain sub-group move rechecked
+// the member and the target subgroup after the pace but not the group or the rank, which the swap path already did.
+// The core resolves CMSG_CHANGE_SUB_GROUP by the party index and takes it only from the leader or an assistant, so a
+// roster of another group would take the move at the same index, and a lead lost during the wait would have the core
+// drop the packet. Both are refused before it goes out.
+func TestServeRaidMoveRevalidatesAfterPace(t *testing.T) {
+	t.Run("group replaced", func(t *testing.T) {
+		f := newFakeServer(t)
+		f.serveMode = true
+		raidScene(f)
+		defer f.close()
+		old := raidStepGap
+		raidStepGap = 400 * time.Millisecond
+		t.Cleanup(func() { raidStepGap = old })
+		// The roster change arrives 150 ms into the move's pace wait: another group's roster, same members.
+		injectRosterAfter(f, wire.CMSGChangeSubGroup, 1, 150*time.Millisecond, func() {
+			f.groupPartyGUID = wire.GUID{Low: 0x5111, High: 0x1B00000000000000}
+		})
+		steps := &stepLog{}
+		a := startServeDaemon(t, f, steps)
+		awaitGroup(t, a, steps, 10)
+		// The preceding move starts the pace; the posted move would land in the group that took its index.
+		a.mustCall(t, "raid_move", map[string]any{"name": "Botnine", "subgroup": 3})
+		a.mustFail(t, "raid_move", map[string]any{"name": "Botsix", "subgroup": 4}, -32003,
+			"the group changed while the packet was paced")
+		f.mu.Lock()
+		sent := len(f.groupSeenChange)
+		f.mu.Unlock()
+		if sent != 1 {
+			t.Fatalf("the move for the replacement group went out: the fake saw %d CMSG_CHANGE_SUB_GROUP, want 1\n%s", sent, steps.joined())
+		}
+		a.stop(t)
+		f.wait(t)
+	})
+
+	t.Run("lead lost", func(t *testing.T) {
+		f := newFakeServer(t)
+		f.serveMode = true
+		raidScene(f)
+		defer f.close()
+		old := raidStepGap
+		raidStepGap = 400 * time.Millisecond
+		t.Cleanup(func() { raidStepGap = old })
+		oldWait := groupConfirmWait
+		groupConfirmWait = 500 * time.Millisecond
+		t.Cleanup(func() { groupConfirmWait = oldWait })
+		// The lead goes to Bottwo 150 ms into the wait, and this character holds no assistant flag: the move would
+		// go out without the rank the core asks for.
+		injectRosterAfter(f, wire.CMSGChangeSubGroup, 1, 150*time.Millisecond, func() {
+			f.groupLeaderName = "Bottwo"
+		})
+		steps := &stepLog{}
+		a := startServeDaemon(t, f, steps)
+		awaitGroup(t, a, steps, 10)
+		a.mustCall(t, "raid_move", map[string]any{"name": "Botnine", "subgroup": 3})
+		a.mustFail(t, "raid_move", map[string]any{"name": "Botsix", "subgroup": 4}, -32003,
+			"the rank changed while the packet was paced")
+		f.mu.Lock()
+		sent := len(f.groupSeenChange)
+		f.mu.Unlock()
+		if sent != 1 {
+			t.Fatalf("the move without the rank went out: the fake saw %d CMSG_CHANGE_SUB_GROUP, want 1\n%s", sent, steps.joined())
+		}
+		a.stop(t)
+		f.wait(t)
+	})
+}
+
 // TestServeLootMethodPaced is the fix round's MEDIUM finding: every loot_method call sent CMSG_SET_LOOT_METHOD, even
 // when the roster already held the requested settings, and the core counts that opcode on its own three-a-second
 // counter and kicks on the fourth inside one second (WorldSession.cpp:1875, :1902, 1638-1653). A matching call costs
@@ -692,7 +760,8 @@ func TestServeLootMethodPaced(t *testing.T) {
 	if sent != 1 {
 		t.Fatalf("a matching loot call sent a packet: the fake saw %d, want 1\n%s", sent, steps.joined())
 	}
-	// Three real changes in a row: the third of the second goes out at once, the fourth waits out the core's second.
+	// Three real changes in a row: the third of the second goes out at once, the fourth waits out the client's
+	// window, which is the core's second plus a margin.
 	for _, threshold := range []int{4, 5, 6} {
 		a.mustCall(t, "loot_method", map[string]any{"method": "group", "threshold": threshold})
 	}
@@ -709,6 +778,13 @@ func TestServeLootMethodPaced(t *testing.T) {
 				i+1, i+4, span.Round(time.Millisecond))
 		}
 	}
+	// The fourth change keeps the margin under the core's second: the core counts the three on the server's own
+	// clock, so spacing the client's writes exactly one second apart lets its timing variation put four inside one
+	// of its seconds. A client that waits only the bare second fails here.
+	if span := at[3].Sub(at[0]); span < lootPaceWindow-100*time.Millisecond {
+		t.Fatalf("the fourth loot change went out %s after the first: the pace must keep the margin under the core's second (%s)",
+			span.Round(time.Millisecond), lootPaceWindow)
+	}
 	if len(kicks) != 0 {
 		t.Fatalf("the fake kicked the loot changes: %v", kicks)
 	}
@@ -720,6 +796,177 @@ func TestServeLootMethodPaced(t *testing.T) {
 	}
 	a.stop(t)
 	f.wait(t)
+}
+
+// injectRosterAfter arranges for the fake to deliver a fresh roster of its own state to the client partway into the
+// pace wait that follows its n-th packet of the core opcode. mutate changes the fake's group state under its lock;
+// the client reads the frame while it waits, which is the roster change these revalidation tests turn on.
+func injectRosterAfter(f *fakeServer, core uint32, n int, delay time.Duration, mutate func()) {
+	seen := 0
+	f.serveWire = func(c *fakeConn, table *wire.OpcodeTable, gotCore uint32, payload []byte) {
+		if gotCore != core {
+			return
+		}
+		seen++
+		if seen != n {
+			return
+		}
+		go func() {
+			time.Sleep(delay)
+			f.mu.Lock()
+			mutate()
+			frame := f.groupUpdateLocked()
+			f.mu.Unlock()
+			if frame != nil {
+				c.writeFrame(fakeSMSGPartyUpdate, frame)
+			}
+		}()
+	}
+}
+
+// TestServeLootMethodRevalidatesAfterPace is the second fix round's MEDIUM finding: after the pace the loot call
+// checked only the cached loot block, never the roster it belonged to. The core resolves CMSG_SET_LOOT_METHOD's
+// group by the packet's party index, so a roster delivered during the wait — a replacement group, the lead taken,
+// the master gone, the group destroyed — must stop the change before the packet, and can never confirm it either.
+func TestServeLootMethodRevalidatesAfterPace(t *testing.T) {
+	// Three real changes in a row: the fourth call waits out the client's pace window.
+	quick := []int{3, 4, 5}
+
+	t.Run("group replaced", func(t *testing.T) {
+		f := newFakeServer(t)
+		f.serveMode = true
+		raidScene(f)
+		defer f.close()
+		injectRosterAfter(f, wire.CMSGSetLootMethod, len(quick), 400*time.Millisecond, func() {
+			f.groupPartyGUID = wire.GUID{Low: 0x5111, High: 0x1B00000000000000}
+		})
+		steps := &stepLog{}
+		a := startServeDaemon(t, f, steps)
+		awaitGroup(t, a, steps, 10)
+		for _, threshold := range quick {
+			a.mustCall(t, "loot_method", map[string]any{"method": "group", "threshold": threshold})
+		}
+		a.mustFail(t, "loot_method", map[string]any{"method": "group", "threshold": 6}, -32003,
+			"the group changed while the packet was paced")
+		f.mu.Lock()
+		sent := len(f.groupSeenLoot)
+		f.mu.Unlock()
+		if sent != len(quick) {
+			t.Fatalf("the change for the replacement group went out: the fake saw %d CMSG_SET_LOOT_METHOD, want %d\n%s",
+				sent, len(quick), steps.joined())
+		}
+		a.stop(t)
+		f.wait(t)
+	})
+
+	t.Run("master left", func(t *testing.T) {
+		f := newFakeServer(t)
+		f.serveMode = true
+		raidScene(f)
+		defer f.close()
+		injectRosterAfter(f, wire.CMSGSetLootMethod, len(quick), 400*time.Millisecond, func() {
+			kept := f.groupNames[:0]
+			for _, name := range f.groupNames {
+				if !strings.EqualFold(name, "Botsix") {
+					kept = append(kept, name)
+				}
+			}
+			f.groupNames = kept
+		})
+		steps := &stepLog{}
+		a := startServeDaemon(t, f, steps)
+		awaitGroup(t, a, steps, 10)
+		for _, threshold := range quick {
+			a.mustCall(t, "loot_method", map[string]any{"method": "group", "threshold": threshold})
+		}
+		a.mustFail(t, "loot_method", map[string]any{"method": "master-loot", "master": "Botsix", "threshold": 2}, -32003,
+			"Botsix left the roster while the packet was paced")
+		f.mu.Lock()
+		sent := len(f.groupSeenLoot)
+		f.mu.Unlock()
+		if sent != len(quick) {
+			t.Fatalf("the change for the master that left went out: the fake saw %d CMSG_SET_LOOT_METHOD, want %d\n%s",
+				sent, len(quick), steps.joined())
+		}
+		a.stop(t)
+		f.wait(t)
+	})
+
+	t.Run("another group confirms", func(t *testing.T) {
+		f := newFakeServer(t)
+		f.serveMode = true
+		raidScene(f)
+		defer f.close()
+		oldWait := groupConfirmWait
+		groupConfirmWait = 3 * time.Second
+		t.Cleanup(func() { groupConfirmWait = oldWait })
+		steps := &stepLog{}
+		a := startServeDaemon(t, f, steps)
+		awaitGroup(t, a, steps, 10)
+		// The hook is installed before the first change so it counts this scene's own packets: the n-th change is
+		// the fourth, the one that goes out unanswered.
+		injectRosterAfter(f, wire.CMSGSetLootMethod, len(quick)+1, 300*time.Millisecond, func() {
+			f.groupPartyGUID = wire.GUID{Low: 0x5111, High: 0x1B00000000000000}
+			f.groupLoot = &party.LootSettings{Method: party.GroupLoot, Threshold: 6}
+		})
+		for _, threshold := range quick {
+			a.mustCall(t, "loot_method", map[string]any{"method": "group", "threshold": threshold})
+		}
+		// The fourth change goes out unanswered, and the roster that arrives during its confirmation wait is
+		// another group's, holding exactly the settings asked for. Only this group's roster may confirm it.
+		f.mu.Lock()
+		f.groupSilent = true
+		f.mu.Unlock()
+		a.mustFail(t, "loot_method", map[string]any{"method": "group", "threshold": 6}, -32003,
+			"the server did not confirm it")
+		f.mu.Lock()
+		sent := len(f.groupSeenLoot)
+		f.mu.Unlock()
+		if sent != len(quick)+1 {
+			t.Fatalf("the fourth change did not go out before the roster arrived: the fake saw %d CMSG_SET_LOOT_METHOD, want %d\n%s",
+				sent, len(quick)+1, steps.joined())
+		}
+		// The other group's matching block reached the model; only the group guard keeps it from counting as the
+		// confirmation, so this test proves the guard does the work.
+		var info ServePartyInfo
+		json.Unmarshal(a.mustCall(t, "party", nil), &info)
+		if info.LootMethod != "group-loot" || info.LootThreshold != 6 {
+			t.Fatalf("the other group's roster did not reach the model: method %q, threshold %d\n%s",
+				info.LootMethod, info.LootThreshold, steps.joined())
+		}
+		a.stop(t)
+		f.wait(t)
+	})
+
+	t.Run("group destroyed", func(t *testing.T) {
+		f := newFakeServer(t)
+		f.serveMode = true
+		raidScene(f)
+		defer f.close()
+		injectRosterAfter(f, wire.CMSGSetLootMethod, len(quick), 400*time.Millisecond, func() {
+			f.groupDestroyed = true
+		})
+		oldWait := groupConfirmWait
+		groupConfirmWait = 500 * time.Millisecond
+		t.Cleanup(func() { groupConfirmWait = oldWait })
+		steps := &stepLog{}
+		a := startServeDaemon(t, f, steps)
+		awaitGroup(t, a, steps, 10)
+		for _, threshold := range quick {
+			a.mustCall(t, "loot_method", map[string]any{"method": "group", "threshold": threshold})
+		}
+		a.mustFail(t, "loot_method", map[string]any{"method": "group", "threshold": 6}, -32003,
+			"loot_method: not in a group")
+		f.mu.Lock()
+		sent := len(f.groupSeenLoot)
+		f.mu.Unlock()
+		if sent != len(quick) {
+			t.Fatalf("the change for the destroyed group went out: the fake saw %d CMSG_SET_LOOT_METHOD, want %d\n%s",
+				sent, len(quick), steps.joined())
+		}
+		a.stop(t)
+		f.wait(t)
+	})
 }
 
 // TestServeLootMethodInRaid is the raid fix round's second finding: the player-led raid's FORM stopped loot-method

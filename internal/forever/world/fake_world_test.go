@@ -361,6 +361,7 @@ type fakeServer struct {
 	// slices are what it saw. All under mu.
 	groupNames         []string
 	groupSlots         map[string]int
+	groupPartyGUID     wire.GUID // the roster's party GUID; fakeGroupPartyGUID when zero
 	groupLeaderName    string
 	groupSilent        bool
 	groupSelfOnly      bool // the roster lists this character alone (a group of one the convert refusal test needs)
@@ -368,6 +369,7 @@ type fakeServer struct {
 	groupLoot          *party.LootSettings
 	groupFlags         map[wire.GUID]uint8
 	groupRaid          bool
+	groupDestroyed     bool // groupUpdateLocked answers with the destroyed update
 	groupSubgroup      map[string]uint8
 	groupSeenLeader    []wire.GUID
 	groupSeenAssistant []fakeAssistSeen

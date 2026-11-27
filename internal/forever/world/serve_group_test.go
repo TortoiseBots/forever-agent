@@ -103,6 +103,9 @@ func (f *fakeServer) groupSetLeaderLocked(target wire.GUID) {
 
 // groupUpdateLocked builds the roster frame for the fake's current group state, or nil when it holds no group.
 func (f *fakeServer) groupUpdateLocked() []byte {
+	if f.groupDestroyed {
+		return groupDestroyedFrame(mustGUID(f.clientGUID))
+	}
 	if len(f.groupNames) == 0 && !f.groupSelfOnly {
 		return nil
 	}
@@ -114,7 +117,11 @@ func (f *fakeServer) groupUpdateLocked() []byte {
 		flags[i] = f.groupFlags[g]
 		subgroups[i] = f.groupSubgroup[strings.ToLower(names[i])]
 	}
-	return fakePartyUpdateFull(fakeGroupPartyGUID, leader, mustGUID(f.clientGUID), guids, names, flags, subgroups, f.groupLoot, f.groupRaid, true, false)
+	partyGUID := f.groupPartyGUID
+	if partyGUID.IsZero() {
+		partyGUID = fakeGroupPartyGUID
+	}
+	return fakePartyUpdateFull(partyGUID, leader, mustGUID(f.clientGUID), guids, names, flags, subgroups, f.groupLoot, f.groupRaid, true, false)
 }
 
 // groupDestroyedFrame is the update the fake sends when the group is gone: the destroyed flag and no roster.
