@@ -77,7 +77,8 @@ func TestTurtleCustomPlansAreNotApplicable(t *testing.T) {
 // TestSharedPlansKeepTurtleContent: a plan file serves both stacks, so checking a plan against ForeverCore data must
 // not delete a spawn a Turtle run needs. Where ForeverCore has no spawn of a Turtle content row, the plan keeps the row
 // and says refused for Forever: a Forever run cannot clear it, a Turtle run still can. The counts are the units the
-// plan's pull groups and boss rows carry, so dropping one member of a pack fails the test, not just dropping the entry.
+// plan's pull groups and boss rows carry (a boss's `first` and `phase_entries` included), so dropping one member of a
+// pack fails the test, not just dropping the entry.
 func TestSharedPlansKeepTurtleContent(t *testing.T) {
 	tests := []struct {
 		plan    string
@@ -137,16 +138,21 @@ func TestSharedPlansKeepTurtleContent(t *testing.T) {
 		// Wailing Caverns has no Turtle-only entry: its refused reason is the core's own spawn positions (two Druid
 		// of the Fang 3840 units and the Kresh 3653 boss row) and one pull group look point off the mesh.
 		{"wailing_caverns", nil},
-		// Upper Blackrock Spire keeps Lord Valthalak (16042), the Turtle addition, which the core does not spawn.
-		{"upper_blackrock_spire", map[uint32]int{16042: 1}},
-		// Molten Core's Turtle-only Basalthar/Incindis/Thaurissan wing: its bosses (65020, 52145, 57642) and the
-		// 52150-52152 Shadowforge trash have no map-409 spawn in the core.
-		{"molten_core", map[uint32]int{65020: 1, 52145: 1, 52150: 15, 52151: 7, 52152: 8, 57642: 1}},
+		// Upper Blackrock Spire has no Turtle-only entry: Lord Valthalak (16042) is a ForeverCore encounter
+		// (boss_lord_valthalak.cpp, dungeon encounter 3070) whose quest summon (8995, brazier 181050) leaves him
+		// without a static spawn; TestUpperBlackrockSpireKeepsValthalak pins the boss row.
+		{"upper_blackrock_spire", nil},
+		// Molten Core's Turtle-only Basalthar/Smoldaris/Incindis/Thaurissan wing: its bosses (65020, 52145, 57642),
+		// Basalthar's twin and `first` add Smoldaris (65021), and the 52150-52152 Shadowforge trash have no map-409
+		// spawn in the core.
+		{"molten_core", map[uint32]int{65020: 1, 65021: 1, 52145: 1, 52150: 15, 52151: 7, 52152: 8, 57642: 1}},
 		// Onyxia's Lair keeps the Turtle trash Onyxian Inciter (49016) and Flamespawn (49017), which have no map-249
-		// spawn.
-		{"onyxias_lair", map[uint32]int{49016: 5, 49017: 3}},
-		// Blackwing Lair has no Turtle-only entry: its Corrupted Whelps (14023-14025) are classic event spawns the
-		// core's instance creates, and its refused reasons are the spawn positions and the holds and gossip.
+		// spawn, and its Turtle phase targets Cindarion (50143) and the Onyxian Hatcher (50144), which the core's
+		// Onyxia script replaces with Onyxian Whelps (11262).
+		{"onyxias_lair", map[uint32]int{49016: 5, 49017: 3, 50143: 1, 50144: 1}},
+		// Blackwing Lair has no Turtle-only entry: the core randomizes any Corrupted Whelp spawn among 14022-14025
+		// (GetCreatureEntry), so the four colours are one family, and its refused reasons are the spawn positions and
+		// the holds and gossip.
 		{"blackwing_lair", nil},
 	}
 	for _, tc := range tests {
@@ -167,6 +173,9 @@ func TestSharedPlansKeepTurtleContent(t *testing.T) {
 				for _, e := range l.Boss.First {
 					got[e]++
 				}
+				for _, e := range l.Boss.PhaseEntries {
+					got[e]++
+				}
 			}
 		}
 		for e, want := range tc.entries {
@@ -177,6 +186,30 @@ func TestSharedPlansKeepTurtleContent(t *testing.T) {
 		if word, _, _ := strings.Cut(p.ForeverStatus, " "); word != ForeverRefused {
 			t.Errorf("%s: forever_status %q, want %s: the Turtle content has no ForeverCore spawn", tc.plan, p.ForeverStatus, ForeverRefused)
 		}
+	}
+}
+
+// TestUpperBlackrockSpireKeepsValthalak: Lord Valthalak (16042) has no static ForeverCore map-229 spawn at difficulty 1,
+// but the core ships his boss script (boss_lord_valthalak.cpp), registers the encounter (dungeon encounter 3070) and
+// holds the questline's summon (quest 8995 and the brazier spell focus 181050), like Gyth's summon-only row. The plan
+// keeps the boss row: a Forever remap must not drop an encounter the core supports just because its placement is
+// scripted.
+func TestUpperBlackrockSpireKeepsValthalak(t *testing.T) {
+	p, err := Load(filepath.Join(plansDir, "upper_blackrock_spire.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, l := range p.Legs {
+		if l.Boss != nil && l.Boss.Entry == 16042 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("upper_blackrock_spire: no boss row for Lord Valthalak (16042): the core registers his encounter and the plan must keep it")
+	}
+	if word, _, _ := strings.Cut(p.ForeverStatus, " "); word != ForeverRefused {
+		t.Errorf("upper_blackrock_spire: forever_status %q, want %s: no leg is remapped", p.ForeverStatus, ForeverRefused)
 	}
 }
 
