@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -38,6 +39,22 @@ func zgMmaps(t *testing.T) *navmesh.Planner {
 	return nil
 }
 
+// passBudget is how much work the offline pass may do. It counts the test process's CPU time, not the wall clock: the
+// whole module's suite runs every package at once, so on an oversubscribed runner the pass waits for a CPU it does not
+// use, and the wall clock reads the runner's load rather than the pass's work (in such a run every CPU-bound package
+// read 7-20x slower, internal/navmesh at 1.169 s against 0.109 s). A pass that really slows down spends the CPU time.
+const passBudget = 30 * time.Second
+
+// cpuTime is the test process's user and system time so far.
+func cpuTime(t *testing.T) time.Duration {
+	t.Helper()
+	var ru syscall.Rusage
+	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &ru); err != nil {
+		t.Fatalf("Getrusage: %v", err)
+	}
+	return time.Duration(ru.Utime.Nano() + ru.Stime.Nano())
+}
+
 // TestZGWalk31OfflineCatchesF1F3F4F5: the walk-31 rows and the real ZG navmesh catch the four failures the walk hit (f step
 // 23's gather ledge, f step 16's floor, the Arlokk pull's joiners, the water of rows 7-9) well inside the runtime target.
 func TestZGWalk31OfflineCatchesF1F3F4F5(t *testing.T) {
@@ -61,13 +78,15 @@ func TestZGWalk31OfflineCatchesF1F3F4F5(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
+	start, cpu := time.Now(), cpuTime(t)
 	rep, err := Offline(Input{Rows: all[0], Plan: plan}, planner, w, Options{PartyLevel: 60})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d := time.Since(start); d > 30*time.Second {
-		t.Fatalf("the offline pass took %s (target 30 s)", d)
+	wall, work := time.Since(start), cpuTime(t)-cpu
+	t.Logf("the offline pass took %s wall, %s cpu", wall, work)
+	if work > passBudget {
+		t.Fatalf("the offline pass spent %s cpu (%s wall) (target %s)", work, wall, passBudget)
 	}
 	failed := func(step int, name string) bool {
 		for _, s := range rep.Steps {
