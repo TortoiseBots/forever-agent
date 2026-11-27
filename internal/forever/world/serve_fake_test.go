@@ -192,9 +192,10 @@ func (f *fakeServer) serveDaemon(c *fakeConn, realm *fakeConn) {
 		}
 		f.mu.Lock()
 		f.instWire = append(f.instWire, code)
+		hook := f.serveWire
 		f.mu.Unlock()
 		core := table.TranslateClientWire(code)
-		if hook := f.serveWire; hook != nil {
+		if hook != nil {
 			hook(c, table, core, payload)
 		}
 		if f.fakeLimits {

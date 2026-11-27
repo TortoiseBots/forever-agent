@@ -803,6 +803,7 @@ func TestServeLootMethodPaced(t *testing.T) {
 // the client reads the frame while it waits, which is the roster change these revalidation tests turn on.
 func injectRosterAfter(f *fakeServer, core uint32, n int, delay time.Duration, mutate func()) {
 	seen := 0
+	f.mu.Lock()
 	f.serveWire = func(c *fakeConn, table *wire.OpcodeTable, gotCore uint32, payload []byte) {
 		if gotCore != core {
 			return
@@ -822,6 +823,7 @@ func injectRosterAfter(f *fakeServer, core uint32, n int, delay time.Duration, m
 			}
 		}()
 	}
+	f.mu.Unlock()
 }
 
 // TestServeLootMethodRevalidatesAfterPace is the second fix round's MEDIUM finding: after the pace the loot call
