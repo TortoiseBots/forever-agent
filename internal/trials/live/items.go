@@ -10,23 +10,29 @@ package live
 // hire carried before the trial, not one that merged into the hire's own
 // stack, not one the server did not name. An id with no grant is the hire's.
 //
-// A give is recorded at grant time: setup reads the item instances the hire
-// holds (`ItemScan`'s instances= list), sends `.tb additem`, reads the list
-// again, and records every GUID the give added. A give whose read-back is
-// missing, or added no instance (a merged stack), is reported and records
-// nothing: those copies are never the trial's to delete. The list is the
-// server's answer and the only evidence used; counts are never taken as
-// provenance, because a stack's count moves under the trial's feet (the live
-// bench ate a Sweet Nectar between the read and the removal, 2026-11-27).
+// A give is recorded at grant time, from the give's own answer: setup sends
+// `.tb additem` and the module answers `additem bot= item= created=<guid;...>`,
+// naming every item instance that very give created on that character. Those
+// GUIDs, and only those, are recorded. Inventory differences are never
+// evidence: a copy that appears between two scans may have been looted,
+// mailed or traded in, and a scan cannot say what created it. A give whose
+// answer names no created instance (a module without the record, a merged
+// stack, a refusal, a transport failure) records nothing and is reported:
+// those copies are never the trial's to delete. Counts, entries and slots are
+// never taken as provenance either.
 //
 // The clear deletes each recorded GUID with `.tb removeitem <character> guid
 // <guid>`, one copy at a time, only on the character the record names. A worn
-// copy is unequipped first, through the equipment slot the instance list
-// named, and the slot is read back before the unequip. A deletion that the
-// module refuses, or whose read-back cannot prove the GUID gone, is reported
-// and left in place: the clear never retries it, never deletes another copy
-// in its place, and never restores a budget. A recorded GUID the hire no
-// longer holds is retired: the copy is gone.
+// copy is first moved to the bags with `.tb unequip <character> guid <guid>`,
+// which the module checks against the instance in the slot at the moment of
+// the move; nothing is ever unequipped by slot, because the slot can hold a
+// replacement copy of the same item by then. A module that cannot unequip by
+// instance leaves the worn copy worn, the grant pending, and the clear
+// reports it. A deletion that the module refuses, or whose read-back cannot
+// prove the GUID gone, is reported and left in place: the clear never
+// retries it, never deletes another copy in its place, and never restores a
+// budget. A recorded GUID the hire no longer holds is retired: the copy is
+// gone.
 
 import (
 	"context"
@@ -40,17 +46,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
-	"github.com/pjerra/forever-agent/internal/tbm"
 )
-
-// invReadWaitMS is the `.bot inv` collection window. The dump is one chat
-// line per worn slot and per bag slot (up to ~100), and the collector ends a
-// tokenless reply after a quiet window; five seconds cut a full bag's dump
-// mid-reply on a loaded world, so the read is given the module's full dump
-// time instead.
-const invReadWaitMS = 15000
 
 // ItemGrant is one item instance a trial gave a character: the GUID the
 // server named for it, the item it is, and who received it. There is no
@@ -302,69 +299,50 @@ func (p *Provisioner) itemInstances(ctx context.Context, character string, item 
 	return nil, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s held no record for it)", item, character), false
 }
 
-// giveItem sends one `.tb additem` and records every item instance the give
-// created: the instances read after the give that were not there before. The
-// grant is written before the next server call. Without a readable instance
-// list nothing is given; a give whose read-back names no new instance (a
-// merged stack, an unreadable answer) is reported and records nothing, so a
-// clear can never delete a copy the server did not name.
+// giveItem sends one `.tb additem` and records the item instances the
+// module's answer says that give created (created=), on the character the
+// answer names, before the next server call. The instance list is read first
+// only as a capability check: a module that cannot list its copies by GUID
+// can never prove a later deletion, so nothing is given. A give whose answer
+// names no created instance records nothing and is reported; no scan, count
+// or inventory difference ever stands in for that answer.
 func (p *Provisioner) giveItem(ctx context.Context, bot string, item uint32, count uint32) ([]string, error) {
 	if count == 0 {
 		count = 1
 	}
-	before, note, ok := p.itemInstances(ctx, bot, item)
-	if !ok {
+	if _, note, ok := p.itemInstances(ctx, bot, item); !ok {
 		return nil, fmt.Errorf("nothing given: %s", note)
 	}
-	have := map[string]bool{}
-	for _, inst := range before {
-		have[inst.GUID] = true
-	}
 	tctx, cancel := p.ctxOf(ctx)
-	lines, err := p.TB.FreeTextAddItem(tctx, bot, item, count)
+	res, lines, err := p.TB.AddItemInstances(tctx, bot, item, count)
 	cancel()
-	after, note, ok := p.itemInstances(ctx, bot, item)
-	if !ok {
-		if err != nil {
-			return lines, err
-		}
-		return lines, fmt.Errorf("the give of item %d on %s is UNVERIFIED: %s; its copies are not recorded and will not be deleted", item, bot, note)
+	if err != nil {
+		// A refusal, a malformed record or a transport failure: whatever
+		// the give may have done, no answer named its copies, so none is
+		// recorded and none will be deleted.
+		return lines, err
 	}
-	var fresh []tbcmd.ItemInstance
-	for _, inst := range after {
-		if !have[inst.GUID] {
-			fresh = append(fresh, inst)
-		}
+	if !res.HasCreated {
+		return lines, fmt.Errorf("the give of item %d on %s is UNVERIFIED: the additem answer named no created item instance list, so no copy's GUID is known; nothing recorded, nothing will be deleted", item, bot)
 	}
-	if len(fresh) == 0 {
-		if err != nil {
-			return lines, err
-		}
-		return lines, fmt.Errorf("the give of item %d on %s created no item instance of its own (merged into a copy the hire carried, or the server named none): nothing recorded, nothing will be deleted", item, bot)
+	if len(res.Created) == 0 {
+		return lines, fmt.Errorf("the give of item %d on %s created no item instance of its own (merged into a copy the hire carried): nothing recorded, nothing will be deleted", item, bot)
 	}
-	grants := make([]ItemGrant, 0, len(fresh))
-	for _, inst := range fresh {
+	grants := make([]ItemGrant, 0, len(res.Created))
+	for _, guid := range res.Created {
 		grants = append(grants, ItemGrant{Server: p.Server, Character: bot, CharGUID: p.charGUID(bot),
-			Item: item, GUID: inst.GUID, Grant: nextGrant()})
+			Item: item, GUID: guid, Grant: nextGrant()})
 	}
 	if aerr := p.grants().add(grants); aerr != nil {
 		return lines, fmt.Errorf("the give of %d item instance(s) %d on %s was not recorded: %w", len(grants), item, bot, aerr)
 	}
-	if err != nil {
-		return lines, err
-	}
-	// A stack give names one instance; a give asking for several copies that
-	// landed in several stacks names several. Fewer instances than the
-	// copies asked for is fine when they hold every copy the read-back shows
-	// (merges are not evidence either way); the give itself already failed
-	// above when it created nothing.
 	return lines, nil
 }
 
 // ClearGiven deletes every item instance a trial recorded for character, and
 // only those: each grant is one GUID the server named at grant time, deleted
-// on that exact character. A worn copy is unequipped first, in the slot the
-// instance list proved. A recorded copy the character no longer holds is
+// on that exact character. A worn copy is unequipped first, by its own GUID
+// (the module checks the slot still holds that instance). A recorded copy the character no longer holds is
 // retired (it is gone). A deletion the module refuses, or one whose read-back
 // cannot prove the GUID gone, is reported and left in place: it is not
 // retried, no other copy is deleted in its place, and the grant stays for the
@@ -413,13 +391,25 @@ func (p *Provisioner) ClearGiven(ctx context.Context, character string) (string,
 				continue
 			}
 			if inst.Worn {
-				// A worn copy goes to the bags first, in the slot the server
-				// proved it occupies; a slot that is refused is reported and
-				// the copy stays worn.
-				if err := p.unequipBotSlot(ctx, character, inst.Slot, item); err != nil {
+				// A worn copy goes to the bags first, by its own GUID: the
+				// module checks the instance in the slot when it moves it, so
+				// a replacement copy of the same item is never touched. A
+				// module that refuses (or cannot unequip by instance) leaves
+				// the copy worn and the grant pending.
+				tctx, cancel := p.ctxOf(ctx)
+				ures, _, uerr := p.TB.UnequipItemInstance(tctx, character, grant.GUID)
+				cancel()
+				p.Ledger.Add(map[string]any{"kind": "unequip", "bot": character, "item_id": item,
+					"item_guid": grant.GUID, "moved": ures.Moved, "error": errText(uerr)})
+				if uerr != nil {
 					allOK = false
-					notes = append(notes, fmt.Sprintf("item %d (item guid %s): unequip slot %d failed: %v; left worn",
-						item, grant.GUID, inst.Slot, err))
+					notes = append(notes, fmt.Sprintf("item %d (item guid %s): unequip by instance refused: %s; left worn",
+						item, grant.GUID, tbErrText(uerr, nil)))
+					continue
+				}
+				if ures.Moved != 1 {
+					allOK = false
+					notes = append(notes, fmt.Sprintf("item %d (item guid %s): the module moved no copy out of its slot; left worn", item, grant.GUID))
 					continue
 				}
 				now, note, ok := p.itemInstances(ctx, character, item)
@@ -437,8 +427,8 @@ func (p *Provisioner) ClearGiven(ctx context.Context, character string) (string,
 				}
 				if moved.GUID == "" || moved.Worn {
 					allOK = false
-					notes = append(notes, fmt.Sprintf("item %d (item guid %s): unequip slot %d did not put the copy into the bags; left in place",
-						item, grant.GUID, inst.Slot))
+					notes = append(notes, fmt.Sprintf("item %d (item guid %s): the unequip did not put the copy into the bags; left in place",
+						item, grant.GUID))
 					continue
 				}
 			}
@@ -484,81 +474,6 @@ func (p *Provisioner) ClearGiven(ctx context.Context, character string) (string,
 	return formatClearSummary(cleared, notes), allOK
 }
 
-// provenEquipSlot reads the hire's inventory and returns the equipment slot
-// the instance list named when a complete `.bot inv` reply proves it holds
-// item. Only a complete reply proves an occupant, so a truncated reply proves
-// nothing and the unequip is refused.
-func (p *Provisioner) provenEquipSlot(ctx context.Context, bot string, item uint32, slot int) (int, string, bool) {
-	if p.Client == nil {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (no client for .bot inv)", item), false
-	}
-	var inv tbm.Inventory
-	var note string
-	for attempt := 1; attempt <= 2; attempt++ {
-		tctx, cancel := p.ctxOf(ctx)
-		// The inventory dump is many lines (every worn slot and every bag
-		// slot): ask for the collector's full bound, or a full bag cuts the
-		// reply before INV_END and no slot is ever proved. A read that ends
-		// without its end marker is retried once (the module's dump can
-		// outlast the quiet window on a loaded world), still fail-closed.
-		res, err := p.Client.botLine(tctx, ".bot inv "+bot, invReadWaitMS, command.MaxCollectedLines)
-		cancel()
-		p.Ledger.Add(map[string]any{"kind": "bot_inv", "bot": bot, "complete": res.Complete, "reply": firstLines(res.Lines)})
-		if err != nil {
-			note = fmt.Sprintf("item %d: UNVERIFIED (.bot inv %s: %v)", item, bot, err)
-			if attempt < 2 {
-				continue
-			}
-			return 0, note, false
-		}
-		inv = tbm.ParseInventory(res.Lines)
-		if inv.Err != nil {
-			return 0, fmt.Sprintf("item %d: UNVERIFIED (.bot inv %s: %s: %s)", item, bot, inv.Err.Code, inv.Err.Message), false
-		}
-		if inv.Complete {
-			note = ""
-			break
-		}
-		note = fmt.Sprintf("item %d: UNVERIFIED (.bot inv %s: the reply is truncated, no INV_END)", item, bot)
-	}
-	if !inv.Complete {
-		return 0, note, false
-	}
-	if inv.Bot != "" && !strings.EqualFold(inv.Bot, bot) {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (.bot inv answered for %q, asked for %q)", item, bot, inv.Bot), false
-	}
-	if slot < 0 || inv.Equipped[slot] != item {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (the slot %d the instance list named is not proved to hold it)", item, slot), false
-	}
-	return slot, "", true
-}
-
-func (p *Provisioner) unequipBotSlot(ctx context.Context, bot string, slot int, item uint32) error {
-	proved, note, ok := p.provenEquipSlot(ctx, bot, item, slot)
-	if !ok {
-		return fmt.Errorf("%s", note)
-	}
-	if p.Client == nil {
-		return fmt.Errorf("no client for .bot item unequip")
-	}
-	tctx, cancel := p.ctxOf(ctx)
-	res, err := p.Client.botLine(tctx, fmt.Sprintf(".bot item %s unequip 255 %d", bot, proved), 5000, 0)
-	cancel()
-	p.Ledger.Add(map[string]any{"kind": "unequip", "bot": bot, "bag": 255, "slot": proved, "item_id": item, "reply": firstLines(res.Lines)})
-	if err != nil {
-		return err
-	}
-	for _, l := range res.Lines {
-		if e, ok := tbm.ParseErr(l); ok {
-			return fmt.Errorf("%s: %s", e.Code, e.Message)
-		}
-		if ack, ok := tbm.ParseAck(l); ok && ack.Intent == "item unequip" {
-			return nil
-		}
-	}
-	return fmt.Errorf("no ACTION_ACK for .bot item %s unequip 255 %d", bot, proved)
-}
-
 // isBagsFull reports the module's "bags full" refusal.
 func isBagsFull(err error, lines []string) bool {
 	text := strings.ToLower(strings.Join(lines, "\n"))
@@ -572,7 +487,8 @@ func isBagsFull(err error, lines []string) bool {
 // answered no instances= list, so no copy's GUID can be known. A server gap
 // (needs=bot_items), never a defect of the trial.
 func noInstanceList(evidence string) bool {
-	return strings.Contains(evidence, "named no item instance list")
+	return strings.Contains(evidence, "named no item instance list") ||
+		strings.Contains(evidence, "named no created item instance list")
 }
 
 // itemsGiveRow is the bot_items row for a refused additem: a full bag that

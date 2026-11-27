@@ -322,9 +322,9 @@ func TestUnreadableReadBackAfterDeletionIsReported(t *testing.T) {
 	}
 }
 
-// Rule 2 and the worn path: a recorded worn copy is unequipped in the slot
-// the instance list named and then deleted by its own GUID; the hire's own
-// worn piece is never touched.
+// Rule 2 and the worn path: a recorded worn copy is unequipped by its own
+// GUID (never by slot) and then deleted by its own GUID; the hire's own worn
+// piece is never touched.
 func TestWornGrantIsUnequippedAndDeletedByIdentity(t *testing.T) {
 	prov, _, bags := bagProv(t)
 	bags.setWorn(14, 5555) // the hire's own cloak, no grant names it
@@ -352,11 +352,9 @@ func TestWornGrantIsUnequippedAndDeletedByIdentity(t *testing.T) {
 	if ids := bagGUIDs(bags, 7720); len(ids) != 0 {
 		t.Fatalf("the recorded instance must be gone, held %v", ids)
 	}
-	// The unequip happened before the deletion, and the deletion names the
-	// recorded GUID.
 	unequip, removal := -1, -1
 	for i, l := range bags.lines {
-		if strings.HasPrefix(l, ".bot item Bheal unequip 255 0") && unequip < 0 {
+		if l == ".tb unequip Bheal guid "+granted[0].GUID && unequip < 0 {
 			unequip = i
 		}
 		if strings.HasPrefix(l, ".tb removeitem Bheal guid ") && removal < 0 {
@@ -364,16 +362,20 @@ func TestWornGrantIsUnequippedAndDeletedByIdentity(t *testing.T) {
 		}
 	}
 	if unequip < 0 || removal < 0 || unequip > removal {
-		t.Fatalf("the worn copy must be unequipped before the removal: %v", bags.lines)
+		t.Fatalf("the worn copy must be unequipped by its GUID before the removal: %v", bags.lines)
 	}
 	if !strings.Contains(bags.lines[removal], granted[0].GUID) {
 		t.Fatalf("the removal must name the recorded GUID %s: %q", granted[0].GUID, bags.lines[removal])
 	}
+	if got := bags.seen(".bot item"); len(got) != 0 {
+		t.Fatalf("nothing may be unequipped by slot: %v", got)
+	}
 }
 
-// A worn grant whose slot cannot be proved is left alone and reported.
-func TestWornGrantWithNoProvedSlotIsLeftInPlace(t *testing.T) {
-	prov, s, bags := bagProv(t)
+// A module that cannot unequip by instance leaves the worn grant worn,
+// pending and reported: no slot-based unequip stands in for it.
+func TestWornGrantWithoutInstanceUnequipIsLeftWorn(t *testing.T) {
+	prov, _, bags := bagProv(t)
 	bags.itemSlot[7720] = 0
 	if _, err := prov.giveItem(context.Background(), "Bheal", 7720, 1); err != nil {
 		t.Fatal(err)
@@ -381,43 +383,31 @@ func TestWornGrantWithNoProvedSlotIsLeftInPlace(t *testing.T) {
 	if eq, err := prov.TB.Equip(context.Background(), "Bheal", 7720, true); err != nil || eq.Result != "equipped" {
 		t.Fatalf("equip failed: %v %+v", err, eq)
 	}
-	// `.bot inv` answers without INV_END: the slot is not proved.
-	f := s.fake
-	f.mu.Lock()
-	f.botFn = func(line string) []string {
-		if strings.HasPrefix(line, ".bot inv") {
-			return []string{"TBM:INV_BEGIN|Bheal|0|16|16", "TBM:INV_EQ|0|7720|Item 7720"}
-		}
-		return nil
-	}
-	f.mu.Unlock()
+	bags.noGuidUnequip = true
 	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if ok || !strings.Contains(ev, "UNVERIFIED") {
-		t.Fatalf("an unproved slot must not read ok: ok=%v %q", ok, ev)
+	if ok || !strings.Contains(ev, "left worn") {
+		t.Fatalf("a worn grant the module cannot unequip by instance must be reported: ok=%v %q", ok, ev)
 	}
 	if got := bags.wornAt(0); got != 7720 {
-		t.Fatalf("nothing may be unequipped without a proved slot, slot0=%d", got)
+		t.Fatalf("the worn copy must stay worn, slot0=%d", got)
 	}
 	if got := bags.seen(".bot item"); len(got) != 0 {
-		t.Fatalf("no unequip may be sent: %v", got)
+		t.Fatalf("no slot-based unequip may be sent: %v", got)
+	}
+	if got := bags.seen(".tb removeitem"); len(got) != 0 {
+		t.Fatalf("a worn copy may not be removed: %v", got)
 	}
 	if got := readGrants(t, prov.GrantPath); len(got) != 1 {
 		t.Fatalf("the grant must stay: %+v", got)
 	}
 }
 
-// #278 round 3: the `.bot inv` dump of a hire whose bags are full runs past
-// the agent's 64-line default cap, so the reply ended before INV_END and the
-// worn trial copy could never be unequipped (the next equip answered "bags
-// full"). The read must ask the serve for the collector's full line bound.
-func TestBotInvReadAsksForTheFullLineBound(t *testing.T) {
+// Review finding (medium): a replacement copy of the same item took the slot
+// after the clear read the instance list. The clear must not move the
+// replacement: the unequip names the recorded instance, and the module finds
+// it no longer worn. The old slot-based unequip moved the replacement.
+func TestReplacementInTheSlotIsNeverUnequipped(t *testing.T) {
 	prov, _, bags := bagProv(t)
-	// A full bag: 70 filler stacks plus the worn copy make the dump (begin,
-	// the worn row, one row per bag slot, end) longer than 64 lines.
-	bags.bagSlots = 90
-	for i := range 70 {
-		bags.set(uint32(3000+i), 1)
-	}
 	bags.itemSlot[7720] = 0
 	if _, err := prov.giveItem(context.Background(), "Bheal", 7720, 1); err != nil {
 		t.Fatal(err)
@@ -425,53 +415,110 @@ func TestBotInvReadAsksForTheFullLineBound(t *testing.T) {
 	if eq, err := prov.TB.Equip(context.Background(), "Bheal", 7720, true); err != nil || eq.Result != "equipped" {
 		t.Fatalf("equip failed: %v %+v", err, eq)
 	}
+	recorded := readGrants(t, prov.GrantPath)[0].GUID
+	bags.swapBeforeUnequip = true
 	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if !ok {
-		t.Fatalf("a full inventory must still prove its worn slot: %q", ev)
+	if ok {
+		t.Fatalf("a recorded copy that left its slot under the clear must not read ok: %q", ev)
 	}
-	if got := bags.wornAt(0); got != 0 {
-		t.Fatalf("the recorded worn copy must be off the body, slot0=%d", got)
+	bags.mu.Lock()
+	var replacement *fakeItem
+	for _, it := range bags.items {
+		if it.item == 7720 && it.guid != recorded {
+			replacement = it
+		}
 	}
-	if ids := bagGUIDs(bags, 7720); len(ids) != 0 {
-		t.Fatalf("the recorded instance must be gone, held %v", ids)
+	bags.mu.Unlock()
+	if replacement == nil {
+		t.Fatalf("the replacement copy must still exist: %q", ev)
+	}
+	if !replacement.worn || replacement.slot != 0 || bags.wornAt(0) != 7720 {
+		t.Fatalf("the unrecorded replacement must stay worn in slot 0: %+v (%q)", *replacement, ev)
+	}
+	for _, l := range bags.seen(".tb removeitem") {
+		if strings.Contains(l, replacement.guid) {
+			t.Fatalf("the replacement may never be removed: %v", l)
+		}
+	}
+	if got := bags.seen(".bot item"); len(got) != 0 {
+		t.Fatalf("nothing may be unequipped by slot: %v", got)
 	}
 }
 
-// #278 round 3: a `.bot inv` read that ends without INV_END (a loaded world
-// cuts the dump at the quiet window) is retried once instead of leaving the
-// worn copy on the hire; the second read proves the slot.
-func TestBotInvTruncatedReplyIsRetried(t *testing.T) {
-	prov, s, bags := bagProv(t)
-	bags.itemSlot[7720] = 0
-	if _, err := prov.giveItem(context.Background(), "Bheal", 7720, 1); err != nil {
+// Review finding (high): a copy of the same item that lands while the give
+// runs (a loot, a mail) is not the trial's. Only the GUID the give's own
+// answer names is recorded, and the clear leaves the foreign copy alone. The
+// old before/after difference recorded both.
+func TestForeignSameEntryCopyDuringAGiveIsNeverRecorded(t *testing.T) {
+	prov, _, bags := bagProv(t)
+	bags.lootDuringAdd = true
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
 		t.Fatal(err)
 	}
-	if eq, err := prov.TB.Equip(context.Background(), "Bheal", 7720, true); err != nil || eq.Result != "equipped" {
-		t.Fatalf("equip failed: %v %+v", err, eq)
+	held := bagGUIDs(bags, 1708)
+	if len(held) != 2 {
+		t.Fatalf("the fake must hold the foreign copy and the given stack: %v", held)
 	}
-	reads := 0
-	f := s.fake
-	f.mu.Lock()
-	inner := f.botFn
-	f.botFn = func(line string) []string {
-		if strings.HasPrefix(line, ".bot inv") {
-			reads++
-			if reads == 1 {
-				return []string{"TBM:INV_BEGIN|Bheal|0|16|16", "TBM:INV_EQ|0|7720|Item 7720"}
-			}
+	foreign := held[0]
+	got := readGrants(t, prov.GrantPath)
+	if len(got) != 1 || got[0].GUID != held[1] {
+		t.Fatalf("only the instance the give named may be recorded (foreign %s): %+v", foreign, got)
+	}
+	if ev, ok := prov.ClearGiven(context.Background(), "Bheal"); !ok {
+		t.Fatalf("the recorded copy must clear: %q", ev)
+	}
+	if ids := bagGUIDs(bags, 1708); len(ids) != 1 || ids[0] != foreign {
+		t.Fatalf("the foreign copy %s must stay, held %v", foreign, ids)
+	}
+	for _, l := range bags.seen(".tb removeitem") {
+		if strings.Contains(l, foreign) {
+			t.Fatalf("the foreign copy may never be removed: %v", l)
 		}
-		return inner(line)
 	}
-	f.mu.Unlock()
-	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
-	if !ok {
-		t.Fatalf("the retried read must prove the slot: %q", ev)
+}
+
+// Review finding (high), the failed-grant half: a give the module refused
+// records nothing, even when a foreign copy of the same item arrived during
+// it. The old code wrote that copy as a grant before returning the error.
+func TestRefusedGiveRecordsNothingEvenWhenACopyArrives(t *testing.T) {
+	prov, _, bags := bagProv(t)
+	bags.lootDuringAdd = true
+	bags.refuseAdd = true
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err == nil {
+		t.Fatal("a refused give must fail")
 	}
-	if reads != 2 {
-		t.Fatalf("the truncated read must be retried once (reads=%d): %q", reads, ev)
+	if got := readGrants(t, prov.GrantPath); len(got) != 0 {
+		t.Fatalf("a refused give may record nothing: %+v", got)
 	}
-	if got := bags.wornAt(0); got != 0 {
-		t.Fatalf("the recorded worn copy must be off the body, slot0=%d", got)
+	foreign := bagGUIDs(bags, 1708)
+	if ev, ok := prov.ClearGiven(context.Background(), "Bheal"); !ok || !strings.Contains(ev, "no items to clear") {
+		t.Fatalf("nothing recorded, nothing to clear: ok=%v %q", ok, ev)
+	}
+	if ids := bagGUIDs(bags, 1708); len(ids) != 1 || ids[0] != foreign[0] {
+		t.Fatalf("the foreign copy must stay, held %v", ids)
+	}
+}
+
+// A give whose answer names no created instance (a module without the
+// created= record) records nothing, even though the bags gained a copy: the
+// scan difference is not evidence. The row is the module gap.
+func TestGiveWithoutACreatedRecordRecordsNothing(t *testing.T) {
+	prov, _, bags := bagProv(t)
+	bags.noCreated = true
+	_, err := prov.giveItem(context.Background(), "Bheal", 1708, 20)
+	if err == nil || !strings.Contains(err.Error(), "named no created item instance") {
+		t.Fatalf("a give with no created= record must not be recorded: %v", err)
+	}
+	if got := readGrants(t, prov.GrantPath); len(got) != 0 {
+		t.Fatalf("no grant may be written: %+v", got)
+	}
+	if got := bags.count(1708); got != 20 {
+		t.Fatalf("the unrecorded copy stays where it is, bags=%d", got)
+	}
+	spec := BotSpec{Class: "priest", Level: 40, Items: []TrialItem{{Name: "Sweet Nectar", Count: 20}}}
+	row := prov.ensureBotGear(context.Background(), spec, "Bheal")
+	if row == nil || rowOK(row) || skippedIn(rowEvidence(row)) != "bot_items" {
+		t.Fatalf("the module gap must be SKIPPED needs=bot_items: %v", row)
 	}
 }
 

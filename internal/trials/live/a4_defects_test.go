@@ -219,6 +219,35 @@ type bagModel struct {
 	mergeAdds     bool
 	refuseRemoval bool
 	ignoreRemoval bool
+	// noCreated makes additem answer only the human line, without the
+	// `additem ... created=` record (a module that does not name what a give
+	// created); refuseAdd refuses every additem; lootDuringAdd puts a second,
+	// unrelated copy of the same item into the bags while the give runs (a
+	// loot or a mail landing between two scans): it is never in created=;
+	// noGuidUnequip refuses `.tb unequip <bot> guid` (a module that cannot
+	// unequip by instance); swapBeforeUnequip makes a replacement copy of the
+	// worn item take its slot (the recorded copy goes to the bags) the moment
+	// any unequip command arrives, before the command acts.
+	noCreated         bool
+	refuseAdd         bool
+	lootDuringAdd     bool
+	noGuidUnequip     bool
+	swapBeforeUnequip bool
+}
+
+// swapWornLocked replaces the worn copy in slot with a new copy of the same
+// item and moves the old one into the bags. It returns the replacement.
+func (b *bagModel) swapWornLocked(slot int) *fakeItem {
+	for _, it := range b.items {
+		if it.worn && it.slot == slot {
+			it.worn = false
+			it.bag = 255
+			it.slot = b.freeBagSlotLocked()
+			b.inv[it.item]++
+			return b.newItemLocked(it.item, 255, slot, 1, true)
+		}
+	}
+	return nil
 }
 
 func newBagModel() *bagModel {
@@ -399,6 +428,15 @@ func (b *bagModel) answer(line string) []string {
 			return []string{} // usage refusal: names no bot, nothing happens
 		}
 		item := uint32(id)
+		if b.lootDuringAdd {
+			// A foreign copy lands while the give runs: the bags hold it,
+			// the give's own record never names it.
+			b.newItemLocked(item, 255, b.freeBagSlotLocked(), 1, false)
+			b.inv[item]++
+		}
+		if b.refuseAdd {
+			return []string{"TortoiseBots: " + f[2] + ": the item was not stored (refused)."}
+		}
 		if b.inv[item]+n > b.cap || (b.bagSlots > 0 && b.inv[item] == 0 && b.usedBagSlotsLocked() >= b.bagSlots) {
 			return []string{"TortoiseBots: " + f[2] + ": bags full, the item was not stored."}
 		}
@@ -412,11 +450,46 @@ func (b *bagModel) answer(line string) []string {
 				}
 			}
 		}
+		created := ""
 		if !merged {
-			b.newItemLocked(item, 255, b.freeBagSlotLocked(), n, false)
+			created = b.newItemLocked(item, 255, b.freeBagSlotLocked(), n, false).guid
 		}
 		b.inv[item] += n
-		return []string{fmt.Sprintf("TortoiseBots: %s now has %d of item %d.", f[2], b.inv[item], item)}
+		out := []string{fmt.Sprintf("TortoiseBots: %s now has %d of item %d.", f[2], b.inv[item], item)}
+		if !b.noCreated {
+			out = append(out, fmt.Sprintf("additem bot=%s item=%d created=%s", f[2], item, created))
+		}
+		return out
+	case "unequip":
+		b.lines = append(b.lines, line)
+		if len(f) != 5 || f[3] != "guid" || b.noGuidUnequip {
+			return []string{"TortoiseBots: usage: .tb unequip <character> guid <item guid>"}
+		}
+		want := strings.ToLower(f[4])
+		for _, it := range b.items {
+			if it.worn && b.swapBeforeUnequip {
+				b.swapWornLocked(it.slot)
+				b.swapBeforeUnequip = false
+				break
+			}
+		}
+		// The module checks the named instance in the slot at the moment of
+		// the move: a copy that is not worn moves nothing.
+		for _, it := range b.items {
+			if it.guid != want {
+				continue
+			}
+			if !it.worn {
+				return []string{fmt.Sprintf("unequip bot=%s guid=%s moved=0", f[2], want)}
+			}
+			delete(b.worn, it.slot)
+			b.inv[it.item]++
+			it.worn = false
+			it.bag = 255
+			it.slot = b.freeBagSlotLocked()
+			return []string{fmt.Sprintf("unequip bot=%s guid=%s moved=1", f[2], want)}
+		}
+		return []string{fmt.Sprintf("unequip bot=%s guid=%s moved=0", f[2], want)}
 	case "removeitem":
 		b.lines = append(b.lines, line)
 		if len(f) > 3 && f[3] == "guid" {
@@ -522,6 +595,12 @@ func (b *bagModel) botAnswer(line string) []string {
 	}
 	if len(f) == 6 && f[0] == ".bot" && f[1] == "item" && f[3] == "unequip" {
 		bot := f[2]
+		if b.swapBeforeUnequip {
+			if s, err := strconv.Atoi(f[5]); err == nil {
+				b.swapWornLocked(s)
+			}
+			b.swapBeforeUnequip = false
+		}
 		bag, err1 := strconv.Atoi(f[4])
 		slot, err2 := strconv.Atoi(f[5])
 		if err1 != nil || err2 != nil || bag != 255 {

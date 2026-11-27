@@ -8,12 +8,10 @@ package live
 //   - a teardown whose connection was aborted mid-run ("the call was aborted
 //     and the connection is closed") never sent `.tb logout` again, and the
 //     leftover hire made every later trial fail setup with "already logged
-//     in or loading". The logout must be retried on a fresh call, a
-//     leftover session must be ended (and proved gone) before the next
-//     login, and a teardown's unproven problems must survive an early
-//     return instead of vanishing with it.
-//   - `.bot inv` was cut off before INV_END, so a worn trial copy could
-//     never be proved and unequipped (the next equip answered "bags full").
+//     in or loading". The logout must be retried on a fresh call, and a
+//     teardown's unproven problems must survive an early return instead of
+//     vanishing with it. A session the trial did not start is never ended:
+//     it is reported and left alone.
 
 import (
 	"context"
@@ -22,7 +20,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -86,106 +83,119 @@ func TestTrialTeardownRetriesAnAbortedLogoutSend(t *testing.T) {
 	}
 }
 
-// The module answers `.tb login` with "that bot is already logged in or
-// loading" (it names no bot), so the login row cannot pass and the next
-// trial never hires. Setup must end that leftover session, prove it left,
-// and log in again.
-func TestSetupEndsALeftoverSessionBeforeLoggingInAgain(t *testing.T) {
-	s, f := newSetupFake(t)
+// Review finding (high): the module answers `.tb login` with "that bot is
+// already logged in or loading" (it names no bot). Nothing proves whose
+// session that is, so the trial never acquired it: the setup reports it,
+// sends no logout, and never puts it on the teardown list. The old code
+// registered the name and logged the session out.
+func TestSetupLeavesASessionItDidNotStartAlone(t *testing.T) {
+	s, _ := newSetupFake(t)
 	trial := map[string]any{"id": "t", "bot": map[string]any{"class": "priest", "role": "healer", "level": 40}}
-
-	// A live fake world: the roster answers for whoever is online now, and the
-	// unit row follows the same state the logout and the login change.
-	var stateMu sync.Mutex
-	stale := true
-	online := func() bool {
-		stateMu.Lock()
-		defer stateMu.Unlock()
-		return stale
-	}
-	setOnline := func(v bool) {
-		stateMu.Lock()
-		defer stateMu.Unlock()
-		stale = v
-	}
-	f.hook = func(method string, _ map[string]any) {
-		if method != "party" {
-			return
-		}
-		names := []string{"Acmd"}
-		if online() {
-			names = append(names, "Bheal")
-		}
-		members := make([]any, 0, len(names))
-		for i, n := range names {
-			members = append(members, map[string]any{"name": n,
-				"guid": "0x000000000000000" + itoa(i+1), "online": true, "leader": i == 0})
-		}
-		f.mu.Lock()
-		f.script["party"] = []any{map[string]any{
-			"in_group": true, "leader": "0x0000000000000001", "members": members}}
-		f.mu.Unlock()
-	}
-
-	logins, logouts := 0, 0
+	s.scriptParty("Atank", "Bheal") // someone's Bheal is online and grouped
+	var sent []string
 	s.tbFn = func(line string) []string {
+		sent = append(sent, line)
 		switch {
 		case strings.HasPrefix(line, ".tb login"):
-			logins++
-			if logins == 1 {
-				return []string{"that bot is already logged in or loading"}
-			}
-			setOnline(true)
-			return []string{"TortoiseBots: Bheal is logging in."}
+			return []string{"that bot is already logged in or loading"}
 		case strings.HasPrefix(line, ".tb logout"):
-			logouts++
-			setOnline(false)
-			f.mu.Lock()
-			f.units = nil // the character is gone from the server's world
-			f.mu.Unlock()
 			return []string{"TortoiseBots: Bheal is logging out."}
 		}
 		return nil
 	}
-	s.scriptTB(".tb state", "state-begin #T",
-		"state bot=Bheal role=healer rolesrc=forced class=priest level=40 hp=1500 hpmax=1500 hppct=100 power=mana pw=2000 pwmax=2000 st=non-combat incombat=no tgt= tgtentry= tgthp= victim= hold=no mv=follow stuck= engine=yes pos=1.0,2.0,3.0 map=0 inst=0 dl=self dm=2.4 ord=7:ok lastorder=stay co=heal nc= cast_queued=0 cast_delivered=0 cast_dropped=0 cast_pending=0 eating=no drinking=no resting=no rest_why= #T",
-		"state-end count=1 records=1 resting=0 ready=yes target= #T")
-	s.scriptTB(".tb engine", "TortoiseBots: engine on.")
-
-	// Tokenless lines wait a quiet window on the runner's clock: each read
-	// advances it a second, so the login and logout answer at once.
 	var ticks int
 	s.runner.now = func() time.Time {
 		ticks++
 		return time.Unix(0, 0).Add(time.Duration(ticks) * time.Second)
 	}
-
 	prov := &Provisioner{Client: s.runner.client, TB: tbcmd.NewClient(s.runner), Server: "test2",
 		Ledger: NewLedger(""), Player: "Acmd", Pool: map[string][]string{"priest": {"Bheal"}}, Timeout: 2 * time.Second,
 		GrantPath: filepath.Join(t.TempDir(), "grants.json")}
+	rep := &Repeat{Client: s.runner.client, Ledger: NewLedger(""), TrialID: "t"}
 	var hired []string
-	prov.OnHire = func(name string) { hired = append(hired, name) }
+	prov.OnHire = func(name string) { hired = append(hired, name); rep.noteHire(name, "") }
+	prov.OnHireGUID = func(name, guid string) { rep.noteHire(name, guid) }
 	out, rows, err := prov.Provision(context.Background(), trial, map[string]any{}, "")
 	if err != nil {
 		t.Fatalf("provision: %v", err)
 	}
-	if out.HireName != "Bheal" {
-		t.Fatalf("the hire must be the pool priest: %+v", out)
+	if out.HireName != "" {
+		t.Fatalf("a session this trial did not start is no hire: %+v", out)
 	}
-	if logins != 2 || logouts != 1 {
-		t.Fatalf("a leftover session must be logged out and the hire logged in again (logins=%d logouts=%d): %v", logins, logouts, rows)
-	}
-	present := false
+	failed := false
 	for _, row := range rows {
-		if strOf(row["id"]) == "bot_present" && rowOK(row) {
-			present = true
+		if strOf(row["id"]) == "bot_present" && !rowOK(row) && strings.Contains(rowEvidence(row), "did not start") {
+			failed = true
 		}
 	}
-	if !present {
-		t.Fatalf("the hire that logged in after the recovery must pass bot_present: %v", rows)
+	if !failed {
+		t.Fatalf("bot_present must fail and say the session is not this trial's: %v", rows)
 	}
-	if len(hired) != 1 || hired[0] != "Bheal" {
-		t.Fatalf("the hire must reach the teardown registry: %v", hired)
+	if len(hired) != 0 || len(acquiredHires(rep)) != 0 {
+		t.Fatalf("the session must never reach the teardown list: hired=%v list=%+v", hired, acquiredHires(rep))
+	}
+	r := teardownRunner(s)
+	_ = r.trialTeardown(context.Background(), rep, "t")
+	for _, l := range sent {
+		if strings.HasPrefix(l, ".tb logout") || strings.HasPrefix(l, ".tb stay") || strings.HasPrefix(l, ".tb free") {
+			t.Fatalf("nothing may be sent to a session this trial did not acquire: %v", sent)
+		}
+	}
+}
+
+// The extra-hire half of the same rule.
+func TestExtraHireLeavesASessionItDidNotStartAlone(t *testing.T) {
+	s, _ := newSetupFake(t)
+	s.scriptParty("Atank", "Bx")
+	var sent []string
+	s.tbFn = func(line string) []string {
+		sent = append(sent, line)
+		switch {
+		case strings.HasPrefix(line, ".tb login"):
+			return []string{"that bot is already logged in or loading"}
+		case strings.HasPrefix(line, ".tb logout"):
+			return []string{"TortoiseBots: Bx is logging out."}
+		}
+		return nil
+	}
+	var ticks int
+	s.runner.now = func() time.Time {
+		ticks++
+		return time.Unix(0, 0).Add(time.Duration(ticks) * time.Second)
+	}
+	prov := &Provisioner{Client: s.runner.client, TB: tbcmd.NewClient(s.runner), Server: "test2",
+		Ledger: NewLedger(""), Player: "Acmd", Pool: map[string][]string{"priest": {"Bx"}}, Timeout: 2 * time.Second,
+		GrantPath: filepath.Join(t.TempDir(), "grants.json")}
+	rep := &Repeat{Client: s.runner.client, Ledger: NewLedger(""), TrialID: "t"}
+	prov.OnExtra = func(name string) { rep.noteHire(name, "") }
+	prov.OnHireGUID = func(name, guid string) { rep.noteHire(name, guid) }
+	trial := map[string]any{"extra_bots": []any{map[string]any{
+		"class": "priest", "role": "healer", "level": float64(40)}}}
+	out, rows, err := prov.ProvisionExtras(context.Background(), trial, map[string]any{"player": "0x0000000000000001"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out.ExtraNames) != 0 {
+		t.Fatalf("a session this trial did not start is no extra hire: %+v", out)
+	}
+	failed := false
+	for _, row := range rows {
+		if strOf(row["id"]) == "extra_bots_present" && !rowOK(row) && strings.Contains(rowEvidence(row), "did not start") {
+			failed = true
+		}
+	}
+	if !failed {
+		t.Fatalf("extra_bots_present must fail and say the session is not this trial's: %v", rows)
+	}
+	if got := acquiredHires(rep); len(got) != 0 {
+		t.Fatalf("the session must never reach the teardown list: %+v", got)
+	}
+	r := teardownRunner(s)
+	_ = r.trialTeardown(context.Background(), rep, "t")
+	for _, l := range sent {
+		if strings.HasPrefix(l, ".tb logout") || strings.HasPrefix(l, ".tb stay") || strings.HasPrefix(l, ".tb free") {
+			t.Fatalf("nothing may be sent to a session this trial did not acquire: %v", sent)
+		}
 	}
 }
 

@@ -551,3 +551,193 @@ func firstNonEmpty(raws []string, fallback string) string {
 	}
 	return fallback
 }
+
+// AddItemResult is the module's own account of one `.tb additem`: the item
+// instances that give created, each by its own GUID, on the character the
+// answer names. HasCreated is false when the answer carried no
+// `additem ... created=` record at all: the module did not say which copies
+// it made, so none of them may ever be treated as the trial's. An empty
+// created= value is "this give made no instance of its own" (it merged into
+// a stack the character already held).
+type AddItemResult struct {
+	Bot        string
+	Item       uint32
+	Created    []string
+	HasCreated bool
+}
+
+// AddItemInstances sends `.tb additem <bot> <item id> [count]` and reads the
+// module's record of what it created:
+// `additem bot=<name> item=<id> created=<32hex>[;<32hex>...]`. The record must
+// name the asked character and item, and every created value must be a
+// 32-hex item GUID; anything else is ErrBadReport. An answer without the
+// record is not an error here (HasCreated false): the caller must record
+// nothing for it.
+func (c *Client) AddItemInstances(ctx context.Context, bot string, item uint32, count uint32) (AddItemResult, []string, error) {
+	setup, err := setupName("additem", bot)
+	if err != nil {
+		return AddItemResult{}, nil, err
+	}
+	if item == 0 {
+		return AddItemResult{}, nil, fmt.Errorf("tbcmd: additem item id 0 is not an id")
+	}
+	if count == 0 {
+		count = 1
+	}
+	line := ".tb additem " + setup + " " + strconv.FormatUint(uint64(item), 10)
+	if count != 1 {
+		line += " " + strconv.FormatUint(uint64(count), 10)
+	}
+	raws, rep, err := c.freeTextNamed(ctx, line, bot)
+	if err != nil {
+		return AddItemResult{}, raws, err
+	}
+	// The record is read before any refusal words: a GUID is hex and can
+	// spell one ("dead").
+	res, ok, perr := parseAddItem(raws)
+	if ok {
+		if perr != nil {
+			return AddItemResult{}, raws, perr
+		}
+		if !strings.EqualFold(res.Bot, setup) || res.Item != item {
+			return AddItemResult{}, raws, fmt.Errorf("%w: additem answered for %q item %d, asked for %q item %d",
+				ErrBadReport, res.Bot, res.Item, setup, item)
+		}
+		return res, raws, nil
+	}
+	joined := strings.Join(raws, "\n")
+	if rep != nil && rep.Refusal != nil {
+		return AddItemResult{}, raws, &TestkitRefused{Cmd: "additem", Text: firstNonEmpty(raws, rep.RefusalText)}
+	}
+	if looksLikeRefusal(joined) {
+		return AddItemResult{}, raws, &TestkitRefused{Cmd: "additem", Text: joined}
+	}
+	return AddItemResult{}, raws, nil
+}
+
+// parseAddItem finds the `additem bot= item= created=` record. ok is false
+// when no line carries the record word with a created= key; err is set when
+// the record is there but malformed.
+func parseAddItem(raws []string) (AddItemResult, bool, error) {
+	for _, raw := range raws {
+		fields := strings.Fields(raw)
+		at := -1
+		for i, f := range fields {
+			if f == "additem" {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			continue
+		}
+		kv := map[string]string{}
+		for _, f := range fields[at+1:] {
+			if strings.HasPrefix(f, "#") {
+				continue
+			}
+			if k, v, found := strings.Cut(f, "="); found {
+				kv[k] = v
+			}
+		}
+		created, has := kv["created"]
+		if !has {
+			continue
+		}
+		var res AddItemResult
+		res.Bot = kv["bot"]
+		id, ierr := strconv.ParseUint(kv["item"], 10, 32)
+		if res.Bot == "" || ierr != nil || id == 0 {
+			return res, true, fmt.Errorf("%w: additem record needs bot= and item=: %q", ErrBadReport, raw)
+		}
+		res.Item = uint32(id)
+		res.HasCreated = true
+		seen := map[string]bool{}
+		for _, part := range strings.Split(created, ";") {
+			if strings.TrimSpace(part) == "" {
+				continue
+			}
+			g, gerr := ItemGUID(part)
+			if gerr != nil {
+				return AddItemResult{}, true, fmt.Errorf("%w: additem created= value: %v", ErrBadReport, gerr)
+			}
+			if !seen[g] {
+				seen[g] = true
+				res.Created = append(res.Created, g)
+			}
+		}
+		return res, true, nil
+	}
+	return AddItemResult{}, false, nil
+}
+
+// UnequipResult is the module's answer to an instance-checked unequip: the
+// GUID it acted on and whether that copy left its equipment slot.
+type UnequipResult struct {
+	Bot   string
+	GUID  string
+	Moved int
+}
+
+// UnequipItemInstance sends `.tb unequip <bot> guid <32-hex item guid>`: the
+// module moves the one worn copy the GUID names into the bags, checking at
+// the moment of the move that the slot still holds that very instance, and
+// answers `unequip bot=<name> guid=<32hex> moved=<0|1>`. Nothing is ever
+// unequipped by slot: a slot can hold a different copy of the same item by
+// the time the command lands. The answer must name the asked bot and GUID;
+// the caller still proves the move with `ItemScan`.
+func (c *Client) UnequipItemInstance(ctx context.Context, bot, guid string) (UnequipResult, []string, error) {
+	setup, err := setupName("unequip", bot)
+	if err != nil {
+		return UnequipResult{}, nil, err
+	}
+	want, err := ItemGUID(guid)
+	if err != nil {
+		return UnequipResult{}, nil, fmt.Errorf("tbcmd: unequip: %w", err)
+	}
+	line := ".tb unequip " + setup + " guid " + want
+	raws, rep, err := c.freeTextNamed(ctx, line, bot)
+	if err != nil {
+		return UnequipResult{}, raws, err
+	}
+	for _, raw := range raws {
+		fields := strings.Fields(raw)
+		at := -1
+		for i, f := range fields {
+			if f == "unequip" {
+				at = i
+				break
+			}
+		}
+		if at < 0 {
+			continue
+		}
+		kv := map[string]string{}
+		for _, f := range fields[at+1:] {
+			if k, v, found := strings.Cut(f, "="); found {
+				kv[k] = v
+			}
+		}
+		if _, has := kv["moved"]; !has {
+			continue
+		}
+		moved, merr := strconv.Atoi(kv["moved"])
+		got, gerr := ItemGUID(kv["guid"])
+		if kv["bot"] == "" || merr != nil || moved < 0 || moved > 1 || gerr != nil {
+			return UnequipResult{}, raws, fmt.Errorf("%w: unequip record needs bot=, guid= (32 hex), moved= (0 or 1): %q", ErrBadReport, raw)
+		}
+		if !strings.EqualFold(kv["bot"], setup) || got != want {
+			return UnequipResult{}, raws, fmt.Errorf("%w: unequip answered for %q item guid %s, asked for %q guid %s",
+				ErrBadReport, kv["bot"], got, setup, want)
+		}
+		return UnequipResult{Bot: kv["bot"], GUID: got, Moved: moved}, raws, nil
+	}
+	joined := strings.Join(raws, "\n")
+	if rep != nil && rep.Refusal != nil {
+		return UnequipResult{}, raws, &TestkitRefused{Cmd: "unequip", Text: firstNonEmpty(raws, rep.RefusalText)}
+	}
+	if looksLikeRefusal(joined) {
+		return UnequipResult{}, raws, &TestkitRefused{Cmd: "unequip", Text: joined}
+	}
+	return UnequipResult{}, raws, fmt.Errorf("%w: .tb %s: no unequip record in the answer", ErrBadReport, line)
+}
