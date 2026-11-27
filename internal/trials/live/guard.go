@@ -601,7 +601,7 @@ func (g *Guard) CCOrder(ctx context.Context, bot string) (BotResult, error) {
 	if g.dryRun {
 		return BotResult{}, nil
 	}
-	return g.client.botLine(ctx, line, 10000)
+	return g.client.botLine(ctx, line, 10000, 0)
 }
 
 // SendText classifies raw text against the closed set and sends it only on a

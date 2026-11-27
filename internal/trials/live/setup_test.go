@@ -58,7 +58,7 @@ func (s *setupFake) chatLog(ctx context.Context, since uint64, waitMS int) (Chat
 	return ChatPage{Next: since}, nil
 }
 
-func (s *setupFake) bot(ctx context.Context, line string, waitMS int) (BotResult, error) {
+func (s *setupFake) bot(ctx context.Context, line string, waitMS, maxLines int) (BotResult, error) {
 	// The runner sends the line with the run token appended ("line #token"):
 	// match the scripted prefix against the un-tokened line, and stamp the
 	// scripted records with this call's token.

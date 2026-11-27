@@ -370,6 +370,10 @@ type serveAddonParams struct {
 type serveBotParams struct {
 	Line   string `json:"line"`
 	WaitMS int    `json:"wait_ms,omitempty"`
+	// MaxLines lifts the tokenless reply's line cap for a verbose answer (the
+	// inventory dump); 0 keeps the command default, and the collector's own
+	// bound still applies.
+	MaxLines int `json:"max_lines,omitempty"`
 }
 
 // serveAssistantParams is the assistant method's input: the member and whether to clear the flag instead of setting
@@ -688,7 +692,7 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 		return s.serveGMAura(ctx, p)
 	}))
 	srv.Register("bot", serveCallTyped(st, func(s *session, ctx context.Context, p serveBotParams) (ServeCommand, error) {
-		rep, err := s.serveBot(ctx, p.Line, time.Duration(p.WaitMS)*time.Millisecond)
+		rep, err := s.serveBot(ctx, p.Line, time.Duration(p.WaitMS)*time.Millisecond, p.MaxLines)
 		if err != nil {
 			return ServeCommand{}, err
 		}

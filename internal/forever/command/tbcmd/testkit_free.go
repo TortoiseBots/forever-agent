@@ -83,14 +83,12 @@ func looksLikeRefusal(text string) bool {
 	return false
 }
 
-// freeTextNamed sends one tokenless plain-text `.tb` line and returns the
-// server's visible answer lines (the collector's tokenless tail), narrowed
-// to the lines that name
-// the command's subject: the tokenless channel also carries other lines
-// (a GM probe block, a concurrent typed reply), and a refusal matcher must
-// not read those as this command's answer. Lines that name nobody are
-// dropped; an empty answer is not a refusal (the caller's read-back decides).
-func (c *Client) freeTextNamed(ctx context.Context, line, name string) ([]string, *command.Reply, error) {
+// freeTextLines sends one tokenless plain-text `.tb` line and returns every
+// visible answer line (the collector's tokenless tail, server noise dropped).
+// The login uses it whole: the module's "that bot is already logged in or
+// loading" names no bot, and a subject filter would drop the one line the
+// caller must see.
+func (c *Client) freeTextLines(ctx context.Context, line string) ([]string, *command.Reply, error) {
 	o := c.Base
 	o.Token = ""
 	o.EndKind = ""
@@ -101,7 +99,21 @@ func (c *Client) freeTextNamed(ctx context.Context, line, name string) ([]string
 	if rep == nil {
 		return nil, nil, fmt.Errorf("%w: .tb %s: no reply", ErrBadReport, line)
 	}
-	lines := dropServerNoise(rep.Raw)
+	return dropServerNoise(rep.Raw), rep, nil
+}
+
+// freeTextNamed sends one tokenless plain-text `.tb` line and returns the
+// server's visible answer lines (the collector's tokenless tail), narrowed
+// to the lines that name
+// the command's subject: the tokenless channel also carries other lines
+// (a GM probe block, a concurrent typed reply), and a refusal matcher must
+// not read those as this command's answer. Lines that name nobody are
+// dropped; an empty answer is not a refusal (the caller's read-back decides).
+func (c *Client) freeTextNamed(ctx context.Context, line, name string) ([]string, *command.Reply, error) {
+	lines, rep, err := c.freeTextLines(ctx, line)
+	if err != nil {
+		return nil, rep, err
+	}
 	if name != "" {
 		lines = namedOnly(lines, name)
 	}
@@ -191,7 +203,7 @@ func (c *Client) FreeTextLogin(ctx context.Context, name, master string) ([]stri
 		}
 		line += " " + m
 	}
-	raws, rep, err := c.freeTextNamed(ctx, line, name)
+	raws, rep, err := c.freeTextLines(ctx, line)
 	if err != nil {
 		return raws, err
 	}

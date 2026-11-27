@@ -250,7 +250,8 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 		writeRPCResult(w, req.ID, map[string]any{"guids": p.GUIDs})
 	case "bot":
 		var p struct {
-			Line string `json:"line"`
+			Line     string `json:"line"`
+			MaxLines int    `json:"max_lines"`
 		}
 		_ = json.Unmarshal(req.Params, &p)
 		f.mu.Lock()
@@ -264,7 +265,21 @@ func (f *fakeServe) handle(w http.ResponseWriter, r *http.Request) {
 		} else if strings.HasPrefix(p.Line, ".bot cc moon") {
 			lines = []string{"TBM:ACTION_ACK|cc moon|bot:Atank|1|Atank"}
 		}
-		writeRPCResult(w, req.ID, map[string]any{"sent": p.Line, "complete": true, "lines": lines})
+		// The serve's collector caps a tokenless reply: the default 64 lines,
+		// or the caller's max_lines (the collector's 256-line bound). A reply
+		// cut here has no end marker, exactly like the live agent's.
+		limit := p.MaxLines
+		if limit <= 0 {
+			limit = 64
+		}
+		if limit > 256 {
+			limit = 256
+		}
+		complete := true
+		if len(lines) > limit {
+			lines, complete = lines[:limit], false
+		}
+		writeRPCResult(w, req.ID, map[string]any{"sent": p.Line, "complete": complete, "lines": lines})
 	case "gm", "chat", "tbm", "cast", "gm_kill", "gm_set_hp", "gm_aura", "gm_combatlog", "attack", "stop_attack":
 		writeRPCResult(w, req.ID, map[string]any{})
 	default:

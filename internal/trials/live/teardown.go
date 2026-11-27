@@ -478,19 +478,26 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 func (r *Runner) logoutProved(ctx context.Context, client *Client, tb *tbcmd.Client, name, guid string) ([]string, string, bool) {
 	var lines []string
 	last := ""
+	var lastErr error
 	for send := 1; send <= 2; send++ {
 		l, err := tb.FreeTextLogout(ctx, name)
 		lines = l
 		if err != nil {
-			// A second send can race the character's own logout: a refusal
-			// is no problem when the roster and the unit row prove it left.
-			if send > 1 {
-				if ok, why := r.logoutSettled(ctx, client, name, guid); ok {
-					return lines, why, true
-				}
+			lastErr = err
+			// A module refusal is its answer and is reported; a transport
+			// failure (an aborted call, a closed connection) is no answer at
+			// all, so the first one gets a second send on a fresh call. A
+			// second send can also race the character's own logout, so the
+			// roster and the unit row still decide.
+			if send == 1 && !tbcmd.IsRefusal(err) && ctx.Err() == nil {
+				continue
+			}
+			if ok, why := logoutSettledNow(ctx, client, name, guid); ok {
+				return lines, "logout sent; " + why, true
 			}
 			return lines, trimReason(tbErrText(err, l)), false
 		}
+		lastErr = nil
 		if guid == "" {
 			// Without the hire's guid there is no second read to prove the
 			// logout; one send and the problem, never a long wait.
@@ -498,7 +505,7 @@ func (r *Runner) logoutProved(ctx context.Context, client *Client, tb *tbcmd.Cli
 		}
 		deadline := time.Now().Add(r.logoutWait())
 		for {
-			ok, why := r.logoutSettled(ctx, client, name, guid)
+			ok, why := logoutSettledNow(ctx, client, name, guid)
 			last = why
 			if ok {
 				return lines, "logout sent; " + why, true
@@ -513,17 +520,20 @@ func (r *Runner) logoutProved(ctx context.Context, client *Client, tb *tbcmd.Cli
 			}
 		}
 	}
+	if lastErr != nil {
+		return lines, trimReason(tbErrText(lastErr, lines)), false
+	}
 	return lines, "still online after two logout sends: " + last, false
 }
 
-// logoutSettled reports whether the hire is proved gone: off the party roster
-// AND the server no longer answers its unit row. A missing guid, an
+// logoutSettledNow reports whether the hire is proved gone: off the party
+// roster AND the server no longer answers its unit row. A missing guid, an
 // unreadable roster or a unit row that still answers keep it unproved.
-func (r *Runner) logoutSettled(ctx context.Context, client *Client, name, guid string) (bool, string) {
+func logoutSettledNow(ctx context.Context, client *Client, name, guid string) (bool, string) {
 	if guid == "" {
 		return false, "the hire has no recorded guid"
 	}
-	online, err := r.rosterHas(ctx, client, name)
+	online, err := rosterHasNow(ctx, client, name)
 	if err != nil {
 		return false, "the party roster is unreadable: " + trimReason(err.Error())
 	}
@@ -554,8 +564,9 @@ func isNotInView(err error) bool {
 	return false
 }
 
-// rosterHas reads the party roster and reports whether name is still on it.
-func (r *Runner) rosterHas(ctx context.Context, client *Client, name string) (bool, error) {
+// rosterHasNow reads the party roster and reports whether name is still on
+// it; the read is bounded here so a caller without a Runner can use it.
+func rosterHasNow(ctx context.Context, client *Client, name string) (bool, error) {
 	tctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	info, err := client.Party(tctx)

@@ -280,7 +280,7 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 
 | Method | Params | What it does | Page |
 |---|---|---|---|
-| `bot` | `line`, `wait_ms` | One `.bot` or `.tb` command line | [Bot control](../bots-and-raids/bot-control.md) |
+| `bot` | `line`, `wait_ms`, `max_lines` | One `.bot` or `.tb` command line; `max_lines` lifts a tokenless reply's 64-line default up to the collector's 256-line bound (a verbose dump such as `.bot inv` is read whole) | [Bot control](../bots-and-raids/bot-control.md) |
 | `commander` | `op`, `lead_bot`, `bots`, `verb`, `args`, `wait_ms`, `pause_run`, `leave_party`, `on` | Bind, unbind, order or run the bot module's leader | [Bot control](../bots-and-raids/bot-control.md) |
 | `bot_view` | `bots`, `wait_ms` | The party roster joined to the world model, one row per bot (`in_party`, `online`, `dead`, `in_view`, and the unit row while in view); `wait_ms` (at most 2 s) lets a just-sent unit land first | [Bot control](../bots-and-raids/bot-control.md) |
 | `tbm_handshake` | `transport`, `wait_ms` | The TBM hello: the roster probe, then the trailer and the transport it switches to | [Add-on protocol](../bots-and-raids/addon-protocol.md) |

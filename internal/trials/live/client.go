@@ -461,10 +461,11 @@ func (c *Client) TBM(ctx context.Context, command string) error {
 func NormGUID(s string) string { return normGUIDOf(s) }
 
 // botLine sends one `.bot` line (the module's own command surface, not the
-// `.tb` test kit) and returns the visible answer. It is unexported: the only
-// caller is Guard.CCOrder, which builds the line itself.
-func (c *Client) botLine(ctx context.Context, line string, waitMS int) (BotResult, error) {
-	return c.commandBot(ctx, line, waitMS)
+// `.tb` test kit) and returns the visible answer. maxLines lifts the
+// server-side line cap of a tokenless reply (0 keeps the command default);
+// only a verbose dump such as `.bot inv` needs it.
+func (c *Client) botLine(ctx context.Context, line string, waitMS, maxLines int) (BotResult, error) {
+	return c.commandBot(ctx, line, waitMS, maxLines)
 }
 
 // WalkTo walks the session's character to a point (the serve plans the

@@ -187,19 +187,20 @@ const (
 )
 
 // serveBot runs one module line. The prefix is checked here so this method cannot be used to say arbitrary chat.
-func (s *session) serveBot(ctx context.Context, line string, wait time.Duration) (*command.Reply, error) {
+// maxLines lifts the tokenless reply's line cap (the collector's own bound still clamps it); 0 keeps the default.
+func (s *session) serveBot(ctx context.Context, line string, wait time.Duration, maxLines int) (*command.Reply, error) {
 	line = strings.TrimSpace(line)
 	lower := strings.ToLower(line)
 	if !strings.HasPrefix(lower, serveBotPrefix+" ") && !strings.HasPrefix(lower, serveTBPrefix) {
 		return nil, errors.New("bot: the line must start with " + serveBotPrefix + " or " + serveTBPrefix)
 	}
-	return s.serveCommandLine(ctx, line, wait)
+	return s.serveCommandLine(ctx, line, wait, maxLines)
 }
 
 // serveCommandLine runs one command through the session's serialised command channel. A `.bot` line is an owner
 // command: a normal player (a Battle.net owner) runs it, so it is sent without the GM probe. Every other line
 // (`.tb`, the GM lines) confirms the GM guard on first use.
-func (s *session) serveCommandLine(ctx context.Context, line string, wait time.Duration) (*command.Reply, error) {
+func (s *session) serveCommandLine(ctx context.Context, line string, wait time.Duration, maxLines int) (*command.Reply, error) {
 	if !s.gmConfirmed && !isOwnerLine(line) {
 		if err := s.confirmGM(ctx); err != nil {
 			return nil, err
@@ -212,6 +213,10 @@ func (s *session) serveCommandLine(ctx context.Context, line string, wait time.D
 		}
 		opts.Deadline = wait
 	}
+	if maxLines < 0 {
+		return nil, errors.New("bot: max_lines must not be negative")
+	}
+	opts.MaxLines = maxLines // 0 keeps the command default; normalise clamps the collector's bound
 	return s.serveRunLine(ctx, line, opts)
 }
 

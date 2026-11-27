@@ -40,9 +40,17 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/pjerra/forever-agent/internal/forever/command"
 	"github.com/pjerra/forever-agent/internal/forever/command/tbcmd"
 	"github.com/pjerra/forever-agent/internal/tbm"
 )
+
+// invReadWaitMS is the `.bot inv` collection window. The dump is one chat
+// line per worn slot and per bag slot (up to ~100), and the collector ends a
+// tokenless reply after a quiet window; five seconds cut a full bag's dump
+// mid-reply on a loaded world, so the read is given the module's full dump
+// time instead.
+const invReadWaitMS = 15000
 
 // ItemGrant is one item instance a trial gave a character: the GUID the
 // server named for it, the item it is, and who received it. There is no
@@ -484,19 +492,37 @@ func (p *Provisioner) provenEquipSlot(ctx context.Context, bot string, item uint
 	if p.Client == nil {
 		return 0, fmt.Sprintf("item %d: UNVERIFIED (no client for .bot inv)", item), false
 	}
-	tctx, cancel := p.ctxOf(ctx)
-	res, err := p.Client.botLine(tctx, ".bot inv "+bot, 5000)
-	cancel()
-	p.Ledger.Add(map[string]any{"kind": "bot_inv", "bot": bot, "complete": res.Complete, "reply": firstLines(res.Lines)})
-	if err != nil {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (.bot inv %s: %v)", item, bot, err), false
-	}
-	inv := tbm.ParseInventory(res.Lines)
-	if inv.Err != nil {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (.bot inv %s: %s: %s)", item, bot, inv.Err.Code, inv.Err.Message), false
+	var inv tbm.Inventory
+	var note string
+	for attempt := 1; attempt <= 2; attempt++ {
+		tctx, cancel := p.ctxOf(ctx)
+		// The inventory dump is many lines (every worn slot and every bag
+		// slot): ask for the collector's full bound, or a full bag cuts the
+		// reply before INV_END and no slot is ever proved. A read that ends
+		// without its end marker is retried once (the module's dump can
+		// outlast the quiet window on a loaded world), still fail-closed.
+		res, err := p.Client.botLine(tctx, ".bot inv "+bot, invReadWaitMS, command.MaxCollectedLines)
+		cancel()
+		p.Ledger.Add(map[string]any{"kind": "bot_inv", "bot": bot, "complete": res.Complete, "reply": firstLines(res.Lines)})
+		if err != nil {
+			note = fmt.Sprintf("item %d: UNVERIFIED (.bot inv %s: %v)", item, bot, err)
+			if attempt < 2 {
+				continue
+			}
+			return 0, note, false
+		}
+		inv = tbm.ParseInventory(res.Lines)
+		if inv.Err != nil {
+			return 0, fmt.Sprintf("item %d: UNVERIFIED (.bot inv %s: %s: %s)", item, bot, inv.Err.Code, inv.Err.Message), false
+		}
+		if inv.Complete {
+			note = ""
+			break
+		}
+		note = fmt.Sprintf("item %d: UNVERIFIED (.bot inv %s: the reply is truncated, no INV_END)", item, bot)
 	}
 	if !inv.Complete {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (.bot inv %s: the reply is truncated, no INV_END)", item, bot), false
+		return 0, note, false
 	}
 	if inv.Bot != "" && !strings.EqualFold(inv.Bot, bot) {
 		return 0, fmt.Sprintf("item %d: UNVERIFIED (.bot inv answered for %q, asked for %q)", item, bot, inv.Bot), false
@@ -516,7 +542,7 @@ func (p *Provisioner) unequipBotSlot(ctx context.Context, bot string, slot int, 
 		return fmt.Errorf("no client for .bot item unequip")
 	}
 	tctx, cancel := p.ctxOf(ctx)
-	res, err := p.Client.botLine(tctx, fmt.Sprintf(".bot item %s unequip 255 %d", bot, proved), 5000)
+	res, err := p.Client.botLine(tctx, fmt.Sprintf(".bot item %s unequip 255 %d", bot, proved), 5000, 0)
 	cancel()
 	p.Ledger.Add(map[string]any{"kind": "unequip", "bot": bot, "bag": 255, "slot": proved, "item_id": item, "reply": firstLines(res.Lines)})
 	if err != nil {

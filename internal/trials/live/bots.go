@@ -145,6 +145,56 @@ func alreadyLoggedIn(lines []string) bool {
 	return strings.Contains(strings.ToLower(strings.Join(lines, " ")), "already logged in")
 }
 
+// endLeftoverSession ends the session a `.tb login` named as already online:
+// it sends `.tb logout` (retrying a transport failure once) and waits until
+// the party roster and the server's unit row both prove the hire gone. A
+// session that cannot be proved gone is reported, never assumed: the caller
+// must not log the same character in again on top of it.
+func (p *Provisioner) endLeftoverSession(ctx context.Context, name string) (string, bool) {
+	guid := p.partyGUIDOf(ctx, name)
+	if guid == "" {
+		guid = p.unitGUIDOf(ctx, name)
+	}
+	if guid == "" {
+		return "the hire is online but neither the party roster nor the unit list names its guid, so a logout cannot be proved", false
+	}
+	var lines []string
+	var err error
+	for send := 1; send <= 2; send++ {
+		tctx, cancel := p.ctxOf(ctx)
+		lines, err = p.TB.FreeTextLogout(tctx, name)
+		cancel()
+		p.Ledger.Add(map[string]any{"kind": "logout", "bot": name, "guid": guid, "leftover": true,
+			"reply": firstLines(lines), "error": errText(err)})
+		if err == nil || tbcmd.IsRefusal(err) {
+			break
+		}
+		// A transport failure (an aborted call, a closed connection) is no
+		// answer: the same call is attempted again on a fresh one.
+	}
+	deadline := time.Now().Add(p.timeoutOf())
+	var why string
+	for {
+		var ok bool
+		ok, why = logoutSettledNow(ctx, p.Client, name, guid)
+		if ok {
+			return why, true
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return "the wait for the leftover session to leave ended: " + why, false
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	if err != nil && !tbcmd.IsRefusal(err) {
+		return "the logout failed and is not proved: " + tbErrText(err, lines), false
+	}
+	return "the leftover session is still online: " + why, false
+}
+
 // timeoutOf bounds one step.
 func (p *Provisioner) timeoutOf() time.Duration {
 	if p.Timeout > 0 {
@@ -197,12 +247,35 @@ func (p *Provisioner) Provision(ctx context.Context, trial map[string]any, guids
 		cancel()
 		p.Ledger.Add(map[string]any{"kind": "login", "bot": name, "reply": firstLines(lines)})
 		if err != nil && !alreadyLoggedIn(lines) {
-			// "already logged in or loading" is a leftover session of this
-			// same hire: it is there, and the read-backs below decide.
 			rows = append(rows, rowOf("bot_present", false, nil, ".tb login "+name+": "+tbErrText(err, lines)))
 			return out, rows, nil
 		}
+		// "already logged in or loading" is a leftover session of this same
+		// hire from an earlier trial whose teardown could not log it out.
+		// End it, prove it left, and only then log in again: otherwise the
+		// stale session answers every later login and the hire never joins.
 		p.hired(name) // from here on a failed setup must still log it out
+		if alreadyLoggedIn(lines) {
+			why, gone := p.endLeftoverSession(ctx, name)
+			if !gone {
+				rows = append(rows, rowOf("bot_present", false, name, "leftover session of "+name+": "+why))
+				return out, rows, nil
+			}
+			loginCtx, cancel = p.ctxOf(ctx)
+			lines, err = p.TB.FreeTextLogin(loginCtx, name, p.Player)
+			cancel()
+			p.Ledger.Add(map[string]any{"kind": "login", "bot": name, "after_leftover": true, "reply": firstLines(lines)})
+			if err != nil && !alreadyLoggedIn(lines) {
+				rows = append(rows, rowOf("bot_present", false, name,
+					".tb login "+name+" after the leftover session: "+tbErrText(err, lines)))
+				return out, rows, nil
+			}
+			if alreadyLoggedIn(lines) {
+				rows = append(rows, rowOf("bot_present", false, name,
+					"the module still reports "+name+" logged in after a proved logout; no second login"))
+				return out, rows, nil
+			}
+		}
 		// The login is asynchronous: the hire appears in the party roster
 		// (or the units model) a moment later. The party row is the
 		// identity; a name in chat is not.
@@ -319,13 +392,45 @@ func (p *Provisioner) ProvisionExtras(ctx context.Context, trial map[string]any,
 			loginCtx, cancel := p.ctxOf(ctx)
 			lines, err := p.TB.FreeTextLogin(loginCtx, name, p.Player)
 			cancel()
-			if err != nil {
+			p.Ledger.Add(map[string]any{"kind": "login", "bot": name, "extra": i + 1, "reply": firstLines(lines)})
+			if err != nil && !alreadyLoggedIn(lines) {
 				presentOK = false
 				presentEv = append(presentEv, fmt.Sprintf("extra%d: .tb login %s: %s", i+1, name, tbErrText(err, lines)))
-				p.Ledger.Add(map[string]any{"kind": "login", "bot": name, "extra": i + 1, "reply": firstLines(lines)})
 				names = append(names, "")
 				guidList = append(guidList, "")
 				continue
+			}
+			if alreadyLoggedIn(lines) {
+				// A leftover session of the same extra hire: end it, prove it
+				// left, and log in again (the main hire's rule).
+				p.hiredExtra(name)
+				if why, gone := p.endLeftoverSession(ctx, name); !gone {
+					presentOK = false
+					presentEv = append(presentEv, fmt.Sprintf("extra%d: leftover session of %s: %s", i+1, name, why))
+					names = append(names, "")
+					guidList = append(guidList, "")
+					continue
+				}
+				loginCtx, cancel = p.ctxOf(ctx)
+				lines, err = p.TB.FreeTextLogin(loginCtx, name, p.Player)
+				cancel()
+				p.Ledger.Add(map[string]any{"kind": "login", "bot": name, "extra": i + 1, "after_leftover": true, "reply": firstLines(lines)})
+				if err != nil && !alreadyLoggedIn(lines) {
+					presentOK = false
+					presentEv = append(presentEv,
+						fmt.Sprintf("extra%d: .tb login %s after the leftover session: %s", i+1, name, tbErrText(err, lines)))
+					names = append(names, "")
+					guidList = append(guidList, "")
+					continue
+				}
+				if alreadyLoggedIn(lines) {
+					presentOK = false
+					presentEv = append(presentEv,
+						fmt.Sprintf("extra%d: the module still reports %s logged in after a proved logout", i+1, name))
+					names = append(names, "")
+					guidList = append(guidList, "")
+					continue
+				}
 			}
 			p.Ledger.Add(map[string]any{"kind": "hire", "name": name, "class": spec.Class, "extra": i + 1, "reply": firstLines(lines)})
 			presentEv = append(presentEv, fmt.Sprintf("extra%d: .tb login %s", i+1, name))

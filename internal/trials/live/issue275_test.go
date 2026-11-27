@@ -274,12 +274,12 @@ func TestTrialTeardownReleaseBudgetStartsAfterTheClear(t *testing.T) {
 	writeGrants(t, prov.GrantPath, []ItemGrant{{Server: "test2", Character: "Bheal", Item: 1708,
 		GUID: "00000000000000000000000000000001"}})
 	inner := s.runner.bot
-	s.runner.bot = func(ctx context.Context, line string, waitMS int) (BotResult, error) {
+	s.runner.bot = func(ctx context.Context, line string, waitMS, maxLines int) (BotResult, error) {
 		if strings.HasPrefix(line, ".tb itemscan") {
 			<-ctx.Done() // the clear uses its whole window
 			return BotResult{}, ctx.Err()
 		}
-		return inner(ctx, line, waitMS)
+		return inner(ctx, line, waitMS, maxLines)
 	}
 	// The release sends are tokenless and wait a 1.5 s quiet window on the
 	// runner's clock; each read here advances it a second, so the release

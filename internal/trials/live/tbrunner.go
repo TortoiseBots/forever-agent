@@ -28,7 +28,7 @@ type TBRunner struct {
 	// ChatLog reads one page: the fake in fakeserve_test.go queues them.
 	chatLog func(ctx context.Context, since uint64, waitMS int) (ChatPage, error)
 	// Bot sends one module line, returning the server's visible lines.
-	bot func(ctx context.Context, line string, waitMS int) (BotResult, error)
+	bot func(ctx context.Context, line string, waitMS, maxLines int) (BotResult, error)
 	// now is the clock; nil means time.Now. Tests pass a fake clock.
 	now func() time.Time
 	// cursor is the shared chat-log cursor: a tokenless reply starts at the
@@ -77,15 +77,21 @@ func (c *Client) commandPage(ctx context.Context, since uint64, waitMS int) (Cha
 	return out, nil
 }
 
-// CommandBot sends one module line through the client.
-func (c *Client) commandBot(ctx context.Context, line string, waitMS int) (BotResult, error) {
+// CommandBot sends one module line through the client. maxLines lifts the
+// server-side line cap of a tokenless reply (0 keeps the command default);
+// a verbose dump such as `.bot inv` needs it to reach its end marker.
+func (c *Client) commandBot(ctx context.Context, line string, waitMS, maxLines int) (BotResult, error) {
 	var raw struct {
 		Sent     string   `json:"sent"`
 		Lines    []string `json:"lines"`
 		Complete bool     `json:"complete"`
 		End      string   `json:"end"`
 	}
-	if err := c.call(ctx, "bot", map[string]any{"line": line, "wait_ms": waitMS}, &raw, 40*time.Second); err != nil {
+	params := map[string]any{"line": line, "wait_ms": waitMS}
+	if maxLines > 0 {
+		params["max_lines"] = maxLines
+	}
+	if err := c.call(ctx, "bot", params, &raw, 40*time.Second); err != nil {
 		return BotResult{}, err
 	}
 	return BotResult{Sent: raw.Sent, Lines: raw.Lines, Complete: raw.Complete, End: raw.End}, nil
@@ -127,7 +133,7 @@ func (r *TBRunner) Run(ctx context.Context, line string, opts command.Options) (
 
 // runTokened sends the line with the token and collects until its end.
 func (r *TBRunner) runTokened(ctx context.Context, line string, opts command.Options, waitMS int, now func() time.Time) (*command.Reply, error) {
-	sent, err := r.bot(ctx, line+" #"+opts.Token, waitMS)
+	sent, err := r.bot(ctx, line+" #"+opts.Token, waitMS, opts.MaxLines)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +270,7 @@ func (r *TBRunner) runTokenless(ctx context.Context, line string, opts command.O
 	if err != nil {
 		return nil, err
 	}
-	sent, err := r.bot(ctx, line, waitMS)
+	sent, err := r.bot(ctx, line, waitMS, opts.MaxLines)
 	if err != nil {
 		return nil, err
 	}

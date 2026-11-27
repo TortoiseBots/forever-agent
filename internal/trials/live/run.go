@@ -258,6 +258,8 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 		}
 	}
 	defer teardownTrial()
+	var trialErr error
+	skipNeeds := ""
 	for i := 1; i <= repeats; i++ {
 		if err := r.runRepeat(ctx, trial, trialArg, id, i); err != nil {
 			// SKIPPED stops the trial after rep 1: every repeat
@@ -265,9 +267,11 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 			// server, not per rep), so running on wastes leases.
 			if needs, ok := IsSkipped(err); ok {
 				r.logf("%s: SKIPPED needs=%s", id, needs)
-				return map[string]any{"trial": id, "verdict": "SKIPPED", "needs": needs}, nil
+				skipNeeds = needs
+				break
 			}
-			return nil, err
+			trialErr = err
+			break
 		}
 		// min_rep_gap_s: the hire's item cooldowns are per character and
 		// survive a repeat, so the next repeat waits the trial's gap out.
@@ -277,7 +281,35 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 			}
 		}
 	}
+	if skipNeeds != "" {
+		// The teardown runs on every way out of the trial. Its problems are
+		// recorded in RUN.json and handed back with the result: a SKIP whose
+		// slot is still dirty must stop a sweep, never read as success.
+		teardownTrial()
+		if werr := r.writeRUN(); werr != nil {
+			r.logf("%s: RUN.json after a skip: %v", id, werr)
+		}
+		doc := map[string]any{"trial": id, "verdict": "SKIPPED", "needs": skipNeeds}
+		if len(unproven) > 0 {
+			return doc, &TeardownUnproven{Trial: id, Problems: unproven}
+		}
+		return doc, nil
+	}
 	teardownTrial()
+	if trialErr != nil {
+		// The repeat ended early (an aborted call, a lost session). The
+		// teardown still ran: its problems must not vanish with the early
+		// return, so RUN.json records them and the error carries them (a
+		// sweep stops instead of starting the next trial on a dirty slot).
+		r.noteTrial(trial, id, repeats)
+		if werr := r.writeRUN(); werr != nil {
+			r.logf("%s: RUN.json after an aborted trial: %v", id, werr)
+		}
+		if len(unproven) > 0 {
+			return nil, &TeardownUnproven{Trial: id, Problems: unproven, Cause: trialErr}
+		}
+		return nil, trialErr
+	}
 	var doc map[string]any
 	if kindOf(trial) == "dummy" {
 		doc, err = scoreDummyTrial(trialDir, trialArg, trial)
@@ -301,15 +333,23 @@ func (r *Runner) RunTrial(ctx context.Context, trialArg string, repeats int) (ma
 
 // TeardownUnproven is a trial whose teardown could not be proven (items not
 // cleared, a hire not logged out, the forced role not cleared): the next
-// trial would start on a dirty slot, so a sweep stops here.
+// trial would start on a dirty slot, so a sweep stops here. Cause is the
+// error that ended the trial early, when the teardown ran on that way out.
 type TeardownUnproven struct {
 	Trial    string
 	Problems []string
+	Cause    error
 }
 
 func (e *TeardownUnproven) Error() string {
-	return "teardown of " + e.Trial + " not proven: " + strings.Join(e.Problems, "; ")
+	msg := "teardown of " + e.Trial + " not proven: " + strings.Join(e.Problems, "; ")
+	if e.Cause != nil {
+		msg += " (after: " + e.Cause.Error() + ")"
+	}
+	return msg
 }
+
+func (e *TeardownUnproven) Unwrap() error { return e.Cause }
 
 // noteTeardownUnproven records the unproven teardown in RUN.json's
 // `teardown_unproven`.

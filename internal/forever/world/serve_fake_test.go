@@ -1200,6 +1200,50 @@ func TestServeBotOwnerLineNeedsNoGM(t *testing.T) {
 	f.wait(t)
 }
 
+// A tokenless reply is capped at 64 lines by default, and a full bot inventory runs past that: the dump ends
+// before INV_END and the caller cannot prove a worn slot. max_lines lifts the cap for that read (the collector's
+// own bound still applies).
+func TestServeBotMaxLinesLiftsTheTokenlessCap(t *testing.T) {
+	f := newFakeServer(t)
+	f.serveMode = true
+	defer f.close()
+	f.serveGMSay = func(said string) (string, bool) {
+		if said != ".bot inv Testchar" {
+			return "", false
+		}
+		var b strings.Builder
+		b.WriteString("TBM:INV_BEGIN|Testchar|0")
+		for i := range 70 {
+			fmt.Fprintf(&b, "\nTBM:INV_ITEM|255|%d|1|1|-", i)
+		}
+		b.WriteString("\nTBM:INV_END|Testchar|0|70")
+		return b.String(), true
+	}
+	a := startServeDaemon(t, f, &stepLog{})
+
+	var bot ServeCommand
+	json.Unmarshal(a.mustCall(t, "bot", map[string]any{"line": ".bot inv Testchar", "max_lines": 256}), &bot)
+	if len(bot.Lines) != 72 {
+		t.Fatalf("max_lines 256 must collect the whole dump (72 lines), got %d: %+v", len(bot.Lines), bot.Lines)
+	}
+	if !strings.Contains(bot.Lines[len(bot.Lines)-1], "INV_END") {
+		t.Fatalf("the whole dump must reach its end marker: %q", bot.Lines[len(bot.Lines)-1])
+	}
+
+	json.Unmarshal(a.mustCall(t, "bot", map[string]any{"line": ".bot inv Testchar"}), &bot)
+	if len(bot.Lines) != 64 {
+		t.Fatalf("without max_lines the default cap is 64 lines, got %d", len(bot.Lines))
+	}
+	for _, ln := range bot.Lines {
+		if strings.Contains(ln, "INV_END") {
+			t.Fatalf("a capped dump must not carry its end marker: %q", ln)
+		}
+	}
+	a.mustFail(t, "bot", map[string]any{"line": ".bot inv Testchar", "max_lines": -1}, -32003, "max_lines")
+	a.stop(t)
+	f.wait(t)
+}
+
 func TestServePartyAndAddon(t *testing.T) {
 	f := newFakeServer(t)
 	f.serveMode = true

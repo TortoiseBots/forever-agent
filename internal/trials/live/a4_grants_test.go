@@ -406,6 +406,75 @@ func TestWornGrantWithNoProvedSlotIsLeftInPlace(t *testing.T) {
 	}
 }
 
+// #278 round 3: the `.bot inv` dump of a hire whose bags are full runs past
+// the agent's 64-line default cap, so the reply ended before INV_END and the
+// worn trial copy could never be unequipped (the next equip answered "bags
+// full"). The read must ask the serve for the collector's full line bound.
+func TestBotInvReadAsksForTheFullLineBound(t *testing.T) {
+	prov, _, bags := bagProv(t)
+	// A full bag: 70 filler stacks plus the worn copy make the dump (begin,
+	// the worn row, one row per bag slot, end) longer than 64 lines.
+	bags.bagSlots = 90
+	for i := range 70 {
+		bags.set(uint32(3000+i), 1)
+	}
+	bags.itemSlot[7720] = 0
+	if _, err := prov.giveItem(context.Background(), "Bheal", 7720, 1); err != nil {
+		t.Fatal(err)
+	}
+	if eq, err := prov.TB.Equip(context.Background(), "Bheal", 7720, true); err != nil || eq.Result != "equipped" {
+		t.Fatalf("equip failed: %v %+v", err, eq)
+	}
+	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
+	if !ok {
+		t.Fatalf("a full inventory must still prove its worn slot: %q", ev)
+	}
+	if got := bags.wornAt(0); got != 0 {
+		t.Fatalf("the recorded worn copy must be off the body, slot0=%d", got)
+	}
+	if ids := bagGUIDs(bags, 7720); len(ids) != 0 {
+		t.Fatalf("the recorded instance must be gone, held %v", ids)
+	}
+}
+
+// #278 round 3: a `.bot inv` read that ends without INV_END (a loaded world
+// cuts the dump at the quiet window) is retried once instead of leaving the
+// worn copy on the hire; the second read proves the slot.
+func TestBotInvTruncatedReplyIsRetried(t *testing.T) {
+	prov, s, bags := bagProv(t)
+	bags.itemSlot[7720] = 0
+	if _, err := prov.giveItem(context.Background(), "Bheal", 7720, 1); err != nil {
+		t.Fatal(err)
+	}
+	if eq, err := prov.TB.Equip(context.Background(), "Bheal", 7720, true); err != nil || eq.Result != "equipped" {
+		t.Fatalf("equip failed: %v %+v", err, eq)
+	}
+	reads := 0
+	f := s.fake
+	f.mu.Lock()
+	inner := f.botFn
+	f.botFn = func(line string) []string {
+		if strings.HasPrefix(line, ".bot inv") {
+			reads++
+			if reads == 1 {
+				return []string{"TBM:INV_BEGIN|Bheal|0|16|16", "TBM:INV_EQ|0|7720|Item 7720"}
+			}
+		}
+		return inner(line)
+	}
+	f.mu.Unlock()
+	ev, ok := prov.ClearGiven(context.Background(), "Bheal")
+	if !ok {
+		t.Fatalf("the retried read must prove the slot: %q", ev)
+	}
+	if reads != 2 {
+		t.Fatalf("the truncated read must be retried once (reads=%d): %q", reads, ev)
+	}
+	if got := bags.wornAt(0); got != 0 {
+		t.Fatalf("the recorded worn copy must be off the body, slot0=%d", got)
+	}
+}
+
 // A killed run's grants (a file) are cleared by the next run.
 func TestNextRunClearsAKilledRunsGrants(t *testing.T) {
 	first, s, bags := bagProv(t)
