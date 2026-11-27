@@ -84,7 +84,7 @@ type LiveSetup struct {
 	// Server is the test server's name (the item grants' word);
 	// GrantPath is the item grant file of the items the trial gives; empty
 	// means GrantPathFor(server, player) under the state dir.
-	Server       string
+	Server    string
 	GrantPath string
 
 	// TBRunner overrides the `.tb` transport (tests inject the scripted

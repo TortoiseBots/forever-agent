@@ -280,6 +280,7 @@ type ItemScanResult struct {
 	Slot     int
 	HasSlot  bool
 	Why      string
+
 	// Instances are the item's copies the server named (the instances= list),
 	// each by its own GUID. HasInstances is false when the record carried no
 	// list at all: an empty list is "the character holds none", a missing one

@@ -42,7 +42,7 @@ func acquiredHires(rep *Repeat) []hireTarget {
 		return rep.Hires
 	}
 	// A repeat whose provisioner had no callbacks (older tests, a dry run)
-	// still releases the households the setup named.
+	// still releases the hires the setup named.
 	var out []hireTarget
 	if rep.BotName != "" {
 		out = append(out, hireTarget{name: rep.BotName, guid: canonGUID(rep.Guids.Bot)})

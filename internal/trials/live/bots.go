@@ -767,6 +767,9 @@ func (p *Provisioner) ensureBotGear(ctx context.Context, spec BotSpec, name stri
 	clearEv, clearOK := p.ClearGiven(ctx, name)
 	if !clearOK {
 		p.Ledger.Add(map[string]any{"kind": "items_clear_failed", "bot": name, "evidence": clearEv})
+		if noInstanceList(clearEv) {
+			return rowOf("bot_items", false, itemIDs(spec.Items), "SKIPPED needs=bot_items: module/core gap — "+clearEv)
+		}
 		return rowOf("bot_items", false, itemIDs(spec.Items), "leftover trial items not cleared: "+clearEv)
 	}
 	if spec.Gear != "" {

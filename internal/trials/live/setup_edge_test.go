@@ -298,11 +298,16 @@ func TestVisibleFinalizesAfterHire(t *testing.T) {
 	s.scriptTB(".tb engine", "TortoiseBots: engine on.")
 	s.scriptTB(".tb level", "TortoiseBots: Bheal is level 40: health 1500/1500, mana 2000/2000.")
 	s.scriptTB(".tb train", "TortoiseBots: Bheal learned 10 spell(s).")
-	s.scriptTB(".tb additem", "TortoiseBots: Bheal now has 20 of item 17083.")
-	// Consumables prove exists through the ItemScan read-back.
-	s.scriptTB(".tb itemscan", "itemscan-begin "+tok,
-		"itemscan bot=Bheal item=17083 exists=yes name=Sweet%20Nectar class=0:0 inv=0 req=1 quality=1 ilvl=10 canequip=no why=EQUIP_ERR_CANT_EQUIP_EVER "+tok,
-		"itemscan-end bot=Bheal count=1 records=1 exist=1 canequip=0 "+tok)
+	// Consumables prove through a give whose read-back names the instance:
+	// the bag model answers additem and itemscan with real instance GUIDs.
+	bags := newBagModel()
+	s.tbFn = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb additem"), strings.HasPrefix(line, ".tb itemscan"):
+			return bags.answer(line)
+		}
+		return nil
+	}
 	s.scriptTB(".tb learn Bheal 52943", "learn-begin "+tok,
 		"learn bot=Bheal spell=52943 result=learned name=Book%20of%20Prayer "+tok,
 		"learn-end bot=Bheal count=1 records=1 learned=1 "+tok)

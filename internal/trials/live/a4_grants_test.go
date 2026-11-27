@@ -106,6 +106,16 @@ func TestGiveWithoutAnInstanceListGivesNothing(t *testing.T) {
 	if got := readGrants(t, prov.GrantPath); len(got) != 0 {
 		t.Fatalf("no grant may be written: %+v", got)
 	}
+	// The setup row names the module gap: SKIPPED needs=bot_items (a required
+	// row that is SKIPPED makes the trial SKIPPED), never a trial failure.
+	spec := BotSpec{Class: "priest", Level: 40, Items: []TrialItem{{Name: "Sweet Nectar", Count: 20}}}
+	row := prov.ensureBotGear(context.Background(), spec, "Bheal")
+	if row == nil || rowOK(row) {
+		t.Fatalf("a module without item instances must fail the row: %v", row)
+	}
+	if skippedIn(rowEvidence(row)) != "bot_items" {
+		t.Fatalf("the module gap must be SKIPPED needs=bot_items: %q", rowEvidence(row))
+	}
 }
 
 // Rule 1, the negative: a give that merged into the hire's own stack creates
@@ -285,7 +295,7 @@ func TestUnreadableReadBackAfterDeletionLeavesTheCopy(t *testing.T) {
 	s.tbFn = func(line string) []string {
 		if strings.HasPrefix(line, ".tb itemscan") {
 			calls++
-			if calls > 2 { // the give's two reads pass; the clear's read is unreadable
+			if calls > 1 { // the clear's first read passes; its post-removal read is unreadable
 				return fastTypedError(line)
 			}
 		}

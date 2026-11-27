@@ -530,15 +530,27 @@ func isBagsFull(err error, lines []string) bool {
 	return strings.Contains(text, "bags full") || strings.Contains(text, "bags are full")
 }
 
+// noInstanceList reports the module's missing capability: `.tb itemscan`
+// answered no instances= list, so no copy's GUID can be known. A server gap
+// (needs=bot_items), never a defect of the trial.
+func noInstanceList(evidence string) bool {
+	return strings.Contains(evidence, "named no item instance list")
+}
+
 // itemsGiveRow is the bot_items row for a refused additem: a full bag that
 // clearing did not free is SKIPPED with the reason, any other refusal is a
-// plain failed row.
+// plain failed row. A module that cannot name item instances is a server gap
+// (SKIPPED needs=bot_items), never a trial failure.
 func itemsGiveRow(bot, item string, ids any, err error, lines []string, clearEvidence string, clearOK bool) map[string]any {
 	if isBagsFull(err, lines) {
 		return rowOf("bot_items", false, ids, fmt.Sprintf(
 			"SKIPPED needs=bot_bag_space: .tb additem %s %s: bags full (clearing recorded items: %s)", bot, item, clearEvidence))
 	}
-	return rowOf("bot_items", false, ids, ".tb additem "+bot+" "+item+": "+tbErrText(err, lines))
+	text := tbErrText(err, lines)
+	if noInstanceList(text) {
+		return rowOf("bot_items", false, ids, "SKIPPED needs=bot_items: module/core gap — "+text)
+	}
+	return rowOf("bot_items", false, ids, ".tb additem "+bot+" "+item+": "+text)
 }
 
 func formatClearSummary(cleared int, notes []string) string {
