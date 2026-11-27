@@ -57,10 +57,11 @@ type WalkResult struct {
 	Skipped string
 	// Length is the module's path length at the walk's start (the walk wait's bound).
 	Length float64
-	// Partial is set when the server planned no full route (walk_path answers no full route): the walk never starts,
-	// Stop is where the session stood when the answer came, and Reached is its ground distance from the walk's origin.
-	Partial bool
-	// Reached is how far the session stood from the walk's origin when a partial answer ended it.
+	// NoRoute is set when the server planned no full route (walk_path answers no full route for a partial route or a
+	// route it finds none of): the walk never starts, Stop is where the session stood when the answer came, and Reached
+	// is its ground distance from the walk's origin.
+	NoRoute bool
+	// Reached is how far the session stood from the walk's origin when the no-full-route answer ended it.
 	Reached float64
 }
 
@@ -663,7 +664,7 @@ func liveWalkCheck(st *StepResult, wk WalkResult, anchorHop bool, anchor dungeon
 		c.Reason = wk.Skipped
 		return c
 	}
-	if wk.Partial {
+	if wk.NoRoute {
 		// The server planned no full route, so the walk never started: this is not a measured shortfall, and the
 		// pass moved on to the next stand. The distance the session reached is kept for the report.
 		c.Verdict = VerdictSkip

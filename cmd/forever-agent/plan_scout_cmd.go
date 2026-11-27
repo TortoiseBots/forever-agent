@@ -67,7 +67,7 @@ var planScoutOpen = func(dir string) planScoutNav {
 
 const planScoutUsage = `usage: forever-agent plan-scout <dungeon> [--dir dungeons] [--sql FILE] [--mmaps DIR] [--spawns DIR]
     [--from LEG] [--until LEG] [--party-level N] [--out DIR] [--json]
-    [--fix-out FILE] [--apply-fixes DIR] [--fail-on fail|warn]
+    [--fix-out FILE] [--fix-in FILE] [--apply-fixes DIR] [--fail-on fail|warn]
     [--live <server>] [--slot N] [--holder NAME] [--slots FILE] [--binary PATH]
     [--walk-budget 5m] [--max-minutes 20] [--instance-cap-per-account N] [--instance-cap-wait 20m] [--instance-cap-fail] [--instance-cap-reset]
     [--forever [--parent MAP=PARENT]] [--live --slot DIR]`
@@ -122,7 +122,7 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	fs := flag.NewFlagSet("plan-scout", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	o := planScoutOptions{serveSlot: slot}
-	var out, fixOut, applyTo string
+	var out, fixOut, fixIn, applyTo string
 	fs.StringVar(&o.dir, "dir", "dungeons", "the folder with the plan files")
 	fs.StringVar(&o.sqlFile, "sql", "", "check a deployed world migration's rows instead of the plan file's export")
 	fs.StringVar(&o.mmaps, "mmaps", defaultMmapsDir(), "folder with the server's mmaps (<map>.mmap and <map>*.mmtile)")
@@ -133,6 +133,7 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	fs.StringVar(&out, "out", "", "folder for scout-<plan>.json and scout-<plan>.txt (default ./plan-scout-<plan>-<stamp>)")
 	fs.BoolVar(&o.json, "json", false, "print the report as JSON")
 	fs.StringVar(&fixOut, "fix-out", "", "write the fix file (tb-scout-fix v1) here, also with no fixes")
+	fs.StringVar(&fixIn, "fix-in", "", "use the fixes of this recorded fix file (tb-scout-fix v1) instead of this pass's own")
 	fs.StringVar(&applyTo, "apply-fixes", "", "write the patched plan copy and its diff to this folder (must not exist or be empty)")
 	fs.StringVar(&o.failOn, "fail-on", "fail", "fail or warn: which step verdict fails the run")
 	fs.StringVar(&o.live, "live", "", "run the live pass on this test server (m910q, tortoise-test2, tortoise-test3)")
@@ -174,6 +175,9 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	}
 	if o.failOn != "fail" && o.failOn != "warn" {
 		return fail("--fail-on takes fail or warn")
+	}
+	if fixIn != "" && (o.live != "" || o.serveSlot != "") {
+		return fail("--fix-in replays a recorded fix list and cannot be combined with --live")
 	}
 	if o.slot == 3 {
 		fmt.Fprintln(stderr, "plan-scout: slot 3 is never used")
@@ -424,6 +428,27 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 	// The fix file (always when asked, also with no fixes).
 	fixes := planscout.ProposeFixes(rep, in, planner, world)
 	rowsSHA := scoutRowsSHA(in.Rows)
+	// replayed are the recorded fixes a replay refused before applying: an unrecorded coordinate, a target its step's row
+	// does not name, or a point off the mesh. They are refused here, not handed to the apply pass.
+	var replayed []planscout.DroppedFix
+	if fixIn != "" {
+		ff, err := readFixFile(fixIn)
+		if err != nil {
+			return fail("--fix-in: %v", err)
+		}
+		if err := checkFixFile(ff, rep.Plan, rep.Map, rowsSHA); err != nil {
+			return fail("--fix-in %s: %v", fixIn, err)
+		}
+		read := len(ff.Fixes)
+		fixes, replayed = ff.VerifiedFixes(in, planner)
+		for _, d := range replayed {
+			fmt.Fprintf(stderr, "plan-scout: fix %d (step %d, %s) dropped: %s\n", d.ID, d.Step, d.Kind, d.Reason)
+			rep.Notes = append(rep.Notes, fmt.Sprintf("fix %d (step %d, %s) dropped: %s", d.ID, d.Step, d.Kind, d.Reason))
+		}
+		note := fmt.Sprintf("fix-in: %d fix(es) read from %s, %d refused before applying; this pass's own proposals were not used", read, fixIn, len(replayed))
+		rep.Notes = append(rep.Notes, note)
+		fmt.Fprintf(stderr, "plan-scout: %s\n", note)
+	}
 	if fixOut != "" {
 		ff := planscout.FixFile{Format: planscout.FixFormat, Version: planscout.FixVersion, Plan: rep.Plan, Map: rep.Map,
 			RowsSHA256: rowsSHA, Scout: "scout-" + rep.Plan + ".json", Fixes: fixes}
@@ -481,15 +506,20 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 		if o.forever {
 			checkNav = scoutForeverCheckNav{planner}
 		}
-		edited, res, dropped, err := planscout.ApplyFixes(in.Plan, fixes, checkNav)
+		edited, res, dropped, applyErr := planscout.ApplyFixes(in.Plan, fixes, checkNav)
+		if applyErr == nil && countApplied(fixes) == 0 && len(replayed) > 0 {
+			// Only advice fixes are left: the replay refused every fix it could have applied.
+			applyErr = fmt.Errorf("every recorded fix (%d) was dropped before applying", len(replayed))
+		}
 		for _, d := range dropped {
 			fmt.Fprintf(stderr, "plan-scout: fix %d (step %d, %s) dropped: %s\n", d.ID, d.Step, d.Kind, d.Reason)
 			rep.Notes = append(rep.Notes, fmt.Sprintf("fix %d (step %d, %s) dropped: %s", d.ID, d.Step, d.Kind, d.Reason))
 		}
-		if err != nil {
+		allDropped := append(append([]planscout.DroppedFix{}, replayed...), dropped...)
+		if applyErr != nil {
 			applyRefused = true
-			rep.Notes = append(rep.Notes, "apply-fixes refused: "+err.Error())
-			fmt.Fprintf(stderr, "plan-scout: --apply-fixes refused: %v\n", err)
+			rep.Notes = append(rep.Notes, "apply-fixes refused: "+applyErr.Error())
+			fmt.Fprintf(stderr, "plan-scout: --apply-fixes refused: %v\n", applyErr)
 			_ = res
 		} else {
 			if err := os.MkdirAll(applyTo, 0o755); err != nil {
@@ -507,8 +537,8 @@ func planScoutCmd(ctx context.Context, args []string, stdout, stderr io.Writer) 
 			if err := os.WriteFile(filepath.Join(applyTo, rep.Plan+".diff"), []byte(diff), 0o644); err != nil {
 				return fail("%v", err)
 			}
-			if len(dropped) > 0 {
-				if err := writeJSON(filepath.Join(applyTo, "dropped.json"), dropped); err != nil {
+			if len(allDropped) > 0 {
+				if err := writeJSON(filepath.Join(applyTo, "dropped.json"), allDropped); err != nil {
 					return fail("dropped.json: %v", err)
 				}
 			}
@@ -563,6 +593,37 @@ func splitFlagArgs(fs *flag.FlagSet, args []string) (flags, pos []string, err er
 		}
 	}
 	return flags, pos, nil
+}
+
+// readFixFile reads a recorded fix file (tb-scout-fix).
+func readFixFile(path string) (planscout.FixFile, error) {
+	var ff planscout.FixFile
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return ff, err
+	}
+	if err := json.Unmarshal(b, &ff); err != nil {
+		return ff, fmt.Errorf("not a fix file: %v", err)
+	}
+	if ff.Fixes == nil {
+		ff.Fixes = []planscout.Fix{}
+	}
+	return ff, nil
+}
+
+// checkFixFile says a recorded fix file was made for this plan's own exported rows: its format and version, its plan and
+// map, and the rows' sha256. A list made for other rows names elements this plan may not have, so it is refused, not used.
+func checkFixFile(ff planscout.FixFile, plan string, mapID uint32, rowsSHA string) error {
+	if ff.Format != planscout.FixFormat || ff.Version != planscout.FixVersion {
+		return fmt.Errorf("format %q version %d; want %q version %d", ff.Format, ff.Version, planscout.FixFormat, planscout.FixVersion)
+	}
+	if ff.Plan != plan || ff.Map != mapID {
+		return fmt.Errorf("it holds plan %q map %d; this one is %q map %d", ff.Plan, ff.Map, plan, mapID)
+	}
+	if ff.RowsSHA256 != rowsSHA {
+		return fmt.Errorf("it was made for other rows (sha256 %s; this plan's export is %s)", ff.RowsSHA256, rowsSHA)
+	}
+	return nil
 }
 
 func countApplied(fixes []planscout.Fix) int {

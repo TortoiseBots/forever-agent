@@ -160,9 +160,9 @@ const (
 
 // The tolerances of the check, in yards.
 const (
-	// checkWalkDZ and checkWalkDH: a walk point needs mesh floor this near it (up or down, sideways).
-	checkWalkDZ = 3.0
-	checkWalkDH = 2.5
+	// WalkFloorDZ and WalkFloorDH: a walk point needs mesh floor this near it (up or down, sideways).
+	WalkFloorDZ = 3.0
+	WalkFloorDH = 2.5
 	// checkStraight: a path up to this many times the straight distance (plus checkStraightSlack yards) counts as nearly straight.
 	checkStraight      = 1.15
 	checkStraightSlack = 1.0
@@ -776,11 +776,12 @@ func (c *planChecker) count() {
 	c.res.Points++
 }
 
-// onFloor says whether the nearest walkable point n is close enough to p for the walk checks
-// (checkWalkDZ up or down, checkWalkDH sideways).
-func onFloor(p, n Point) bool {
-	return math.Abs(float64(n.Z-p.Z)) <= checkWalkDZ &&
-		math.Hypot(float64(n.X-p.X), float64(n.Y-p.Y)) <= checkWalkDH
+// OnFloor says whether the nearest walkable point n is close enough to p for the walk checks
+// (WalkFloorDZ up or down, WalkFloorDH sideways): the rule a point must meet to count as walkable, whatever window a
+// lookup searched.
+func OnFloor(p, n Point) bool {
+	return math.Abs(float64(n.Z-p.Z)) <= WalkFloorDZ &&
+		math.Hypot(float64(n.X-p.X), float64(n.Y-p.Y)) <= WalkFloorDH
 }
 
 // offMesh says whether p is off the navmesh: there is no walkable point within the walk rule
@@ -793,7 +794,7 @@ func (c *planChecker) offMesh(p Point) (bool, error) {
 	if !ok {
 		return true, nil
 	}
-	return !onFloor(p, point(n)), nil
+	return !OnFloor(p, point(n)), nil
 }
 
 // reanchor puts the party on the plan point at when an earlier failure left it off the mesh: the
@@ -824,7 +825,7 @@ func (c *planChecker) standFloor(p, end Point) (Point, error) {
 	if err != nil {
 		return p, err
 	}
-	if ok && onFloor(p, point(n)) {
+	if ok && OnFloor(p, point(n)) {
 		return point(n), nil
 	}
 	return end, nil
@@ -853,7 +854,7 @@ func (c *planChecker) walkGroup(part string, group int, to, from Point) (Point, 
 	if err != nil {
 		return from, err
 	}
-	if dz, dh := math.Abs(float64(n[2]-to.Z)), math.Hypot(float64(n[0]-to.X), float64(n[1]-to.Y)); !ok || dz > checkWalkDZ || dh > checkWalkDH {
+	if dz, dh := math.Abs(float64(n[2]-to.Z)), math.Hypot(float64(n[0]-to.X), float64(n[1]-to.Y)); !ok || dz > WalkFloorDZ || dh > WalkFloorDH {
 		if ok {
 			c.fail(part, 0, to, from, ReasonOffMesh, "the nearest floor %.1f %.1f %.1f is %.1f yd above or below it and %.1f yd off", n[0], n[1], n[2], dz, dh)
 		} else {
@@ -960,7 +961,7 @@ func (c *planChecker) gmCross(part string, to, from Point) (Point, error) {
 	if err != nil {
 		return from, err
 	}
-	if dz, dh := math.Abs(float64(n[2]-to.Z)), math.Hypot(float64(n[0]-to.X), float64(n[1]-to.Y)); !ok || dz > checkWalkDZ || dh > checkWalkDH {
+	if dz, dh := math.Abs(float64(n[2]-to.Z)), math.Hypot(float64(n[0]-to.X), float64(n[1]-to.Y)); !ok || dz > WalkFloorDZ || dh > WalkFloorDH {
 		if ok {
 			c.fail(part, 0, to, from, ReasonOffMesh, "the nearest floor %.1f %.1f %.1f is %.1f yd above or below it and %.1f yd off", n[0], n[1], n[2], dz, dh)
 		} else {
@@ -996,7 +997,7 @@ func (c *planChecker) direct(part string, to, from Point) (Point, error) {
 	if err != nil {
 		return from, err
 	}
-	if dz := math.Abs(float64(n[2] - to.Z)); !ok || dz > DirectGroundTolerance || math.Hypot(float64(n[0]-to.X), float64(n[1]-to.Y)) > checkWalkDH {
+	if dz := math.Abs(float64(n[2] - to.Z)); !ok || dz > DirectGroundTolerance || math.Hypot(float64(n[0]-to.X), float64(n[1]-to.Y)) > WalkFloorDH {
 		c.fail(part, 0, to, from, ReasonOffMesh, "no ground within %g yd under it", DirectGroundTolerance)
 		return to, nil
 	}

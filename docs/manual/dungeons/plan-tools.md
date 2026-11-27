@@ -241,7 +241,7 @@ adds a live pass on a test server (a GM account on a leased slot) and merges wha
 
 ```bash
 forever-agent plan-scout <plan> [--dir dungeons] [--sql FILE] [--mmaps DIR] [--spawns DIR] [--from LEG] \
-    [--until LEG] [--party-level N] [--out DIR] [--json] [--fix-out FILE] [--apply-fixes DIR] \
+    [--until LEG] [--party-level N] [--out DIR] [--json] [--fix-out FILE] [--fix-in FILE] [--apply-fixes DIR] \
     [--fail-on fail|warn] [--live <server> [--slot N] [--holder NAME] [--slots FILE] [--binary PATH] \
     | --forever [--parent MAP=PARENT] [--live --slot DIR]] [--walk-budget 5m] [--max-minutes 20]
 ```
@@ -250,11 +250,32 @@ forever-agent plan-scout <plan> [--dir dungeons] [--sql FILE] [--mmaps DIR] [--s
 - `--out` defaults to a new `./plan-scout-<plan>-<stamp>` folder; it always holds `scout-<plan>.json` and
   `scout-<plan>.txt`. The text lists every non-ok step, then `N steps: a ok, b warn, c fail, d skip (s)`.
 - `--fix-out FILE` writes the fix file (`tb-scout-fix` version 1) even when there are no fixes.
+- `--fix-in FILE` uses the fixes of a recorded fix file (`tb-scout-fix` version 1: an earlier `--fix-out`, or the list a
+  live pass wrote) instead of this pass's own proposals, so a walk's fix list can be re-run or applied later. It proves
+  the file was made for this plan's own exported rows (format and version, plan and map, the rows' sha256) and refuses
+  one that was not. A replay then checks each applicable fix before applying it: its kind and payload must be ones
+  `--apply-fixes` applies (a `snap_point` carries a point; vias fit an `insert_via` or `dry_detour`), its target must be
+  the plan element its step's row names in this export (the target is taken from the export, not from the file), and
+  every destination must be a point the file records whole and the map's mesh holds by the walk rule — the nearest floor
+  within 2.5 yd sideways and 3 yd up or down of the recorded point, not any floor a wider lookup window finds — and a
+  missing coordinate is never read as zero. A fix that fails
+  is dropped with the reason in the report notes, `dropped.json` and stderr, and the rest still land; a list the replay
+  refuses whole writes no copy and exits 27 when it is applied. It cannot be combined with `--live`: a live pass merges
+  the fixes it finds.
 - `--apply-fixes DIR` writes a patched plan copy and `<plan>.diff` into a new or empty folder; it refuses a folder
   inside a `dungeons/` folder, and with `--sql` it first proves the migration's rows equal the plan's export. Each
-  applicable fix is validated with the plan loader after it is applied; a fix that makes the plan invalid is undone
-  and recorded in `dropped.json` beside the copy (and if every applicable fix is dropped, no copy is written and the
-  command exits 27).
+  applicable fix is applied on the plan the fixes before it left and then checked: one the plan loader refuses, or that
+  adds a plan-check issue against the plan as it was, is undone and recorded in `dropped.json` beside the copy with its
+  reason (for a plan-check issue, the issues it makes), and the rest of the list still lands. Point moves run before
+  insertions, and insertions of one list back to front, so an insertion never shifts the element a point move names; an
+  insertion into a stand-pull row's approach list lands before the stand, so it never becomes the stand a `move_stand`
+  repaired. A stand move runs before the other point moves; a later point move that would write the same plan point —
+  a `snap_point` of the approach point a pull row's `move_stand` repaired, for one — is dropped with the conflict named,
+  and the accepted stand stays. A `move_stand` fix moves the plan element its row names (a leg's `to` point, a via, an
+  approach point or a step's stand); a pull row's stand is the last approach point, and a boss row's stand is the last
+  approach point before the boss (both created when there is none) — never the boss's position. A boss hold row sits at
+  the hold's spot, which the hold's own walk takes the party to, so its stand move (and any point move) moves that spot
+  instead. If every applicable fix is dropped, no copy is written and the command exits 27.
 - `--fail-on fail` (the default) exits 27 on a failed step; `--fail-on warn` also on a warning. The live pass that
   stopped part-way exits 28; a refused or failed live phase exits 18; a mesh that cannot answer exits 1.
 
@@ -294,10 +315,11 @@ unit by that spawn id, and a unit that matched no spawn is not read. A target pa
 spawn stays unanswered, and one note counts them (`live sight: N target pack unit(s) had no live unit of their entry
 near their spawn; those stay unanswered`): a pass that asked nothing says so instead of reporting 0 of N in silence.
 
-A walked hop whose `walk_path` answers `no full route (partial)` is recorded as a partial walk: the step's `live_walk`
-check is a skip naming the server's answer, its `reached_yd` says how far the session stood from the hop's origin when
-the answer came, and the pass goes on to the next stand instead of stopping. One note (`live walks: N stand(s)
-partial`) counts them. Any other walk error still stops the pass part-way with its own row.
+A hop whose `walk_path` answers `no full route` is not walked, for either status the serve gives it (`partial`, a route
+that reaches partway, and `none`, no route at all): the step's `live_walk` check is a skip naming the server's answer,
+its `reached_yd` says how far the session stood from the hop's origin when the answer came, and the pass goes on to the
+next stand instead of stopping. One note (`live walks: N stand(s) without a full route`) counts them. Any other walk
+error still stops the pass part-way with its own row.
 
 # plan-diff
 
