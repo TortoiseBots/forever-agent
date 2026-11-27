@@ -3,7 +3,7 @@
   "name": "blackfathom_deeps",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "refused (2026-11-24: the Turtle-only Velthelaxx wing has no ForeverCore spawn, 27 exported segments stop short on the Forever map-48 tiles and one patrol unit (4799) stands beyond its radius)",
+  "forever_status": "refused (2026-11-27: the Turtle-only Velthelaxx wing's 62528/62529/62530 and the 4798/4799 spawns have no ForeverCore map-48 spawn within their rows' radius, 40 of 203 exported segments do not walk on the Forever tiles and 43 of 244 plan-check points fail)",
   "map": 48,
   "entrance": {"x": -150.234, "y": 106.594, "z": -39.779},
   "entrance_trigger": 257,
@@ -33,7 +33,7 @@
     "Needs: shrine event: light the four shrines (GO_SHRINE_1-4) while Twilight Lord Kelris' waves come, which opens the main door to Aku'mai",
     "Needs: Baron Aquanis (12876) has no spawn row: summoned at the Fathom Stone (GO_FATHOM_STONE) by a player, optional",
     "Needs: portal door (GO_PORTAL_DOOR)",
-    "Forever check (2026-11-24, issue #223 batch 1, ForeverCore world DB, tools/dungeongen/export-forever.sh map 48: 211 normal spawns): the Turtle-only wing Velthelaxx the Defiler (boss 62530, its 62528/62529 members) stays in the plan because the Turtle stack needs it; the core has no spawn of that wing on map 48, so this plan is refused for Forever. The rows and findings below come from a comparison run with that wing left out; with it back, the probe's MISSING count also names the wing's units. plan-export --forever writes 6 legs, 174 steps, 138 pulls, 24 moves, 6 bosses and 203 units and refuses no field; probe --forever on the Forever map-48 tiles reports 1 MISSING unit (patrol 4799's path start, -607.9 40.0 -53.2) and 27 bad segments (walks stop 0.5 to 151 yd short: water, steep slopes and drops at the plan's stands); trash-check: 173 segments, 111 danger, 15 patrol, 31 own. plan-check --forever: 245 findings (123 fail: water 13, off-floor 7, edge 31, ledge 9, short hop 13, aggro 1, patrol 2, hop_len 12, climb 25) plus 132 joiners."
+    "Forever check (2026-11-27, issue #223, ForeverCore world DB, tools/dungeongen/export-forever.sh map 48: 211 normal spawns): the Turtle-only wing Velthelaxx the Defiler (boss 62530, its 62528/62529 members) stays in the plan because the Turtle stack needs it; the core has no spawn of that wing on map 48, so this plan is refused for Forever. plan-export --forever --mmaps writes 7 legs, 204 steps (188 plan steps plus 16 cut moves: 150 pulls, 7 bosses, 41 moves), 213 pack units and 232 unit rows, 7 boss rows and refuses no field; probe --forever on the Forever map-48 tiles reports 25 MISSING units (the wing's 62528/62529/62530 and the 4798/4799 spawns) and 40 of 203 segments that do not walk (server NOPATH and partial walks, water, floor gaps and steep stands); trash-check: 203 segments, 115 danger, 13 patrol, 36 own; plan-check --forever fails 43 of 244 points (2 root, 41 re-anchored) with 235 findings (128 fail: water 13, off-floor 7, edge 20, ledge 9, short hop 8, aggro 2, patrol 2, hop_len 14, climb 26) plus 134 joiners. plan-scout --apply-fixes refuses the fix list (the edits add 30 plan-check issues), so no coordinate changed."
   ],
   "legs": [
     {

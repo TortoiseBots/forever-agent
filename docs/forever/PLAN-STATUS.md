@@ -27,15 +27,15 @@ Checked 2026-11-26 (`tools/dungeongen/export-forever.sh`, the Forever v16 tiles,
 | `deadmines` | dungeon | 36 | 18-22 | `refused` | 2026-11-24: the map-36 layout differs: 23 pull units stand beyond any ForeverCore spawn of their entry, the 8 Turtle-only Defias Companions (3450) have no spawn at all, and the hall route has no path on the Forever tiles |
 | `wailing_caverns` | dungeon | 43 | 18-23 | `refused` | 2026-11-26: 3 of 203 exported unit rows miss a ForeverCore map-43 spawn of their entry within the row's radius — two Druids of the Fang (3840) and the Kresh 3653 boss — and 1 of 222 plan-check points is off the Forever tiles; plan-export --forever refuses no field |
 | `shadowfang_keep` | dungeon | 33 | 19-25 | `refused` | 2026-11-24: plan-export refuses the courtyard door's gossip step, the Turtle-only Sever/Prelate Ironmane/Mistblade Rippers have no ForeverCore spawn, and the baron hall's packs stand 34.6-99.9 yd from the keep's ForeverCore spawns |
-| `blackfathom_deeps` | dungeon | 48 | 22-27 | `refused` | 2026-11-24: the Turtle-only Velthelaxx wing has no ForeverCore spawn, 27 exported segments stop short on the Forever map-48 tiles and one patrol unit (4799) stands beyond its radius |
+| `blackfathom_deeps` | dungeon | 48 | 22-27 | `refused` | 2026-11-27: on the full plan the Turtle-only Velthelaxx wing's 62528/62529/62530 and the 4798/4799 spawns have no ForeverCore map-48 spawn within their rows' radius (25 units), 40 of 203 exported segments do not walk on the Forever tiles and 43 of 244 plan-check points fail |
 | `stormwind_stockade` | dungeon | 34 | 23-28 | `exported` | 2026-11-24: all 90 units match ForeverCore map-34 spawns and every exported segment walks on the Forever tiles |
 | `windhorn_canyon` | dungeon | 820 | 24-29 | `n/a` | Turtle custom content |
 | `dragonmaw_retreat` | dungeon | 816 | 26-31 | `n/a` | Turtle custom content |
-| `razorfen_kraul` | dungeon | 47 | 26-31 | `refused` | 2026-11-25: 15 Turtle-only units (62501/62502/62503) have no ForeverCore map-47 spawn, 5 more stand 16.3-52.2 yd from any core spawn of their entry and 34 of 227 exported segments do not walk on the Forever tiles |
-| `gnomeregan` | dungeon | 90 | 27-33 | `refused` | 2026-11-24: the Launch Bay entry does not walk on the Forever map-90 tiles: the leg-3 via-to hop stops 21.7 yd short |
-| `scarlet_graveyard` | dungeon | 189 | 30-35 | `refused` | 2026-11-25: 18 Turtle-only units (61971/61972/14693) have no ForeverCore map-189 spawn, 32 more stand 20.3-101.3 yd from any core spawn of their entry and 15 of 57 exported segments do not walk (server NOPATH) |
+| `razorfen_kraul` | dungeon | 47 | 26-31 | `refused` | 2026-11-26: 15 Turtle-only units (62501/62502/62503) have no ForeverCore map-47 spawn, 5 more stand 16.3-52.2 yd from any core spawn of their entry and 34 of 227 exported segments do not walk on the Forever tiles |
+| `gnomeregan` | dungeon | 90 | 27-33 | `refused` | 2026-11-26: the Launch Bay entry does not walk on the Forever map-90 tiles (the leg-3 via-to hop stops 21.7 yd short), 4 of 167 units (6207, 6211, 6230, 6232) miss a core spawn within the row's radius and 2 of 101 exported segments are server partial |
+| `scarlet_graveyard` | dungeon | 189 | 30-35 | `refused` | 2026-11-26: 18 Turtle-only units (61971/61972/14693) have no ForeverCore map-189 spawn, 32 more stand 20.3-101.3 yd from any core spawn of their entry and 15 of 57 exported segments do not walk (server NOPATH) |
 | `crescent_grove` | dungeon | 802 | 31-36 | `n/a` | Turtle custom content |
-| `scarlet_library` | dungeon | 189 | 33-38 | `refused` | 2026-11-25: the boss's 61983 has no ForeverCore map-189 spawn, 6 units of 4540 stand 24.4-41.7 yd from any core spawn of the entry and 5 of 47 exported segments are server NOPATH |
+| `scarlet_library` | dungeon | 189 | 33-38 | `refused` | 2026-11-26: the boss's 61983 has no ForeverCore map-189 spawn, 6 units of 4540 stand 24.4-41.7 yd from any core spawn of the entry and 5 of 47 exported segments are server NOPATH |
 | `stormwrought_ruins` | dungeon | 818 | 33-38 | `n/a` | Turtle custom content |
 | `razorfen_downs` | dungeon | 129 | 35-40 | `refused` | 2026-11-25: 51 units of the Turtle-only entries 62676/62677/62678/62679 have no ForeverCore map-129 spawn, 4 more unit rows (7343, 7353, 7354) miss a core spawn of their entry and 38 of 264 points fail on the Forever map-129 tiles |
 | `scarlet_armory` | dungeon | 189 | 35-40 | `refused` | 2026-11-25: the boss's 61982 has no ForeverCore map-189 spawn, 17 units stand 29.0-86.1 yd from any core spawn of their entry and 9 of 45 exported segments are server NOPATH |
@@ -80,7 +80,13 @@ Checked 2026-11-26 (`tools/dungeongen/export-forever.sh`, the Forever v16 tiles,
 | 2 | `razorfen_kraul`, `scarlet_graveyard`, `scarlet_library`, `scarlet_armory`, `scarlet_cathedral` | all refused (Turtle-only entries and the cathedral's Mograine hold). |
 | 3 | `razorfen_downs`, `uldaman`, `sunken_temple`, `zulfarrak`, `maraudon_purple` | all refused (Turtle-only entries, refused plan fields, missing spawns and segments). |
 | 4 | `maraudon_orange`, `lower_blackrock_spire`, `blackrock_depths`, `scholomance`, `dire_maul_east`, `dire_maul_north`, `dire_maul_west`, `stratholme_live`, `stratholme_undead`, `wailing_caverns-extra` | all refused (missing spawns, refused fields and segments that do not walk). |
-| this round | `deadmines` and `shadowfang_keep` re-run (same refusals, and deadmines' Turtle 3450 count corrected to its 8 units); `wailing_caverns` newly checked | `wailing_caverns` refused on 3 missing unit spawns and one off-mesh point. |
+| re-run round 1 | `deadmines` and `shadowfang_keep` re-run (same refusals, and deadmines' Turtle 3450 count corrected to its 8 units); `wailing_caverns` newly checked | `wailing_caverns` refused on 3 missing unit spawns and one off-mesh point. |
+| re-run round 2 | `blackfathom_deeps`, `razorfen_kraul`, `gnomeregan`, `scarlet_graveyard`, `scarlet_library` | all refused. `blackfathom_deeps` is checked with the Turtle wing in the plan (25 units without a core spawn, 40 of 203 segments that do not walk, 43 of 244 points that fail); the other four reproduce their earlier numbers. `plan-scout --apply-fixes` was refused on `blackfathom_deeps` (the edits add 30 plan-check issues) and `razorfen_kraul` (a `move_stand` fix names a leg without a boss); `gnomeregan` and the two Scarlet plans got a patch (approach points) that was not applied: the shared plan's points stay as they are. |
+
+The re-run rounds repeat the level-ordered sweep from the start, five 5-player plans at a time, with the spawn list
+re-exported from the core (`tools/dungeongen/export-forever.sh`) and the Forever v16 tiles. A Forever check writes a
+plan's `forever_status` and notes only: where `plan-scout --apply-fixes` offers an edit, the plan keeps its points and
+the analysis stays the refusal the value names.
 
 The 14 `n/a` plans are the Turtle-custom content (`black_morass`, `crescent_grove`, `dragonmaw_retreat`,
 `emerald_sanctum`, `frostmane_hollow`, `gilneas_city`, `hateforge_quarry`, `karazhan_crypt`, `lower_karazhan_halls`,

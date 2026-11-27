@@ -3,7 +3,7 @@
   "name": "gnomeregan",
   "kind": "dungeon",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "refused (2026-11-24: the Launch Bay entry does not walk on the Forever map-90 tiles: the leg-3 via-to hop stops 21.7 yd short)",
+  "forever_status": "refused (2026-11-26: the Launch Bay entry does not walk on the Forever map-90 tiles (the leg-3 via-to hop stops 21.7 yd short), 4 of 167 units (6207, 6211, 6230, 6232) miss a core spawn within the row's radius and 2 of 101 exported segments do not walk)",
   "map": 90,
   "entrance": {"x": -329.098, "y": -3.20722, "z": -152.851},
   "entrance_trigger": 324,
