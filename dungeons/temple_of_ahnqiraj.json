@@ -3,7 +3,7 @@
   "name": "temple_of_ahnqiraj",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-27: 18 of 521 pack unit rows miss a ForeverCore map-531 spawn of their entry within the row's radius (5.7-87.2 yd off), Princess Huhuran 15509 stands 34.3 yd from its only spawn and Ouro 15517 has no static spawn; plan-export --forever refuses legs[9].boss.hold and no leg is remapped; plan-check fails 3 of 688 points with 721 lints (162 errors), plan-scout fails 157 of 750 steps)",
   "map": 531,
   "entrance": {"x": -8221.35, "y": 2014.34, "z": 129.071},
   "entrance_trigger": 4010,
@@ -28,7 +28,8 @@
     "Not in any pull: the Master's Eye (15963, spawned for the Twins' dialogue and despawned after it), the Beetle (15475, level 1), the C'Thun Portal (15896), the Ouro Spawner (15957, the Ouro leg's trigger), and the six friendly NPCs (Merithra, Caelestrasz, Arygos, Andorgos, Kandrostrasz, Vethsera: faction 35). They are in every leg's skip list.",
     "C'Thun's chamber is a navmesh island on map 531: no server path reaches it from the corridor behind the Twins (the corridor's last reachable point is z -25) or from the upper terrace (z 53-63), so the boss stand is marked needs_walk and the mapping walk (B2) has to find the ramp; C'Thun's phase 2 (the stomach, area triggers 4033/4034/4036) is a blocker beyond phase 1.",
     "The world buffs are disabled inside AQ40 on Turtle, and the community's AQ40 results are mixed: Skeram and Huhuran killed, Fankriss 10-20 % on good pulls, Sartura and the Twins wipe, C'Thun phase 1 only (waterys419, #1285/#1264). Most bosses need a playground patch that is not in dev: see the prep report's per-boss list.",
-    "Not in the rows: the entrance and teleports, the level band, the raid size, the leg skip lists, the patrol blocks and the wait_for's own condition beside the Ouro spawner (the run leader's rows carry no unit wait)."
+    "Not in the rows: the entrance and teleports, the level band, the raid size, the leg skip lists, the patrol blocks and the wait_for's own condition beside the Ouro spawner (the run leader's rows carry no unit wait).",
+    "Forever check (2026-11-27, issue #223, ForeverCore world DB, tools/dungeongen/export-forever.sh map 531 at difficulty 9: 556 spawns): every entry the plan uses has a map-531 spawn, but 18 of the plan's 521 pack unit rows miss one within the row's radius (5.7-87.2 yd off). Princess Huhuran (15509) stands 34.3 yd from her only spawn and Ouro (15517) has only his template; the other seven boss rows match. plan-export --forever refuses Ouro's boss hold (legs[9].boss.hold), and with --allow-draft refuses the raid because no leg is remapped, so no rows can be written; plan-probe --forever and trash-check --forever read an exported migration and so did not run. plan-check --forever fails 3 of 688 points (1 unreachable, 1 look point too far, 1 needs a mapping walk) with 721 lints, 162 of them errors (edge 267, short hop 119, joiners 97, ledge 58, patrol 56, off-floor 55, climb_anchor 39, aggro 23, hop_len 5, boss_aggro 2); plan-scout --forever: 750 steps, 259 ok, 334 warn, 157 fail. plan-scout --apply-fixes writes a patch of 205 fixes (4 dropped), not applied: the shared plan's points stay as they are."
   ],
   "legs": [
     {

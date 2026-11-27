@@ -3,7 +3,7 @@
   "name": "naxxramas",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-27: plan-export --forever refuses the two gm_cross vias (legs 12 and 14), so plan-scout refuses the plan and plan-check has no lints; 3 of 719 pack unit rows miss a ForeverCore map-533 spawn of their entry within the row's radius and Sapphiron 15989 has no static spawn; plan-check fails 12 of 776 points (3 unreachable, 9 look points too far))",
   "map": 533,
   "entrance": {"x": 3005.87, "y": -3435.01, "z": 293.882},
   "entrance_trigger": 4055,
@@ -25,7 +25,8 @@
     "DRAFT: written offline in task B1 from the world database export of map 533 (tools/dungeongen, spec tools/dungeongen/plans.json: 1052 creature spawns, 80 entries, 248 game objects; sql/base dump of 2026-09-12), the core's naxxramas instance and boss scripts and the server's map 533 navmesh. Not mapped, not live-checked: the GM-invisible walk verifies every point.",
     "The 298 pull groups of the draft are merged to 203 packs on one floor (dz \u003c= 4) chaining within 15 yd with a navmesh path no longer than 2.2x the straight line plus 8 yd, 16 units at most, plus the pull-reach closure of the pack radius plus 3 yd. 23 further packs stand on the ring walkways at z 267-295, unreachable on foot from the hub, and are left out.",
     "The quarters are walked in the order the instance scripts gate them (spider, plague, military, construct) and the frostwyrm lair comes last. Doors that stay shut after a kill are opened by a step; doors the instance opens on a kill are waited for. Vias break the long walks between quarters into server-path hops.",
-    "Open at this prep: the construct tail (Gluth's room, the Thaddius pit) and the frostwyrm lair are separate navmesh islands, Gothik's encounter needs more than 10 living players on each side of 181170, and Kel'Thuzad starts only from area trigger 4112; see the prep's blockers."
+    "Open at this prep: the construct tail (Gluth's room, the Thaddius pit) and the frostwyrm lair are separate navmesh islands, Gothik's encounter needs more than 10 living players on each side of 181170, and Kel'Thuzad starts only from area trigger 4112; see the prep's blockers.",
+    "Forever check (2026-11-27, issue #223, ForeverCore world DB, tools/dungeongen/export-forever.sh map 533 at difficulty 9: 1156 spawns): 3 of the plan's 719 pack unit rows miss a core spawn of their entry within the row's radius (12.6, 22.7 and 64.6 yd off) and Sapphiron (15989) has only his template; the other 14 boss rows match. plan-export --forever refuses the two gm_cross vias (legs[12].via[0] and legs[14].via[0]); plan-scout --forever refuses the plan for the same field, and plan-check --forever cannot build the lint rows from the export (lints skipped). plan-export --forever also refuses the draft, and with --allow-draft refuses the raid because no leg is remapped, so no rows can be written; plan-probe --forever and trash-check --forever read an exported migration and so did not run. plan-check --forever fails 12 of 776 points (3 unreachable, 9 look points too far; 10 re-anchored) with 94 warnings. No plan-scout patch was made, because the scout refuses the plan."
   ],
   "legs": [
     {

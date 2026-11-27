@@ -137,6 +137,17 @@ func TestSharedPlansKeepTurtleContent(t *testing.T) {
 		// Wailing Caverns has no Turtle-only entry: its refused reason is the core's own spawn positions (two Druid
 		// of the Fang 3840 units and the Kresh 3653 boss row) and one pull group look point off the mesh.
 		{"wailing_caverns", nil},
+		// Upper Blackrock Spire keeps Lord Valthalak (16042), the Turtle addition, which the core does not spawn.
+		{"upper_blackrock_spire", map[uint32]int{16042: 1}},
+		// Molten Core's Turtle-only Basalthar/Incindis/Thaurissan wing: its bosses (65020, 52145, 57642) and the
+		// 52150-52152 Shadowforge trash have no map-409 spawn in the core.
+		{"molten_core", map[uint32]int{65020: 1, 52145: 1, 52150: 15, 52151: 7, 52152: 8, 57642: 1}},
+		// Onyxia's Lair keeps the Turtle trash Onyxian Inciter (49016) and Flamespawn (49017), which have no map-249
+		// spawn.
+		{"onyxias_lair", map[uint32]int{49016: 5, 49017: 3}},
+		// Blackwing Lair has no Turtle-only entry: its Corrupted Whelps (14023-14025) are classic event spawns the
+		// core's instance creates, and its refused reasons are the spawn positions and the holds and gossip.
+		{"blackwing_lair", nil},
 	}
 	for _, tc := range tests {
 		p, err := Load(filepath.Join(plansDir, tc.plan+".json"))

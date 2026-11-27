@@ -3,7 +3,7 @@
   "name": "blackwing_lair",
   "kind": "raid",
   "status": "draft (not mapped, not live-checked)",
-  "forever_status": "todo",
+  "forever_status": "refused (2026-11-27: 135 of 273 pack unit rows miss a ForeverCore map-469 spawn of their entry within the row's radius - the Corrupted Whelps 14023/14024/14025 (108 units) have no static spawn, Firemaw 11983 stands 112 yd from its only one and Nefarian 11583 has none; plan-export --forever refuses the two gossip steps and the two boss holds, and no leg is remapped; plan-check fails 0 of 309 points with 106 lints (34 errors), plan-scout fails 32 of 120 steps)",
   "map": 469,
   "entrance": {"x": -7672.32, "y": -1107.05, "z": 396.651},
   "entrance_trigger": 3726,
@@ -33,7 +33,8 @@
     "Patrols: no map 469 spawn has a waypoint path (creature_movement has no point for any of the 284 guids; the movement type 2 spawns have no path), so no pull group carries a patrol block and there is no estimated period for the walk to measure.",
     "Boss order: Razorgore, Vaelastrasz, Broodlord Lashlayer, Firemaw, Ebonroc, Flamegor, Chromaggus, Nefarian (the instance loads the later bosses only once Razorgore is DONE, and each door opens on the boss before it). Nefarian (11583) has no world spawn: Lord Victor Nefarius summons him at 40 killed adds and he lands at -7495.96 -1252.40 476.80, which is the boss row's position.",
     "No ai_boss_tactic rows: the eight bosses cast from C++ and the bots' own Blackwing Lair strategies already cover the front cone, the drakes' facing, the Flame Buffet stacks, the Chromaggus afflictions and the Nefarian class calls (dungeons-and-raids.md); the trash casters (Spellbinder Greater Polymorph 22274, Hatcher Flamestrike 22275, Warlock Rain of Fire 19717 and Demon Portal 22372, Wyrmkin Blast Wave 22424) are not bosses and their interrupts are the bot AI's current-target interrupts. A 'behind' row would duplicate the raid positioning the bot AI already does.",
-    "Community: waterys419 has no Blackwing Lair report. The inventory's per-boss patches would be Razorgore 309, Vaelastrasz 310, Ebonroc 258 and Nefarian 311/312/313/316; none is needed by this data and none is cherry-picked (owner decision)."
+    "Community: waterys419 has no Blackwing Lair report. The inventory's per-boss patches would be Razorgore 309, Vaelastrasz 310, Ebonroc 258 and Nefarian 311/312/313/316; none is needed by this data and none is cherry-picked (owner decision).",
+    "Forever check (2026-11-27, issue #223, ForeverCore world DB, tools/dungeongen/export-forever.sh map 469 at difficulty 9: 437 spawns): 135 of the plan's 273 pack unit rows miss a core spawn of their entry within the row's radius - 108 are the Corrupted Whelps 14023/14024/14025, which have only their templates, and 27 are ordinary map spawns 10.8-92.1 yd off. Firemaw (11983) stands 112 yd from his only spawn and Nefarian (11583) has only his template; the other six boss rows are within 23 yd. plan-export --forever refuses the Vaelastrasz and Nefarius gossip steps and the two boss holds, and with --allow-draft refuses the raid because no leg is remapped, so no rows can be written; plan-probe --forever and trash-check --forever read an exported migration and so did not run. plan-check --forever fails 0 of 309 points (12 warnings) with 106 lints, 34 of them errors (edge 37, joiners 29, patrol 16, short hop 14, ledge 4, aggro 3, climb_anchor 2, boss_aggro 1); plan-scout --forever: 120 steps, 43 ok, 45 warn, 32 fail. plan-scout --apply-fixes writes a patch of 32 fixes (none dropped), not applied: the shared plan's points stay as they are."
   ],
   "legs": [
     {

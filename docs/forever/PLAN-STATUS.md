@@ -14,9 +14,10 @@ The words are the ones [the plan format](../manual/dungeons/plans.md#status-and-
 | `refused` | Checked against ForeverCore data and cannot be cleared for a Forever run; the detail names the refused field, the missing spawns or the segments that do not walk. |
 | `live-checked` | Run live on a Forever server. |
 
-Checked 2026-11-26 (`tools/dungeongen/export-forever.sh`, the Forever v16 tiles, `plan-export --forever`,
-`plan-check --forever`, `plan-probe --forever`, `plan-scout --forever`, `trash-check --forever`). Counts: `n/a` 14,
-`todo` 8, `exported` 2, `refused` 25, `live-checked` 0.
+Checked 2026-11-27 (`tools/dungeongen/export-forever.sh`, the Forever v16 tiles, `plan-export --forever`,
+`plan-check --forever`, `plan-scout --forever`; `plan-probe --forever` and `trash-check --forever` where a plan
+exports its rows). Each map's spawn list is exported at its instance's own difficulty (1 for the upper spire, 148 for
+AQ20, 9 for the other five raids). Counts: `n/a` 14, `todo` 1, `exported` 2, `refused` 32, `live-checked` 0.
 
 ## Status
 
@@ -55,18 +56,18 @@ Checked 2026-11-26 (`tools/dungeongen/export-forever.sh`, the Forever v16 tiles,
 | `dire_maul_north` | dungeon | 429 | 57-60 | `refused` | 2026-11-25: 12 of 273 unit rows miss a ForeverCore map-429 spawn of their entry within the row's radius and 2 of 93 segments stop short on the Forever tiles |
 | `dire_maul_west` | dungeon | 429 | 57-60 | `refused` | 2026-11-25: plan-export --forever refuses five pull-group holds (legs[0].pull_groups[7] and [23], legs[2].pull_groups[8], legs[4].pull_groups[9] and [14]); the module's plan table has no hold rows |
 | `scholomance` | dungeon | 289 | 57-60 | `refused` | 2026-11-25: the Turtle boss 14695 Lord Blackwood has no ForeverCore map-289 spawn and 40 of 410 segments do not walk on the Forever tiles |
-| `blackwing_lair` | raid | 469 | 58-60 | `todo` |  |
-| `temple_of_ahnqiraj` | raid | 531 | 58-60 | `todo` |  |
-| `upper_blackrock_spire` | raid | 229 | 58-60 | `todo` |  |
+| `blackwing_lair` | raid | 469 | 58-60 | `refused` | 2026-11-27: 135 of 273 pack unit rows miss a ForeverCore map-469 spawn of their entry within the row's radius — the Corrupted Whelps 14023/14024/14025 (108 units) have no static spawn, Firemaw 11983 stands 112 yd from its only one and Nefarian 11583 has none; plan-export --forever refuses the two gossip steps and the two boss holds, and no leg is remapped; plan-check fails 0 of 309 points with 106 lints (34 errors), plan-scout fails 32 of 120 steps |
+| `temple_of_ahnqiraj` | raid | 531 | 58-60 | `refused` | 2026-11-27: 18 of 521 pack unit rows miss a ForeverCore map-531 spawn of their entry within the row's radius (5.7-87.2 yd off), Princess Huhuran 15509 stands 34.3 yd from its only spawn and Ouro 15517 has no static spawn; plan-export --forever refuses legs[9].boss.hold and no leg is remapped; plan-check fails 3 of 688 points with 721 lints (162 errors), plan-scout fails 157 of 750 steps |
+| `upper_blackrock_spire` | raid | 229 | 58-60 | `refused` | 2026-11-27: all 202 pack unit rows match a ForeverCore map-229 spawn, but Turtle's Lord Valthalak 16042 has none; plan-export --forever refuses the draft and, with --allow-draft, writes no rows because no leg is remapped; plan-check fails 0 of 212 points with 335 lints (99 errors), plan-scout fails 82 of 230 steps |
 | `zul_gurub` | raid | 309 | 58-60 | `todo` | 2026-11-26 offline-checked on ForeverCore data: leg 0 passes plan-scout and plan-check with 17 allowed joiners, one-body aggro and step-17 cut-row findings and 52 warnings; legs 1-8: 694 lints (125 errors, 569 warnings) and 3 failed points; leg 0's module plan rows are exported with `plan-export --forever --last-leg high_priestess_jeklik`, and since the other legs are not remapped a player-led run reads them from the plan |
 | `black_morass` | dungeon | 269 | 59-60 | `n/a` | Turtle custom content |
 | `karazhan_crypt` | dungeon | 800 | 59-60 | `n/a` | Turtle custom content |
 | `lower_karazhan_halls` | raid | 532 | 59-60 | `n/a` | Turtle custom content |
-| `naxxramas` | raid | 533 | 59-60 | `todo` |  |
-| `ruins_of_ahnqiraj` | raid | 509 | 59-60 | `todo` |  |
+| `naxxramas` | raid | 533 | 59-60 | `refused` | 2026-11-27: plan-export --forever refuses the two gm_cross vias (legs 12 and 14), so plan-scout refuses the plan and plan-check has no lints; 3 of 719 pack unit rows miss a ForeverCore map-533 spawn of their entry within the row's radius and Sapphiron 15989 has no static spawn; plan-check fails 12 of 776 points (3 unreachable, 9 look points too far) |
+| `ruins_of_ahnqiraj` | raid | 509 | 59-60 | `refused` | 2026-11-27: 16 of 218 pack unit rows miss a ForeverCore map-509 spawn of their entry within the row's radius (14.9-87.7 yd off); plan-export --forever refuses the Andorov gossip, Rajaxx's unit wait and nested hold, and no leg is remapped; plan-check fails 51 of 331 points with 262 lints (63 errors), plan-scout fails 57 of 350 steps |
 | `emerald_sanctum` | raid | 807 | 60-60 | `n/a` | Turtle custom content |
-| `molten_core` | raid | 409 | 60-60 | `todo` |  |
-| `onyxias_lair` | raid | 249 | 60-60 | `todo` |  |
+| `molten_core` | raid | 409 | 60-60 | `refused` | 2026-11-27: the Turtle-only Basalthar/Incindis/Thaurissan wing's 65020, 52145, 52150-52152 and 57642 have no ForeverCore map-409 spawn (36 of 235 pack unit rows), and Majordomo 12018 and Ragnaros 11502 have no static spawn; plan-export --forever refuses the three Majordomo gossip steps and no leg is remapped; plan-check fails 49 of 362 points with 524 lints (88 errors), plan-scout fails 82 of 508 steps |
+| `onyxias_lair` | raid | 249 | 60-60 | `refused` | 2026-11-27: the map has 7 ForeverCore spawns; the Turtle-only 49016/49017 have none and 11 of 14 pack unit rows miss a core spawn of their entry within the row's radius (one Warder 61 yd off); plan-export --forever refuses legs[1].boss.phase_entries and no leg is remapped; plan-check fails 0 of 28 points with 28 lints (1 error), plan-scout fails 1 of 34 steps |
 | `stormwind_vault` | dungeon | 35 | 60-60 | `n/a` | Turtle custom content |
 | `timbermaw_hold` | raid | 819 | 60-60 | `n/a` | Turtle custom content |
 | `upper_karazhan_halls` | raid | 814 | 60-60 | `n/a` | Turtle custom content |
@@ -82,6 +83,7 @@ Checked 2026-11-26 (`tools/dungeongen/export-forever.sh`, the Forever v16 tiles,
 | 4 | `maraudon_orange`, `lower_blackrock_spire`, `blackrock_depths`, `scholomance`, `dire_maul_east`, `dire_maul_north`, `dire_maul_west`, `stratholme_live`, `stratholme_undead`, `wailing_caverns-extra` | all refused (missing spawns, refused fields and segments that do not walk). |
 | re-run round 1 | `deadmines` and `shadowfang_keep` re-run (same refusals, and deadmines' Turtle 3450 count corrected to its 8 units); `wailing_caverns` newly checked | `wailing_caverns` refused on 3 missing unit spawns and one off-mesh point. |
 | re-run round 2 | `blackfathom_deeps`, `razorfen_kraul`, `gnomeregan`, `scarlet_graveyard`, `scarlet_library` | all refused. `blackfathom_deeps` is checked with the Turtle wing in the plan (25 units without a core spawn, 40 of 203 segments that do not walk, 43 of 244 points that fail); the other four reproduce their earlier numbers. `plan-scout --apply-fixes` was refused on `blackfathom_deeps` (the edits add 30 plan-check issues) and `razorfen_kraul` (a `move_stand` fix names a leg without a boss); `gnomeregan` and the two Scarlet plans got a patch (approach points) that was not applied: the shared plan's points stay as they are. |
+| raids | `upper_blackrock_spire`, `molten_core`, `onyxias_lair`, `blackwing_lair`, `ruins_of_ahnqiraj`, `temple_of_ahnqiraj`, `naxxramas` | all refused: Turtle-only bosses and trash, spawns the core lacks or stands far from, plan fields the module's table cannot carry (gossip, holds, a unit wait, `phase_entries`, `gm_cross`), and no leg remapped for ForeverCore, which a raid export needs. `plan-scout --apply-fixes` wrote a patch for six of the seven (the Naxxramas scout refuses the `gm_cross`); none is applied, so the shared plans' points stay as they are. |
 
 The re-run rounds repeat the level-ordered sweep from the start, five 5-player plans at a time, with the spawn list
 re-exported from the core (`tools/dungeongen/export-forever.sh`) and the Forever v16 tiles. A Forever check writes a
@@ -92,11 +94,14 @@ The 14 `n/a` plans are the Turtle-custom content (`black_morass`, `crescent_grov
 `emerald_sanctum`, `frostmane_hollow`, `gilneas_city`, `hateforge_quarry`, `karazhan_crypt`, `lower_karazhan_halls`,
 `stormwind_vault`, `stormwrought_ruins`, `timbermaw_hold`, `upper_karazhan_halls`, `windhorn_canyon`).
 
-What is left: the eight raid plans (`blackwing_lair`, `molten_core`, `naxxramas`, `onyxias_lair`,
-`ruins_of_ahnqiraj`, `temple_of_ahnqiraj`, `upper_blackrock_spire`, `zul_gurub`) still say `todo`; `zul_gurub` leg 0
-is offline-checked and exported (`plan-export --forever --last-leg high_priestess_jeklik`), its other legs are not
-remapped. A raid exports the rows of its remapped legs only, so the rest of a raid check reads the plan file
-directly.
+What is left: `zul_gurub` is the one plan still `todo`; its leg 0 is offline-checked and exported
+(`plan-export --forever --last-leg high_priestess_jeklik`), and its other legs are not remapped. The seven raids
+checked here (`upper_blackrock_spire`, `molten_core`, `onyxias_lair`, `blackwing_lair`, `ruins_of_ahnqiraj`,
+`temple_of_ahnqiraj`, `naxxramas`) are `refused` with the reason their value names. A raid exports the rows of its
+remapped legs only, and none of the seven has a leg a Forever check has remapped, so `plan-export --forever` writes
+no rows and `plan-probe --forever` and `trash-check --forever` (which read an exported migration) do not run; the
+rest of a raid check reads the plan file directly. The instances are not missing on Forever: each map has its own
+spawns (map 249 has Onyxia and her Warders, map 409 the classic Molten Core bosses), so none of the seven is `n/a`.
 
 ## Note on shared plan files
 
