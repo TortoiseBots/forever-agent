@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -240,6 +241,81 @@ func TestTrialTeardownLogsOutWhenTheClearRanOutOfTime(t *testing.T) {
 		if strings.Contains(p, "logout") {
 			t.Fatalf("the logout must not depend on the item clear's context: %v", problems)
 		}
+	}
+}
+
+// TestTrialTeardownReleaseBudgetStartsAfterTheClear pins the timing half of
+// the same live case: the clear runs on a live teardown deadline until it
+// expires, and the release budget must not have been counting down beside it.
+// Otherwise stay, free and logout start on an expired context and the hire
+// stays online. Here the clear blocks until its deadline; the release must
+// then still prove the logout.
+func TestTrialTeardownReleaseBudgetStartsAfterTheClear(t *testing.T) {
+	s, f := newSetupFake(t)
+	f.units = []map[string]any{{"guid": gHire, "name": "Bheal", "type": "player", "level": 40,
+		"health": 1500, "max_health": 1500, "auras": []any{}}}
+	s.scriptParty("Atank")
+	s.tbFn = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb logout"):
+			f.mu.Lock()
+			f.units = nil // the character is gone from the server's world
+			f.mu.Unlock()
+			return []string{"TortoiseBots: Bheal is logging out."}
+		case strings.HasPrefix(line, ".tb role clear"):
+			return []string{"role-begin #T", "role bot=Acmd role= seq=8 status=queued #T",
+				"role-end role= target=Acmd count=1 records=1 queued=1 #T"}
+		}
+		return nil
+	}
+	// A grant record gives the clear a count to read; the itemscan below
+	// blocks on the clear's own deadline.
+	prov := &Provisioner{Server: "test2", RecoveryPath: filepath.Join(t.TempDir(), "mark.json")}
+	g, err := prov.marks().begin(givenItem{Server: "test2", Bot: "Bheal", Item: 1708, Base: 0, Intent: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prov.marks().confirm(g.Grant, 20); err != nil {
+		t.Fatal(err)
+	}
+	inner := s.runner.bot
+	s.runner.bot = func(ctx context.Context, line string, waitMS int) (BotResult, error) {
+		if strings.HasPrefix(line, ".tb itemscan") {
+			<-ctx.Done() // the clear uses its whole window
+			return BotResult{}, ctx.Err()
+		}
+		return inner(ctx, line, waitMS)
+	}
+	// The release sends are tokenless and wait a 1.5 s quiet window on the
+	// runner's clock; each read here advances it a second, so the release
+	// steps still complete inside a short real budget.
+	var ticks int
+	s.runner.now = func() time.Time {
+		ticks++
+		return time.Unix(0, 0).Add(time.Duration(ticks) * time.Second)
+	}
+	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2",
+		TeardownTimeout: 500 * time.Millisecond, TeardownPoll: time.Millisecond,
+		LogoutWait: time.Second}
+	r.tbRunner = s.runner
+	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal", TrialID: "t",
+		Guids: Guids{Bot: gHire}, RecoveryPath: prov.RecoveryPath}
+	// The clear starts on a deadline far longer than the release budget and
+	// holds it until it expires: a release clock started beside it is dead.
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	problems := r.trialTeardown(ctx, rep, "t")
+	uncleared := false
+	for _, p := range problems {
+		if strings.Contains(p, "items of Bheal not cleared") {
+			uncleared = true
+		}
+		if strings.Contains(p, "logout") {
+			t.Fatalf("the release budget must start after the clear: %v", problems)
+		}
+	}
+	if !uncleared {
+		t.Fatalf("the clear must have used its whole deadline: %v", problems)
 	}
 }
 

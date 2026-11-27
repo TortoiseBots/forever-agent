@@ -419,49 +419,36 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 	}
 	names = append(names, rep.ExtraNames...)
 	prov := &Provisioner{Client: rep.Client, TB: tb, Ledger: rep.Ledger, Server: r.Server, RecoveryPath: rep.RecoveryPath}
-	// The item clear re-reads and removes copy by copy and may use the whole
-	// teardown window (a 20-copy stack did on 2026-11-27). The release steps
-	// do not depend on that budget: stay, free and logout run on a fresh
-	// teardown context of their own, so a clear that runs out of time still
-	// ends with the hire offline.
+	// Items first, on the teardown context. What the trial's grants gave goes
+	// back out of the bags while the hire is still online. Only the copies a
+	// grant proved are taken back, each capped at that grant's proved count
+	// and floored at the carried count read before its give; an id with no
+	// grant is the hire's own and is never touched, and neither is any copy a
+	// proved grant deliberately kept (a hire's own copies above a settled
+	// grant's floor stay). A clear that cannot be proved is ledgered, the
+	// grant record stays for the next run, and the teardown reports it. The
+	// count comes from `.tb itemscan` by item id; the slot for an unequip
+	// comes from a complete `.bot inv` reply.
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		clearEv, cleared := prov.ClearGiven(ctx, name)
+		rep.Ledger.Add(map[string]any{"kind": "items_cleared", "bot": name, "ok": cleared, "evidence": clearEv})
+		if !cleared {
+			r.logf("%s: items of %s not cleared: %s", trialID, name, clearEv)
+			problems = append(problems, "items of "+name+" not cleared: "+trimReason(clearEv))
+		}
+	}
+	// The release steps then run on a fresh teardown context whose clock
+	// starts only now: the clear may use its whole window (a 20-copy stack did
+	// on 2026-11-27), and starting the release budget beside it left stay,
+	// free and logout on an expired context, so the pool hire stayed online.
 	releaseCtx, cancelRelease := r.teardownCtx(ctx)
 	defer cancelRelease()
 	for _, name := range names {
 		if name == "" {
 			continue
-		}
-		// What the trial's grants gave goes back out of the bags while the
-		// hire is still online. Only the copies a grant proved are taken
-		// back, each capped at that grant's proved count and floored at the
-		// carried count read before its give; an id with no grant is the
-		// hire's own and is never touched. A clear that cannot be proved is
-		// ledgered, the grant record stays for the next run, and the teardown
-		// reports it. The count comes from `.tb itemscan` by item id; the
-		// slot for an unequip comes from a complete `.bot inv` reply.
-		clearEv, cleared := prov.ClearGiven(ctx, name)
-		if cleared {
-			// The pool hire's own kit is the trial's own ids: a copy left by
-			// a killed run or an earlier build has no live grant, and only
-			// this sweep takes it back (bag copies, then worn ones unequipped
-			// and removed). It runs only after the grants were proved clear,
-			// so an unreadable mark file still fails the teardown closed.
-			if ev, ok := prov.ClearLeftovers(ctx, name, trialItemIDs(trialSpecFor(rep, name))); !ok {
-				cleared = false
-				if clearEv != "" {
-					clearEv += "; "
-				}
-				clearEv += ev
-			} else if ev != "no known trial items" && ev != "no trial items left over" {
-				if clearEv != "" {
-					clearEv += "; "
-				}
-				clearEv += ev
-			}
-		}
-		rep.Ledger.Add(map[string]any{"kind": "items_cleared", "bot": name, "ok": cleared, "evidence": clearEv})
-		if !cleared {
-			r.logf("%s: items of %s not cleared: %s", trialID, name, clearEv)
-			problems = append(problems, "items of "+name+" not cleared: "+trimReason(clearEv))
 		}
 		if _, err := tb.Stay(releaseCtx, name); err != nil {
 			r.logf("%s: .tb order %s stay: %v", trialID, name, err)
@@ -508,34 +495,6 @@ func hireGUID(rep *Repeat, name string) string {
 		}
 	}
 	return ""
-}
-
-// trialSpecFor is the spec the trial gave the named hire (the main hire or
-// an extra, aligned by name with rep.ExtraNames): the teardown's leftover
-// sweep needs the items and the gear kit that hire was given.
-func trialSpecFor(rep *Repeat, name string) BotSpec {
-	if strings.EqualFold(name, rep.BotName) {
-		return botSpecOf(rep.Trial["bot"])
-	}
-	rawExtras, _ := rep.Trial["extra_bots"].([]any)
-	for i, extra := range rep.ExtraNames {
-		if strings.EqualFold(name, extra) && i < len(rawExtras) {
-			return botSpecOf(rawExtras[i])
-		}
-	}
-	return BotSpec{}
-}
-
-// trialItemIDs is every item id a trial gives the named hire: the spec's
-// consumables and every entry of its gear kit.
-func trialItemIDs(spec BotSpec) []uint32 {
-	ids := itemIDs(spec.Items)
-	if spec.Gear != "" {
-		for _, item := range botGearKit(spec.Class, spec.Gear, spec.Level) {
-			ids = append(ids, item.Entry)
-		}
-	}
-	return uniqueItemIDs(ids)
 }
 
 // logoutProved sends `.tb logout` and waits for the hire to leave both the

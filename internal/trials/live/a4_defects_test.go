@@ -602,9 +602,11 @@ func TestSetupFailsClosedWhenTheItemScanIsUnreadable(t *testing.T) {
 	}
 }
 
-// The teardown's leftover sweep touches only the trial's own ids: a hire's
-// stack of an id the trial never gives is its own and stays.
-func TestTrialTeardownLeavesUnrelatedItems(t *testing.T) {
+// The teardown clears only what a grant record proves: a hire's stack of an
+// id the trial never gives, and a copy of an id the trial does give but no
+// grant names, are the hire's own and stay. Teardown may never touch an item
+// it did not create in this trial.
+func TestTrialTeardownNeverTouchesCopiesNoGrantNames(t *testing.T) {
 	prov, s, bags := bagProv(t)
 	bags.set(9999, 20) // not one of the trial's ids
 	bags.set(1708, 7)  // a leftover of the trial's own consumable, no grant
@@ -618,11 +620,11 @@ func TestTrialTeardownLeavesUnrelatedItems(t *testing.T) {
 	if got := bags.count(9999); got != 20 {
 		t.Fatalf("an id the trial never gives must not be touched, bags=%d", got)
 	}
-	if got := bags.count(1708); got != 0 {
-		t.Fatalf("the trial's own leftover must be swept, bags=%d", got)
+	if got := bags.count(1708); got != 7 {
+		t.Fatalf("a copy no grant record names must stay, bags=%d", got)
 	}
-	if got := bags.seen(".tb removeitem Bheal 9999"); len(got) != 0 {
-		t.Fatalf("the teardown must send no removal for an unrelated id, saw %v", got)
+	if got := bags.seen(".tb removeitem"); len(got) != 0 {
+		t.Fatalf("the teardown must send no removal without a grant record, saw %v", got)
 	}
 }
 
@@ -694,33 +696,60 @@ func TestTrialTeardownClearsGivenItems(t *testing.T) {
 	}
 }
 
-// The teardown's leftover sweep takes back the pool hire's copies of the
-// trial's own ids that no live grant names any more: bag copies first, then a
-// worn piece proved through a complete `.bot inv` reply, unequipped into the
-// bags and removed. Setup leaves an unmarked stack alone, so this sweep is
-// what keeps the pool hire from reaching the next trial with full bags.
-func TestTrialTeardownClearsUnmarkedLeftovers(t *testing.T) {
+// The grant clear deliberately keeps the copies the hire owned before the
+// trial's give (it stops at the recorded baseline); the teardown must not
+// take them back afterwards. A sweep over the trial's template ids would.
+func TestTrialTeardownKeepsTheHiresOwnCopiesOfAGivenItem(t *testing.T) {
 	prov, s, bags := bagProv(t)
-	bags.set(1708, 7) // bag leftovers of the trial's consumable, no grant
-	bags.itemSlot[7720] = 0
-	bags.setWorn(0, 7720) // a worn kit piece from an earlier run, no grant
+	bags.set(1708, 5) // the hire owned 5 before the trial's give
+	if _, err := prov.giveItem(context.Background(), "Bheal", 1708, 20); err != nil {
+		t.Fatal(err)
+	}
 	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2"}
 	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal",
 		RecoveryPath: prov.RecoveryPath, TrialID: "t",
-		Trial: map[string]any{"bot": map[string]any{
-			"class": "priest", "spec": "holy", "level": int64(40), "gear": "blue",
-			"items": []any{map[string]any{"name": "Sweet Nectar", "count": int64(20)}},
+		Trial: map[string]any{"bot": map[string]any{"class": "priest", "level": int64(40),
+			"items": []any{map[string]any{"name": "Sweet Nectar", "count": int64(20)}}}}}
+	r.tbRunner = s.runner
+	r.trialTeardown(context.Background(), rep, "t")
+	if got := bags.count(1708); got != 5 {
+		t.Fatalf("the hire's own 5 copies must stay after the clear, bags=%d", got)
+	}
+	if got := bags.seen(".tb removeitem Bheal 1708 20"); len(got) != 1 {
+		t.Fatalf("only the 20 granted copies may go, removals: %v", bags.seen(".tb removeitem"))
+	}
+}
+
+// A failed extra-hire slot compacts the name list (run.go drops empty names),
+// so the second extra is no longer the second name. Its cleanup is keyed by
+// the character it was granted to, never by the slot whose kit it might
+// resemble: holding a copy of the first slot's kit item must not authorize
+// destructive cleanup with the first hire's kit.
+func TestTrialTeardownKeysCleanupToTheCharacterNotTheExtraSlot(t *testing.T) {
+	prov, s, bags := bagProv(t)
+	// The first slot's kit item and the trial's consumable, both carried
+	// by the second hire with no grant record naming them.
+	bags.set(7720, 1)
+	bags.set(1708, 3)
+	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2"}
+	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, TrialID: "t",
+		RecoveryPath: prov.RecoveryPath, ExtraNames: []string{"Bsecond"},
+		Trial: map[string]any{"extra_bots": []any{
+			map[string]any{"class": "priest", "level": int64(40), "gear": "blue",
+				"items": []any{map[string]any{"name": "Sweet Nectar", "count": int64(20)}}},
+			map[string]any{"class": "warrior", "level": int64(40),
+				"items": []any{map[string]any{"name": "Sweet Nectar", "count": int64(1)}}},
 		}}}
 	r.tbRunner = s.runner
 	r.trialTeardown(context.Background(), rep, "t")
-	if got := bags.count(1708); got != 0 {
-		t.Fatalf("the leftover bag copies must be cleared, bags=%d", got)
+	if got := bags.count(7720); got != 1 {
+		t.Fatalf("the first slot's kit item must not be taken off another hire, bags=%d", got)
 	}
-	if got := bags.wornAt(0); got != 0 {
-		t.Fatalf("the leftover worn piece must be unequipped, slot0=%d", got)
+	if got := bags.count(1708); got != 3 {
+		t.Fatalf("a copy no grant record names must stay, bags=%d", got)
 	}
-	if got := bags.count(7720); got != 0 {
-		t.Fatalf("the unequipped worn copy must be removed, bags=%d", got)
+	if got := bags.seen(".tb removeitem"); len(got) != 0 {
+		t.Fatalf("the teardown must send no removal for copies no grant names, saw %v", got)
 	}
 }
 
