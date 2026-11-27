@@ -419,6 +419,13 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 	}
 	names = append(names, rep.ExtraNames...)
 	prov := &Provisioner{Client: rep.Client, TB: tb, Ledger: rep.Ledger, Server: r.Server, RecoveryPath: rep.RecoveryPath}
+	// The item clear re-reads and removes copy by copy and may use the whole
+	// teardown window (a 20-copy stack did on 2026-11-27). The release steps
+	// do not depend on that budget: stay, free and logout run on a fresh
+	// teardown context of their own, so a clear that runs out of time still
+	// ends with the hire offline.
+	releaseCtx, cancelRelease := r.teardownCtx(ctx)
+	defer cancelRelease()
 	for _, name := range names {
 		if name == "" {
 			continue
@@ -432,15 +439,34 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		// reports it. The count comes from `.tb itemscan` by item id; the
 		// slot for an unequip comes from a complete `.bot inv` reply.
 		clearEv, cleared := prov.ClearGiven(ctx, name)
+		if cleared {
+			// The pool hire's own kit is the trial's own ids: a copy left by
+			// a killed run or an earlier build has no live grant, and only
+			// this sweep takes it back (bag copies, then worn ones unequipped
+			// and removed). It runs only after the grants were proved clear,
+			// so an unreadable mark file still fails the teardown closed.
+			if ev, ok := prov.ClearLeftovers(ctx, name, trialItemIDs(trialSpecFor(rep, name))); !ok {
+				cleared = false
+				if clearEv != "" {
+					clearEv += "; "
+				}
+				clearEv += ev
+			} else if ev != "no known trial items" && ev != "no trial items left over" {
+				if clearEv != "" {
+					clearEv += "; "
+				}
+				clearEv += ev
+			}
+		}
 		rep.Ledger.Add(map[string]any{"kind": "items_cleared", "bot": name, "ok": cleared, "evidence": clearEv})
 		if !cleared {
 			r.logf("%s: items of %s not cleared: %s", trialID, name, clearEv)
 			problems = append(problems, "items of "+name+" not cleared: "+trimReason(clearEv))
 		}
-		if _, err := tb.Stay(ctx, name); err != nil {
+		if _, err := tb.Stay(releaseCtx, name); err != nil {
 			r.logf("%s: .tb order %s stay: %v", trialID, name, err)
 		}
-		if _, err := tb.Free(ctx, name); err != nil {
+		if _, err := tb.Free(releaseCtx, name); err != nil {
 			r.logf("%s: .tb order %s free: %v", trialID, name, err)
 		}
 		// The module answers `.tb logout` before the character is gone: a
@@ -448,7 +474,7 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		// next trial's login found it "already logged in" (2026-11-25). A
 		// roster drop alone is no proof (a kick or a disband drops it too), so
 		// the hire's own unit row must stop answering as well.
-		lines, ev, proved := r.logoutProved(ctx, rep.Client, tb, name, hireGUID(rep, name))
+		lines, ev, proved := r.logoutProved(releaseCtx, rep.Client, tb, name, hireGUID(rep, name))
 		if !proved {
 			r.logf("%s: .tb logout %s: %s", trialID, name, ev)
 			problems = append(problems, "logout of "+name+" not confirmed: "+ev)
@@ -456,7 +482,7 @@ func (r *Runner) trialTeardown(ctx context.Context, rep *Repeat, trialID string)
 		rep.Ledger.Add(map[string]any{"kind": "logged_out", "bot": name, "reply": firstLines(lines),
 			"error": ev})
 	}
-	if _, err := tb.RoleSelf(ctx, "clear"); err != nil {
+	if _, err := tb.RoleSelf(releaseCtx, "clear"); err != nil {
 		r.logf("%s: role self clear: %v", trialID, err)
 		problems = append(problems, "forced role not cleared: "+trimReason(err.Error()))
 	}
@@ -482,6 +508,34 @@ func hireGUID(rep *Repeat, name string) string {
 		}
 	}
 	return ""
+}
+
+// trialSpecFor is the spec the trial gave the named hire (the main hire or
+// an extra, aligned by name with rep.ExtraNames): the teardown's leftover
+// sweep needs the items and the gear kit that hire was given.
+func trialSpecFor(rep *Repeat, name string) BotSpec {
+	if strings.EqualFold(name, rep.BotName) {
+		return botSpecOf(rep.Trial["bot"])
+	}
+	rawExtras, _ := rep.Trial["extra_bots"].([]any)
+	for i, extra := range rep.ExtraNames {
+		if strings.EqualFold(name, extra) && i < len(rawExtras) {
+			return botSpecOf(rawExtras[i])
+		}
+	}
+	return BotSpec{}
+}
+
+// trialItemIDs is every item id a trial gives the named hire: the spec's
+// consumables and every entry of its gear kit.
+func trialItemIDs(spec BotSpec) []uint32 {
+	ids := itemIDs(spec.Items)
+	if spec.Gear != "" {
+		for _, item := range botGearKit(spec.Class, spec.Gear, spec.Level) {
+			ids = append(ids, item.Entry)
+		}
+	}
+	return uniqueItemIDs(ids)
 }
 
 // logoutProved sends `.tb logout` and waits for the hire to leave both the

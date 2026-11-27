@@ -203,6 +203,46 @@ func TestTrialTeardownWaitsForTheLogoutToLand(t *testing.T) {
 	}
 }
 
+// TestTrialTeardownLogsOutWhenTheClearRanOutOfTime pins the live 2026-11-27
+// regression: the item clear used the teardown context up (a 20-copy stack
+// cost one read and one removal per copy), and the logout sent afterwards on
+// that same context answered "cancelled: the call was aborted and the
+// connection is closed", so the pool hire stayed online and every later trial
+// failed setup with "already logged in or loading". The release steps must
+// run on a fresh teardown context, independent of the clear.
+func TestTrialTeardownLogsOutWhenTheClearRanOutOfTime(t *testing.T) {
+	s, f := newSetupFake(t)
+	f.units = []map[string]any{{"guid": gHire, "name": "Bheal", "type": "player", "level": 40,
+		"health": 1500, "max_health": 1500, "auras": []any{}}}
+	s.scriptParty("Atank")
+	s.tbFn = func(line string) []string {
+		switch {
+		case strings.HasPrefix(line, ".tb logout"):
+			f.mu.Lock()
+			f.units = nil // the character is gone from the server's world
+			f.mu.Unlock()
+			return []string{"TortoiseBots: Bheal is logging out."}
+		case strings.HasPrefix(line, ".tb role clear"):
+			return []string{"role-begin #T", "role bot=Acmd role= seq=8 status=queued #T",
+				"role-end role= target=Acmd count=1 records=1 queued=1 #T"}
+		}
+		return nil
+	}
+	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2",
+		TeardownPoll: time.Millisecond, LogoutWait: time.Millisecond}
+	r.tbRunner = s.runner
+	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal", TrialID: "t",
+		Guids: Guids{Bot: gHire}}
+	dead, cancel := context.WithCancel(context.Background())
+	cancel() // the live case: the teardown context was already used up
+	problems := r.trialTeardown(dead, rep, "t")
+	for _, p := range problems {
+		if strings.Contains(p, "logout") {
+			t.Fatalf("the logout must not depend on the item clear's context: %v", problems)
+		}
+	}
+}
+
 // TestTrialTeardownDoesNotProveALogoutFromTheRosterAlone pins the review's
 // case: the roster drops the name (a kick or a disband) while the server still
 // holds the bot's unit row. That is not a logout, and teardown must say so.

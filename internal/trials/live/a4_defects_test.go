@@ -438,8 +438,8 @@ func TestClearGivenUsesRemoveItemAndReadsBack(t *testing.T) {
 	if !ok || bags.count(1708) != 0 {
 		t.Fatalf("clear must be proved and empty the bags: ok=%v bags=%d %s", ok, bags.count(1708), ev)
 	}
-	if got := bags.seen(".tb removeitem Bheal 1708 1"); len(got) != 20 {
-		t.Fatalf("each removal must name one copy (20 times), saw %v", bags.lines)
+	if got := bags.seen(".tb removeitem Bheal 1708 20"); len(got) != 1 {
+		t.Fatalf("the whole proved stack must go in one removal naming 20 copies, saw %v", bags.lines)
 	}
 	for _, l := range bags.seen(".tb additem") {
 		if strings.Contains(l, " -") {
@@ -602,23 +602,27 @@ func TestSetupFailsClosedWhenTheItemScanIsUnreadable(t *testing.T) {
 	}
 }
 
-// The teardown removes only what a recovery grant proves: a leftover with no
-// mark is the hire's own and stays.
-func TestTrialTeardownLeavesUnmarkedItems(t *testing.T) {
+// The teardown's leftover sweep touches only the trial's own ids: a hire's
+// stack of an id the trial never gives is its own and stays.
+func TestTrialTeardownLeavesUnrelatedItems(t *testing.T) {
 	prov, s, bags := bagProv(t)
-	bags.set(1708, 20) // no recovery mark names this stack
+	bags.set(9999, 20) // not one of the trial's ids
+	bags.set(1708, 7)  // a leftover of the trial's own consumable, no grant
 	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2"}
 	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal",
 		RecoveryPath: prov.RecoveryPath, TrialID: "t",
-		Trial: map[string]any{"bot": map[string]any{"class": "priest", "level": 40,
-			"items": []any{map[string]any{"name": "Sweet Nectar", "count": 20}}}}}
+		Trial: map[string]any{"bot": map[string]any{"class": "priest", "level": int64(40),
+			"items": []any{map[string]any{"name": "Sweet Nectar", "count": int64(20)}}}}}
 	r.tbRunner = s.runner
 	r.trialTeardown(context.Background(), rep, "t")
-	if got := bags.count(1708); got != 20 {
-		t.Fatalf("the teardown must not touch an unmarked stack, bags=%d", got)
+	if got := bags.count(9999); got != 20 {
+		t.Fatalf("an id the trial never gives must not be touched, bags=%d", got)
 	}
-	if got := bags.seen(".tb removeitem"); len(got) != 0 {
-		t.Fatalf("the teardown must send no removal for an unmarked stack, saw %v", got)
+	if got := bags.count(1708); got != 0 {
+		t.Fatalf("the trial's own leftover must be swept, bags=%d", got)
+	}
+	if got := bags.seen(".tb removeitem Bheal 9999"); len(got) != 0 {
+		t.Fatalf("the teardown must send no removal for an unrelated id, saw %v", got)
 	}
 }
 
@@ -681,12 +685,42 @@ func TestTrialTeardownClearsGivenItems(t *testing.T) {
 		}
 		return -1
 	}
-	rm, logout := idx(".tb removeitem Bheal 1708 1"), idx(".tb logout")
+	rm, logout := idx(".tb removeitem Bheal 1708"), idx(".tb logout")
 	if rm < 0 || (logout >= 0 && rm > logout) {
 		t.Fatalf("items must be cleared before the logout: %v", seen)
 	}
 	if bags.count(1708) != 0 || len(prov.marks().forBot("test2", "Bheal")) != 0 {
 		t.Fatal("the bags and the mark must be empty after the teardown clear")
+	}
+}
+
+// The teardown's leftover sweep takes back the pool hire's copies of the
+// trial's own ids that no live grant names any more: bag copies first, then a
+// worn piece proved through a complete `.bot inv` reply, unequipped into the
+// bags and removed. Setup leaves an unmarked stack alone, so this sweep is
+// what keeps the pool hire from reaching the next trial with full bags.
+func TestTrialTeardownClearsUnmarkedLeftovers(t *testing.T) {
+	prov, s, bags := bagProv(t)
+	bags.set(1708, 7) // bag leftovers of the trial's consumable, no grant
+	bags.itemSlot[7720] = 0
+	bags.setWorn(0, 7720) // a worn kit piece from an earlier run, no grant
+	r := &Runner{Client: s.runner.client, Ledger: NewLedger(""), Server: "test2"}
+	rep := &Repeat{Client: s.runner.client, Ledger: r.Ledger, BotName: "Bheal",
+		RecoveryPath: prov.RecoveryPath, TrialID: "t",
+		Trial: map[string]any{"bot": map[string]any{
+			"class": "priest", "spec": "holy", "level": int64(40), "gear": "blue",
+			"items": []any{map[string]any{"name": "Sweet Nectar", "count": int64(20)}},
+		}}}
+	r.tbRunner = s.runner
+	r.trialTeardown(context.Background(), rep, "t")
+	if got := bags.count(1708); got != 0 {
+		t.Fatalf("the leftover bag copies must be cleared, bags=%d", got)
+	}
+	if got := bags.wornAt(0); got != 0 {
+		t.Fatalf("the leftover worn piece must be unequipped, slot0=%d", got)
+	}
+	if got := bags.count(7720); got != 0 {
+		t.Fatalf("the unequipped worn copy must be removed, bags=%d", got)
 	}
 }
 

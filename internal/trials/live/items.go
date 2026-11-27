@@ -472,6 +472,161 @@ func (p *Provisioner) ClearGiven(ctx context.Context, bot string) (string, bool)
 	return formatClearSummary(cleared, notes), allOK
 }
 
+// ClearLeftovers takes back every copy of the trial's own item ids a hire
+// still carries at trial end. ClearGiven needs a live grant for every copy it
+// takes; this sweep is the teardown's policy for the pool hire's kit, a copy
+// left by a killed run or an earlier build that no grant names any more. The
+// setup never runs it: an unmarked stack at setup is the hire's own and stays.
+// Bag copies go first, the whole stack in one call per item; a count still
+// above zero is a worn copy, and a complete `.bot inv` reply must prove the
+// slot before it is unequipped into the bags and removed. A count or slot
+// that cannot be read or proved fails the row closed and touches nothing.
+func (p *Provisioner) ClearLeftovers(ctx context.Context, bot string, ids []uint32) (string, bool) {
+	ids = uniqueItemIDs(ids)
+	if len(ids) == 0 {
+		return "no known trial items", true
+	}
+	carried, note, ok := p.scanLeftovers(ctx, bot, ids)
+	if !ok {
+		return note, false
+	}
+	allOK := true
+	cleared := 0
+	var notes []string
+	for _, item := range ids {
+		if carried[item] == 0 {
+			continue
+		}
+		n, note, ok := p.emptyLeftoverBags(ctx, bot, item)
+		cleared += n
+		if !ok {
+			allOK = false
+			notes = append(notes, note)
+			continue
+		}
+		n, note, ok = p.clearLeftoverWorn(ctx, bot, item)
+		cleared += n
+		if !ok {
+			allOK = false
+			notes = append(notes, note)
+		}
+	}
+	if cleared == 0 && len(notes) == 0 {
+		return "no trial items left over", true
+	}
+	var parts []string
+	if cleared > 0 {
+		parts = append(parts, fmt.Sprintf("cleared %d leftover item(s)", cleared))
+	}
+	parts = append(parts, notes...)
+	return strings.Join(parts, "; "), allOK
+}
+
+// scanLeftovers reads which of ids the hire carries, in one ItemScan per 40
+// ids. A record that cannot be read, or an id the reply does not name, fails
+// the sweep closed: the count would otherwise read as zero.
+func (p *Provisioner) scanLeftovers(ctx context.Context, bot string, ids []uint32) (map[uint32]int, string, bool) {
+	out := map[uint32]int{}
+	for start := 0; start < len(ids); start += 40 {
+		chunk := ids[start:]
+		if len(chunk) > 40 {
+			chunk = chunk[:40]
+		}
+		tctx, cancel := p.ctxOf(ctx)
+		rep, err := p.TB.ItemScan(tctx, bot, chunk...)
+		cancel()
+		if err != nil {
+			return nil, fmt.Sprintf("itemscan %s: %v", bot, err), false
+		}
+		found := map[uint32]bool{}
+		for _, r := range rep.Results {
+			found[r.Item] = true
+			if !r.Exists {
+				continue
+			}
+			if !r.HasInv {
+				return nil, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s named no carried count)", r.Item, bot), false
+			}
+			out[r.Item] = r.Inv
+		}
+		for _, id := range chunk {
+			if !found[id] {
+				return nil, fmt.Sprintf("item %d: UNVERIFIED (itemscan %s held no record for it)", id, bot), false
+			}
+		}
+	}
+	return out, "", true
+}
+
+// emptyLeftoverBags removes every bag copy of one trial id, in one call per
+// read, and stops at a module removal of zero (the rest is worn).
+func (p *Provisioner) emptyLeftoverBags(ctx context.Context, bot string, item uint32) (int, string, bool) {
+	removed := 0
+	for range 8 {
+		before, note, ok := p.carriedCountNote(ctx, bot, item)
+		if !ok {
+			return removed, note, false
+		}
+		if before == 0 {
+			return removed, "", true
+		}
+		n, note, ok := p.removeCopies(ctx, bot, item, before, 0)
+		if !ok {
+			return removed, note, false
+		}
+		if n == 0 {
+			return removed, "", true // no bag copy left: what remains is worn
+		}
+		removed += n
+	}
+	return removed, fmt.Sprintf("item %d: UNVERIFIED (bags still hold a copy after 8 removals)", item), false
+}
+
+// clearLeftoverWorn unequips and destroys the worn copies of one trial id,
+// one at a time, each slot proved by a complete `.bot inv` reply first.
+func (p *Provisioner) clearLeftoverWorn(ctx context.Context, bot string, item uint32) (int, string, bool) {
+	removed := 0
+	for range 8 {
+		before, note, ok := p.carriedCountNote(ctx, bot, item)
+		if !ok {
+			return removed, note, false
+		}
+		if before == 0 {
+			return removed, "", true
+		}
+		slot, note, ok := p.provenEquipSlot(ctx, bot, item, -1)
+		if !ok {
+			return removed, note, false
+		}
+		if err := p.unequipBotSlot(ctx, bot, slot, item); err != nil {
+			return removed, fmt.Sprintf("item %d: unequip slot %d failed: %v", item, slot, err), false
+		}
+		n, note, ok := p.removeCopies(ctx, bot, item, 1, 0)
+		if !ok {
+			return removed, note, false
+		}
+		if n != 1 {
+			return removed, fmt.Sprintf("item %d: unequip slot %d did not put a copy into the bags", item, slot), false
+		}
+		removed += n
+	}
+	return removed, fmt.Sprintf("item %d: UNVERIFIED (still carried after 8 unequips)", item), false
+}
+
+// uniqueItemIDs drops duplicate and unknown (0) ids, in order.
+func uniqueItemIDs(ids []uint32) []uint32 {
+	seen := map[uint32]bool{}
+	out := make([]uint32, 0, len(ids))
+	for _, id := range ids {
+		if id == 0 || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
 // grantGroup is the cleanup view of one item id's grants.
 type grantGroup struct {
 	item    uint32
@@ -573,9 +728,10 @@ func (p *Provisioner) prepareGrantGroup(ctx context.Context, bot string, g *gran
 }
 
 // clearGrantBags removes one grant group's bag copies, up to its proved cap
-// and never below its floor. Each removal re-reads the count first. A module
-// removal of zero means the bags hold no copy (the rest of the grant is worn)
-// and is not an error.
+// and never below its floor. Each removal re-reads the count first and asks
+// for the whole remaining budget in one call, so a full stack clears in one
+// step instead of one call per copy. A module removal of zero means the bags
+// hold no copy (the rest of the grant is worn) and is not an error.
 func (p *Provisioner) clearGrantBags(ctx context.Context, bot string, g *grantGroup) bool {
 	for g.removed < g.cap {
 		inv, note, ok := p.carriedCountNote(ctx, bot, g.item)
@@ -587,7 +743,11 @@ func (p *Provisioner) clearGrantBags(ctx context.Context, bot string, g *grantGr
 		if inv <= g.floor {
 			return true
 		}
-		n, note, ok := p.removeOneAbove(ctx, bot, g.item, g.floor)
+		want := g.cap - g.removed
+		if above := inv - g.floor; want > above {
+			want = above
+		}
+		n, note, ok := p.removeCopies(ctx, bot, g.item, want, g.floor)
 		if !ok {
 			g.ok = false
 			g.note = note
@@ -658,13 +818,18 @@ func (p *Provisioner) clearGrantWorn(ctx context.Context, bot string, g *grantGr
 	return true
 }
 
-// removeOneAbove takes at most one copy of item out of the bags. The carried
-// count is re-read here, in the same step that removes: when it is already at
-// or below floor nothing may be removed, so a budget measured against an
-// earlier read can never cross the baseline. The module is asked for exactly
-// one copy and the read-back must show exactly that, never a count below the
-// floor.
-func (p *Provisioner) removeOneAbove(ctx context.Context, bot string, item uint32, floor int) (int, string, bool) {
+// removeCopies takes up to want copies of item out of the bags in one module
+// call, never below floor. The carried count is re-read here, in the same
+// step that removes: when it is already at or below floor nothing may be
+// removed, so a budget measured against an earlier read can never cross the
+// baseline. The module's own removed count must match the drop in the
+// read-back and the count must stay at or above the floor. A module answer of
+// 0 with an unchanged count means the bags hold no copy (the rest is worn):
+// (0, "", true), so the caller's worn pass decides.
+func (p *Provisioner) removeCopies(ctx context.Context, bot string, item uint32, want, floor int) (int, string, bool) {
+	if want <= 0 {
+		return 0, "", true
+	}
 	before, known := p.carriedCount(ctx, bot, item)
 	if !known {
 		return 0, fmt.Sprintf("item %d: UNVERIFIED (carried count unreadable before removing)", item), false
@@ -672,10 +837,13 @@ func (p *Provisioner) removeOneAbove(ctx context.Context, bot string, item uint3
 	if before <= floor {
 		return 0, "", true
 	}
+	if want > before-floor {
+		want = before - floor
+	}
 	tctx, cancel := p.ctxOf(ctx)
-	res, lines, rerr := p.TB.FreeTextRemoveItem(tctx, bot, item, 1)
+	res, lines, rerr := p.TB.FreeTextRemoveItem(tctx, bot, item, uint32(want))
 	cancel()
-	p.Ledger.Add(map[string]any{"kind": "removeitem", "bot": bot, "item_id": item, "count": 1,
+	p.Ledger.Add(map[string]any{"kind": "removeitem", "bot": bot, "item_id": item, "count": want,
 		"removed": res.Removed, "left": res.Left, "reply": firstLines(lines)})
 	if rerr != nil {
 		return 0, fmt.Sprintf("item %d: remove refused: %s", item, tbErrText(rerr, lines)), false
@@ -684,19 +852,28 @@ func (p *Provisioner) removeOneAbove(ctx context.Context, bot string, item uint3
 	if !ok {
 		return 0, fmt.Sprintf("item %d: UNVERIFIED (carried count unreadable after removing)", item), false
 	}
-	if res.Removed == 0 {
+	removed := int(res.Removed)
+	if removed < 0 || removed > want {
+		return 0, fmt.Sprintf("item %d: UNVERIFIED (the module removed %d of %d)", item, res.Removed, want), false
+	}
+	if removed == 0 {
 		if after != before {
 			return 0, fmt.Sprintf("item %d: UNVERIFIED (the module removed none but the carried count moved %d -> %d)", item, before, after), false
 		}
 		return 0, "", true
 	}
-	if res.Removed != 1 || after != before-1 {
-		return 0, fmt.Sprintf("item %d: UNVERIFIED (carried %d before, %d after the module removed %d of 1)", item, before, after, res.Removed), false
+	if after != before-removed {
+		return 0, fmt.Sprintf("item %d: UNVERIFIED (carried %d before, %d after the module removed %d of %d)", item, before, after, res.Removed, want), false
 	}
 	if after < floor {
 		return 0, fmt.Sprintf("item %d: UNVERIFIED (the carried count %d fell below the baseline %d)", item, after, floor), false
 	}
-	return 1, "", true
+	return removed, "", true
+}
+
+// removeOneAbove is removeCopies for one copy.
+func (p *Provisioner) removeOneAbove(ctx context.Context, bot string, item uint32, floor int) (int, string, bool) {
+	return p.removeCopies(ctx, bot, item, 1, floor)
 }
 
 // provenEquipSlot reads the hire's inventory and returns an equipment slot

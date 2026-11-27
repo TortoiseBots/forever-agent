@@ -1,5 +1,9 @@
 # Directory Update Log
 
+## 2026-11-27
+
+* **Fix**: Trial teardown in [trials](testing/trials.md): the release steps (stay, free, logout) run on a teardown budget of their own, independent of the item clear, because a full stack cleared copy by copy used the whole window and every later logout answered "cancelled: the call was aborted and the connection is closed", leaving the pool hire online for the next trial ("already logged in or loading"). Bag removals now ask for the whole remaining budget in one call (still floored at the grant's baseline and proved by the module's removed count and a read-back). After the grants are proved clear, the teardown sweeps every remaining copy of the trial's own ids — its consumables and gear kit — that no live grant names any more: bag copies first, then a worn copy proved through a complete `.bot inv` reply, unequipped into the bags and removed, so the pool hire no longer reaches the next trial with full bags.
+
 ## 2026-11-26
 
 * **Update**: Documented `plan-export --forever --last-leg NAME` and the leg field `forever_checked` in [plan tools](dungeons/plan-tools.md), [dungeon plans](dungeons/plans.md) and [plan tools troubleshooting](dungeons/plan-troubleshooting.md): a raid plan exports only the legs a Forever check remapped (`zul_gurub` leg 0 writes `plan_zul_gurub.sql`), a selection past them is refused, and a raid's size has no row.
