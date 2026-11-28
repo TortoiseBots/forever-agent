@@ -16,6 +16,8 @@ sources:
     resource: internal/forever/world/serve_npc_methods.go
   - id: method-groups-quest
     resource: internal/forever/world/serve_quest_methods.go
+  - id: method-groups-quest-share
+    resource: internal/forever/world/quest_share.go
   - id: method-groups-mail
     resource: internal/forever/world/serve_mail_methods.go
   - id: method-groups-auction
@@ -151,6 +153,9 @@ Call shape, error codes and the `rpc` command are on [RPC basics](rpc-basics.md)
 | `quest_reward` | `guid`, `quest_id`, `choice`, `wait_ms` | Pick the reward | [Quests and loot](../player-actions/quests-and-loot.md) |
 | `quest_abandon` | `quest_id`, `wait_ms` | Abandon a quest | [Quests and loot](../player-actions/quests-and-loot.md) |
 | `quest_log` | `{}` | The character's quest log | [Quests and loot](../player-actions/quests-and-loot.md) |
+| `quest_share` | `quest_id`, `wait_ms` | Share a held quest with the party | [Quests and loot](../player-actions/quests-and-loot.md#quest_share) |
+| `quest_share_accept` | `quest_id`, `wait_ms` | Accept a pending shared quest or confirm popup | [Quests and loot](../player-actions/quests-and-loot.md#quest_share_accept-and-quest_share_decline) |
+| `quest_share_decline` | `quest_id` | Decline a pending shared quest or dismiss confirm popup | [Quests and loot](../player-actions/quests-and-loot.md#quest_share_accept-and-quest_share_decline) |
 
 # Death and the corpse run
 

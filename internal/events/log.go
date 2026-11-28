@@ -96,15 +96,18 @@ const (
 	KindChannelEnd      = "channel_end"      // MSG_CHANNEL_UPDATE with 0 left: the channel ended or was broken
 	KindComboPoints     = "combo_points"     // the player's combo points changed: data.points, was, target
 	// Quests: the panels an NPC opens, and the result of each accept, hand-in and abandon.
-	KindQuestList         = "quest_list"          // SMSG_QUESTGIVER_QUEST_LIST
-	KindQuestDetails      = "quest_details"       // SMSG_QUESTGIVER_QUEST_DETAILS
-	KindQuestRequestItems = "quest_request_items" // SMSG_QUESTGIVER_REQUEST_ITEMS
-	KindQuestOfferReward  = "quest_offer_reward"  // SMSG_QUESTGIVER_OFFER_REWARD
-	KindQuestAccepted     = "quest_accepted"      // the quest appeared in the quest log
-	KindQuestRewarded     = "quest_rewarded"      // SMSG_QUESTGIVER_QUEST_COMPLETE
-	KindQuestAbandoned    = "quest_abandoned"     // the quest left the quest log
-	KindQuestError        = "quest_error"         // SMSG_QUESTGIVER_QUEST_INVALID, _FAILED or SMSG_QUESTLOG_FULL
-	KindQuestUpdate       = "quest_update"        // SMSG_QUESTUPDATE_*: progress, completion or failure
+	KindQuestList          = "quest_list"           // SMSG_QUESTGIVER_QUEST_LIST
+	KindQuestDetails       = "quest_details"        // SMSG_QUESTGIVER_QUEST_DETAILS
+	KindQuestRequestItems  = "quest_request_items"  // SMSG_QUESTGIVER_REQUEST_ITEMS
+	KindQuestOfferReward   = "quest_offer_reward"   // SMSG_QUESTGIVER_OFFER_REWARD
+	KindQuestAccepted      = "quest_accepted"       // the quest appeared in the quest log
+	KindQuestRewarded      = "quest_rewarded"       // SMSG_QUESTGIVER_QUEST_COMPLETE
+	KindQuestAbandoned     = "quest_abandoned"      // the quest left the quest log
+	KindQuestError         = "quest_error"          // SMSG_QUESTGIVER_QUEST_INVALID, _FAILED or SMSG_QUESTLOG_FULL
+	KindQuestUpdate        = "quest_update"         // SMSG_QUESTUPDATE_*: progress, completion or failure
+	KindQuestShared        = "quest_shared"         // SMSG_QUEST_GIVER_QUEST_DETAILS (InformUnit set) or SMSG_QUEST_CONFIRM_ACCEPT
+	KindQuestShareDeclined = "quest_share_declined" // CMSG_QUEST_PUSH_RESULT(Declined) or confirm popup dismissed
+	KindQuestPushResult    = "quest_push_result"    // SMSG_QUEST_PUSH_RESULT: per-member or self share status
 	// The dungeon driver (dungeon_run): data holds the leg, step, seconds and, at the end, the run report's totals.
 	KindDungeonLeg    = "dungeon_leg"    // a leg started or ended: data.phase start|end, data.result, seconds, deaths
 	KindDungeonStep   = "dungeon_step"   // an action of the plan finished (or a wait began): data.action, ok, seconds, error

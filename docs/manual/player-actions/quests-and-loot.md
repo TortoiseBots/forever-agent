@@ -1,13 +1,15 @@
 ---
 type: Method Reference
 title: Quests and loot
-description: Take, hand in and abandon quests, read the quest log, loot corpses, chests and game objects including group rolls, and run the loot and object checks live.
+description: Take, share, hand in and abandon quests, answer shared quests, read the quest log, loot corpses, chests and game objects including group rolls, and run the quest-share, loot and object checks live.
 tags: [player-actions, quests, loot, gameobjects, rolls]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-28T08:25:00Z }
 sources:
   - id: quest-methods
     resource: internal/forever/world/serve_quest_methods.go
+  - id: quest-share
+    resource: internal/forever/world/quest_share.go
   - id: quest-act
     resource: internal/forever/world/quest_act.go
   - id: loot-methods
@@ -18,6 +20,8 @@ sources:
     resource: internal/forever/world/serve_method_frame.go
   - id: loot-check
     resource: cmd/forever-agent/forever_loot.go
+  - id: quest-share-cmd
+    resource: cmd/forever-agent/forever_quest.go
 ---
 
 > **Not yet proven on a live server.** The quest, loot and game-object methods, their `act` steps and the live checks `loot-check` and `object-use` are exercised against the scripted world; a live run is the next step for each. See [what has been proven](../getting-started/what-is-forever-agent.md#what-has-been-proven-and-what-has-not).
@@ -41,6 +45,9 @@ methods never walk to it.
 | `quest_reward` | `guid`, `quest_id`, `choice` | ok, the item that arrived |
 | `quest_abandon` | `quest_id` | ok |
 | `quest_log` | none | the character's quest log |
+| `quest_share` | `quest_id`, `wait_ms` | ok, per-member push results |
+| `quest_share_accept` | `quest_id`, `wait_ms` | ok, the slot the shared quest took |
+| `quest_share_decline` | `quest_id` | ok |
 
 The quest id is required and must be positive everywhere it is named (`quest_id %d is not a positive quest id`), and
 every method that names a giver requires the quest-giver flag.
@@ -96,6 +103,36 @@ cannot be abandoned once begun, and then the quest is still there when the wait 
 
 `stale` and `stale_reason` mean the client lost a log update: the rows may be out of date until the next login or
 map change.
+
+## quest_share
+
+`quest_share` shares a quest in the character's quest log with its party or raid (`CMSG_PUSH_QUEST_TO_PARTY` by
+`quest_id`). Preconditions before sending: a positive `quest_id`, a non-stale known quest log holding that quest, and
+group membership (`not in a group` when solo).
+
+It waits up to `wait_ms` (default 2,000 ms with other connected group members, 500 ms otherwise; capped at 60,000 ms)
+for the server's `SMSG_QUEST_PUSH_RESULT` replies and returns `results`: one `{guid, name, result, reason}` row per
+member (or a single self-result such as `not_allowed`, `not_daily` or `not_in_party`). `ok` is `true` when at least one
+member answered `success` or `accepted` without a self-refusal. Each `SMSG_QUEST_PUSH_RESULT` (including later
+`accepted` or `declined` answers) also writes a `quest_push_result` row to `event_log`.
+
+## quest_share_accept and quest_share_decline
+
+When another group member shares a quest (`SMSG_QUEST_GIVER_QUEST_DETAILS` carrying a non-zero `InformUnit`) or a
+shared-on-accept quest opens a confirmation popup (`SMSG_QUEST_CONFIRM_ACCEPT`), the session records the pending offer
+and emits a `quest_shared` event (`data.share_kind` is `push` or `confirm`).
+
+- `quest_share_accept` takes the pending shared quest: it sends `CMSG_QUEST_GIVER_ACCEPT_QUEST` naming the sharing
+  player (`InformUnit`) for a `push` offer, or `CMSG_QUEST_CONFIRM_ACCEPT` for a `confirm` offer, and waits for the
+  quest to appear in the character's log (`quest_accepted`, `ok: true` with `slot`), or a `quest_error`. Passing
+  `quest_id` verifies that the pending offer matches that id before sending.
+- `quest_share_decline` declines the pending shared quest: it sends `CMSG_QUEST_PUSH_RESULT` with reason `4`
+  (`declined`) naming the sharing player for a `push` offer, or dismisses the pending `confirm` offer, and emits
+  `quest_share_declined`.
+
+Both refuse before sending when no shared quest is pending (`no pending shared quest`) or when `quest_id` does not match
+the pending offer (`pending shared quest is %d, not %d`); `quest_share_accept` also checks the quest log preconditions
+(`already in slot`, `no free slot`, stale log).
 
 # Loot methods
 
@@ -223,6 +260,29 @@ per roll, then the packet counts. Neither prints an identifier; a roll's winner 
 Exit codes: `0` done; `2` a usage error; `5` a world refusal or a failed run after login; `6` the link was lost;
 `11` the character died; `12` several objects of that entry are in range and `--at` named none — nothing was sent.
 
+# Share a quest live: forever quest-share
+
+One-shot live command to share a quest with the party or answer a quest shared to the character, with no daemon:
+
+```bash
+forever-agent forever quest-share [--rest host:port] [--rpc host:port] [--ca FILE] --account EMAIL \
+    --character NAME (--quest N | --accept | --decline) [--from NAME] [--wait DURATION] \
+    [--settle 4s] [--stay 2s] [--capture-dir DIR]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--quest N` | none | Quest id to share with the party, or expected quest id when combined with `--accept` or `--decline`. |
+| `--accept` | off | Wait up to `--wait` for a shared quest (or confirm-accept popup) and accept it. |
+| `--decline` | off | Wait up to `--wait` for a shared quest and decline it (exclusive with `--accept`). |
+| `--from NAME` | none | With `--accept` or `--decline`: answer only a share from this character name. |
+| `--wait DURATION` | `5s` (`--quest`) / `30s` (`--accept`/`--decline`) | How long to wait for push results or an incoming share, 0-2m. |
+| `--settle DURATION` | `4s` | How long to settle in the world before acting, 0-1m. |
+| `--stay DURATION` | `2s` | How long to stay in the world after acting before logging out, 0-2m. |
+| `--capture-dir DIR` | none | Write the packets the handlers see into a new run directory under this path. |
+
+Exit codes: `0` done; `2` a usage error; `5` a world refusal or timeout after login; `6` the link was lost.
+
 # Examples
 
 Accept a quest from the giver:
@@ -241,6 +301,20 @@ Take the first reward row:
 
 ```
 forever-agent forever rpc ./slots/ACCOUNT quest_reward '{"guid": "0x0000000000000a30", "quest_id": 783, "choice": 0}'
+```
+
+Share a quest with the party, or accept a shared quest on another session:
+
+```
+forever-agent forever rpc ./slots/ACCOUNT quest_share '{"quest_id": 783}'
+forever-agent forever rpc ./slots/OTHER quest_share_accept '{}'
+```
+
+Or run either side as a one-shot live check:
+
+```
+forever-agent forever quest-share --rest example.invalid:1119 --rpc example.invalid:1119 --ca ./ca.pem \
+    --account ACCOUNT --character Mychar --quest 783
 ```
 
 Loot a corpse and take everything:
@@ -270,6 +344,8 @@ before a packet are JSON-RPC errors (unknown unit, alive unit, out of a reach a 
 
 # Common problems
 
+- `quest_share: not in a group`; `quest 783 is not in the log (quest_log shows what is)`.
+- `no pending shared quest`; `pending shared quest is 783, not 900`.
 - `unit 0x... is alive: only a corpse has loot`.
 - `no loot window is open`; `no loot window is open (loot comes first)` for `loot_take`.
 - `the window has no slot 3 (taken already?)`.

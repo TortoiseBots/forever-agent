@@ -1,5 +1,9 @@
 # Directory Update Log
 
+## 2026-11-28
+
+* **Update**: Added party quest sharing and shared-quest accept/decline in [Quests and loot](player-actions/quests-and-loot.md), [Method index](daemon/method-index.md) and [Events and logs](daemon/events-and-logs.md): `quest_share`, `quest_share_accept` and `quest_share_decline` daemon methods plus the one-shot `forever quest-share` command (`--quest`, `--accept`, `--decline`, `--from`, `--wait`), reporting per-member `SMSG_QUEST_PUSH_RESULT` answers and `quest_shared`, `quest_share_declined` and `quest_push_result` events.
+
 ## 2026-11-27
 
 * **Update**: `plan-scout --apply-fixes` keeps an accepted stand repair: a stand move runs before the other point moves, and a later point move that resolves to the same plan point (a `snap_point` of a pull row's final approach point, for one) is dropped into `dropped.json` with the conflict named instead of overwriting the stand. A replay also drops a fix whose kind or payload `--apply-fixes` does not apply (a `snap_point` with only vias, an unsupported kind) with its reason, and the rest of the list still lands. Both are documented in [plan tools](dungeons/plan-tools.md).

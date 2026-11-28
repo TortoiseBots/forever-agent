@@ -15,14 +15,17 @@ import (
 // questWatch holds the quest answers since the last step cleared them. The session goroutine is the only reader and
 // writer.
 type questWatch struct {
-	status   *quest.GiverStatus
-	details  *quest.Details
-	request  *quest.RequestItems
-	offer    *quest.OfferReward
-	complete *quest.Complete
-	invalid  *quest.InvalidQuest
-	failed   *quest.Failed
-	logFull  bool
+	status      *quest.GiverStatus
+	details     *quest.Details
+	request     *quest.RequestItems
+	offer       *quest.OfferReward
+	complete    *quest.Complete
+	invalid     *quest.InvalidQuest
+	failed      *quest.Failed
+	logFull     bool
+	shared      *questShareOffer
+	pushResults []questPushResultEntry
+	pushSeq     uint64
 }
 
 // isQuestPacket reports the opcodes handleQuest owns. The quest giver's list and hello stay in the NPC dispatch
@@ -32,7 +35,7 @@ func isQuestPacket(core uint32) bool {
 	case wire.SMSGQuestGiverStatus, wire.SMSGQuestGiverQuestDetails, wire.SMSGQuestGiverRequestItems,
 		wire.SMSGQuestGiverOfferReward, wire.SMSGQuestGiverQuestComplete, wire.SMSGQuestGiverInvalidQuest,
 		wire.SMSGQuestGiverQuestFailed, wire.SMSGQuestUpdateAddCredit, wire.SMSGQuestUpdateAddCreditSimple,
-		wire.SMSGQuestUpdateComplete, wire.SMSGQuestLogFull:
+		wire.SMSGQuestUpdateComplete, wire.SMSGQuestLogFull, wire.SMSGQuestConfirmAccept, wire.SMSGQuestPushResult:
 		return true
 	}
 	return false
@@ -71,6 +74,9 @@ func (s *session) handleQuest(p worldconn.Packet) error {
 		// The details name the quest's objectives in the order its progress slots use, which is what a later
 		// credit needs to land in the right slot.
 		s.questBook().RememberObjectives(v.QuestID, v.Objectives)
+		if !v.InformUnit.IsZero() {
+			s.recordSharedQuest("push", v.QuestID, v.InformUnit, v.Title)
+		}
 	case wire.SMSGQuestGiverRequestItems:
 		v, err := quest.ParseRequestItems(p.Payload)
 		if err != nil {
@@ -156,6 +162,20 @@ func (s *session) handleQuest(p worldconn.Packet) error {
 		}
 		s.quest.logFull = true
 		s.opts.logf("world: the quest log is full")
+	case wire.SMSGQuestConfirmAccept:
+		v, err := quest.ParseConfirmAccept(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return nil
+		}
+		s.recordSharedQuest("confirm", int32(v.QuestID), v.InitiatedBy, v.QuestTitle)
+	case wire.SMSGQuestPushResult:
+		v, err := quest.ParsePushResult(p.Payload)
+		if err != nil {
+			s.noteParseError(p, err)
+			return nil
+		}
+		s.recordQuestPushResult(v)
 	}
 	return nil
 }
