@@ -267,6 +267,9 @@ func TestClientOpcodeTranslation(t *testing.T) {
 		{0x3E002F, "CMSG_QUEST_GIVER_CHOOSE_REWARD", 0x3F0031, 0x3F0031},
 		{0x3E00EC, "CMSG_QUEST_GIVER_CLOSE_QUEST", 0x3F00EF, 0x3F00EF},
 		{0x3E00D0, "CMSG_QUEST_LOG_REMOVE_QUEST", 0x3F00D3, 0x3F00D3},
+		{0x3E0033, "CMSG_QUEST_CONFIRM_ACCEPT", 0x3F0035, 0x3F0035},
+		{0x3E0034, "CMSG_PUSH_QUEST_TO_PARTY", 0x3F0036, 0x3F0036},
+		{0x3E0035, "CMSG_QUEST_PUSH_RESULT", 0x3F0037, 0x3F0037},
 		// R4 trainer and R6 taxi rows in the same 0x3E group, listed by the .inc region-2 table: wire = core+2,
 		// unchanged at 70938.
 		{0x3E0043, "CMSG_TRAINER_LIST", 0x3F0045, 0x3F0045},
@@ -598,6 +601,51 @@ func TestBuild71037IsInThe70790Class(t *testing.T) {
 	for _, b := range SupportedClientBuilds() {
 		if b == Build71037 {
 			t.Errorf("71037 is claimed on its own before a live login has checked it")
+		}
+	}
+}
+
+func TestQuestShareOpcodesTranslate(t *testing.T) {
+	for _, build := range []uint32{realmBuild70707, clientBuild70938} {
+		table := NewOpcodeTable(build, realmBuild70707)
+		for _, c := range []struct {
+			core uint32
+			name string
+		}{
+			{SMSGQuestConfirmAccept, "SMSG_QUEST_CONFIRM_ACCEPT"},
+			{SMSGQuestPushResult, "SMSG_QUEST_PUSH_RESULT"},
+		} {
+			if got := ServerName(c.core); got != c.name {
+				t.Errorf("ServerName(0x%06X) = %q, want %q", c.core, got, c.name)
+			}
+			w := table.TranslateServerCore(c.core)
+			if w == UnknownOpcode {
+				t.Errorf("%s build %d has no wire number", c.name, build)
+				continue
+			}
+			if got := table.TranslateServerWire(w); got != c.core {
+				t.Errorf("%s build %d: wire 0x%06X named 0x%06X, want 0x%06X", c.name, build, w, got, c.core)
+			}
+		}
+		for _, c := range []struct {
+			core uint32
+			name string
+		}{
+			{CMSGQuestConfirmAccept, "CMSG_QUEST_CONFIRM_ACCEPT"},
+			{CMSGPushQuestToParty, "CMSG_PUSH_QUEST_TO_PARTY"},
+			{CMSGQuestPushResult, "CMSG_QUEST_PUSH_RESULT"},
+		} {
+			if got := ClientName(c.core); got != c.name {
+				t.Errorf("ClientName(0x%06X) = %q, want %q", c.core, got, c.name)
+			}
+			w, ok := table.WireForClient(c.core)
+			if !ok {
+				t.Errorf("%s build %d has no wire number", c.name, build)
+				continue
+			}
+			if got := table.TranslateClientWire(w); got != c.core {
+				t.Errorf("%s build %d: wire 0x%06X named 0x%06X, want 0x%06X", c.name, build, w, got, c.core)
+			}
 		}
 	}
 }

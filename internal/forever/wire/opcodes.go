@@ -365,6 +365,9 @@ const (
 	CMSGQuestGiverChooseReward     uint32 = 0x3E002F
 	CMSGQuestGiverCloseQuest       uint32 = 0x3E00EC
 	CMSGQuestLogRemoveQuest        uint32 = 0x3E00D0
+	CMSGQuestConfirmAccept         uint32 = 0x3E0033
+	CMSGPushQuestToParty           uint32 = 0x3E0034
+	CMSGQuestPushResult            uint32 = 0x3E0035
 	SMSGQuestGiverStatus           uint32 = 0x65001B
 	SMSGQuestGiverQuestDetails     uint32 = 0x650012
 	SMSGQuestGiverRequestItems     uint32 = 0x650013
@@ -376,6 +379,8 @@ const (
 	SMSGQuestUpdateAddCreditSimple uint32 = 0x65000D
 	SMSGQuestUpdateComplete        uint32 = 0x650009
 	SMSGQuestLogFull               uint32 = 0x650007
+	SMSGQuestConfirmAccept         uint32 = 0x65000F
+	SMSGQuestPushResult            uint32 = 0x650010
 )
 
 // The trainer of round R4 (Opcodes.h:1019-1020, 1886, 2430-2431): the list ask (an NPC hello), the purchase, and
@@ -640,6 +645,9 @@ var clientNames = map[uint32]string{
 	CMSGQuestGiverChooseReward:  "CMSG_QUEST_GIVER_CHOOSE_REWARD",
 	CMSGQuestGiverCloseQuest:    "CMSG_QUEST_GIVER_CLOSE_QUEST",
 	CMSGQuestLogRemoveQuest:     "CMSG_QUEST_LOG_REMOVE_QUEST",
+	CMSGQuestConfirmAccept:      "CMSG_QUEST_CONFIRM_ACCEPT",
+	CMSGPushQuestToParty:        "CMSG_PUSH_QUEST_TO_PARTY",
+	CMSGQuestPushResult:         "CMSG_QUEST_PUSH_RESULT",
 
 	CMSGTrainerList:     "CMSG_TRAINER_LIST",
 	CMSGTrainerBuySpell: "CMSG_TRAINER_BUY_SPELL",

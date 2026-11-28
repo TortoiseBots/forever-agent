@@ -6,7 +6,7 @@
 # Talking to the world
 
 * [Vendors and gossip](vendors-and-gossip.md) - Open a vendor, buy and sell items, and read and choose the options of an NPC's gossip menu.
-* [Quests and loot](quests-and-loot.md) - Take, hand in and abandon quests, read the quest log, loot corpses, chests and game objects including group rolls, and run the loot and object checks live.
+* [Quests and loot](quests-and-loot.md) - Take, share, hand in and abandon quests, answer shared quests, read the quest log, loot corpses, chests and game objects including group rolls, and run the quest-share, loot and object checks live.
 * [Trainers and flight paths](trainers-and-flight-paths.md) - Read a trainer's list and buy spells, and read a flight master's nodes and take a taxi flight.
 * [Mail and auction house](mail-and-auction.md) - Read, take, return and send mail, and browse, buy and sell at the auction house.
 * [Chat and channels](chat.md) - Send say, yell, party, raid, guild and whisper lines, join and leave custom channels, and read the chat log.

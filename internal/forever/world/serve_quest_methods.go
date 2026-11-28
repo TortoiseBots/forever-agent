@@ -79,6 +79,15 @@ func registerQuestMethods(srv *rpc.Server, st *serveState) {
 	srv.Register("quest_log", serveCallTyped(st, func(s *session, _ context.Context, _ serveEmpty) (ServeQuestLogResult, error) {
 		return s.serveQuestLog()
 	}))
+	srv.Register("quest_share", serveCallTyped(st, func(s *session, ctx context.Context, p serveQuestShareParams) (ServeQuestShareResult, error) {
+		return s.serveQuestShare(ctx, p)
+	}))
+	srv.Register("quest_share_accept", serveCallTyped(st, func(s *session, ctx context.Context, p serveQuestShareAcceptParams) (ServeQuestShareAnswerResult, error) {
+		return s.serveQuestShareAccept(ctx, p)
+	}))
+	srv.Register("quest_share_decline", serveCallTyped(st, func(s *session, _ context.Context, p serveQuestShareDeclineParams) (ServeQuestShareAnswerResult, error) {
+		return s.serveQuestShareDecline(p)
+	}))
 }
 
 // questIDOf checks the quest a call names.

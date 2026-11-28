@@ -136,7 +136,7 @@ An event row: `seq`, `time`, `mono_ms`, `kind`, `source`, `source_guid`, `target
 | `vendor_list`, `vendor_buy`, `vendor_buy_failed`, `vendor_sell`, `vendor_sell_failed` | Vendor lists and purchases. |
 | `trainer_list`, `trainer_trained`, `trainer_failed`, `spell_learned`, `spell_removed`, `spell_superseded` | Trainer and spellbook changes. |
 | `cooldown_start`, `cooldown_end`, `cooldown_clear`, `combo_points` | The agent's own spell cooldowns and combo points. |
-| `quest_list`, `quest_details`, `quest_request_items`, `quest_offer_reward`, `quest_accepted`, `quest_rewarded`, `quest_abandoned`, `quest_error` | Quest panels and results. |
+| `quest_list`, `quest_details`, `quest_request_items`, `quest_offer_reward`, `quest_accepted`, `quest_rewarded`, `quest_abandoned`, `quest_error`, `quest_shared`, `quest_share_declined`, `quest_push_result` | Quest panels, shares, push results and outcomes. |
 | `taxi_reply`, `taxi_node`, `taxi_flight` | Flight-master answers, new nodes, takeoff and landing (`data.state`). |
 | `trade_status` | A step of a trade window (`data.status`). |
 | `pet_summoned`, `pet_died`, `pet_revived`, `pet_dismissed`, `pet_error` | The player's pet. |

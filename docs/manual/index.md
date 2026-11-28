@@ -35,7 +35,7 @@ When you want to drive a character from a script, read the daemon area; for a du
 * [player-actions/](player-actions/) - Everything the character itself does: spells and combat, items, vendors, quests, trade, mail, chat, groups, pets and the act step runner.
 * [Spells and combat](player-actions/spells-and-combat.md) - Read the spellbook and cooldowns, cast and cancel spells, and fight a unit with melee or spells.
 * [Items and inventory](player-actions/items-and-inventory.md) - Read the character's inventory and equipment, move items between slots and bags, use an item, and mount or dismount.
-* [Quests and loot](player-actions/quests-and-loot.md) - Take, hand in and abandon quests, read the quest log, loot corpses, chests and game objects including group rolls, and run the loot and object checks live.
+* [Quests and loot](player-actions/quests-and-loot.md) - Take, share, hand in and abandon quests, answer shared quests, read the quest log, loot corpses, chests and game objects including group rolls, and run the quest-share, loot and object checks live.
 * [Vendors and gossip](player-actions/vendors-and-gossip.md) - Open a vendor, buy and sell items, and read and choose the options of an NPC's gossip menu.
 * [Scripted actions with act](player-actions/act-steps.md) - Drive the character through a list of scripted steps - talk, buy, quest, loot, train, fly, mail and the rest - with forever act or the act method.
 * [Mail and auction house](player-actions/mail-and-auction.md) - Read, take, return and send mail, and browse, buy and sell at the auction house.

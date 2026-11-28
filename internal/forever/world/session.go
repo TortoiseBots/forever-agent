@@ -222,10 +222,17 @@ type Options struct {
 	// command's own default).
 	LootCheck bool
 	ObjectUse bool
-	Roll      string
-	LootMoney bool
-	TakeItems int
-	LootRange float32
+	// QuestShareCheck runs `forever quest-share`: share a quest with the party or accept/decline a shared quest.
+	QuestShareCheck bool
+	QuestShareMode  string // "share", "accept", or "decline"
+	QuestShareID    int32
+	QuestShareFrom  string
+	QuestShareWait  time.Duration
+	QuestShareStay  time.Duration
+	Roll            string
+	LootMoney       bool
+	TakeItems       int
+	LootRange       float32
 	// At is --at x,y,z: the point a game-object target must be picked at when several objects of the entry are in
 	// range (object-use, and loot-check's chest); AtRange is how close an object must stand to that point in yards
 	// (0: objectAtRange).
@@ -370,8 +377,9 @@ type Report struct {
 	GMConfirmed bool
 	TBState     *TBStateTable
 	// Round LOOT-1: the loot window loot-check opened and what the rolls did, and the object-use observation.
-	Loot      LootReport
-	ObjectUse ObjectUseReport
+	Loot       LootReport
+	ObjectUse  ObjectUseReport
+	QuestShare *QuestShareReport
 	// Round D2: the dungeon run's result (states, orders, summary, stop reason and exit), nil when the session
 	// ran something else.
 	Dungeon *driver.Result
@@ -1391,6 +1399,13 @@ func (s *session) enter(ctx context.Context) error {
 	}
 	if s.opts.ObjectUse {
 		err := s.objectUse(ctx)
+		if err != nil {
+			return err
+		}
+		return s.logout(ctx)
+	}
+	if s.opts.QuestShareCheck {
+		err := s.questShareCheck(ctx)
 		if err != nil {
 			return err
 		}

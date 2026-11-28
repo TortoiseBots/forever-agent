@@ -1,5 +1,9 @@
 # Directory Update Log
 
+## 2026-11-28
+
+* **Update**: Added party quest sharing and shared-quest accept/decline in [Quests and loot](player-actions/quests-and-loot.md), [Method index](daemon/method-index.md) and [Events and logs](daemon/events-and-logs.md): `quest_share`, `quest_share_accept` and `quest_share_decline` daemon methods plus the one-shot `forever quest-share` command (`--quest`, `--accept`, `--decline`, `--from`, `--wait`), reporting per-member `SMSG_QUEST_PUSH_RESULT` answers and `quest_shared`, `quest_share_declined` and `quest_push_result` events.
+
 ## 2026-11-27
 
 * **Creation**: Added `guild_invite` and `offer_charter` to [Groups, raids and guilds](player-actions/groups-raids-and-guild.md#invite-a-character-and-offer-a-charter): the first sends the client's guild invite (`CMSG_GUILD_INVITE_BY_NAME`) and waits for the core's command result, the second sends a charter offer (`CMSG_OFFER_PETITION`) with a charter from the inventory to a player in view. The answers are `guild` events: `joined` for an accepted invite, `declined`/`expired` for the client's two invite packets (this core sends neither), and `signed`/`sign_refused` for `SMSG_PETITION_SIGN_RESULTS`, also listed on [Events and logs](daemon/events-and-logs.md) and the [method index](daemon/method-index.md).
