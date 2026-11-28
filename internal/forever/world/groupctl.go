@@ -344,8 +344,9 @@ func (s *session) groupDisband(ctx context.Context) error {
 	return s.waitGroupConfirm(ctx, what, groupConfirmWait, func() bool { return !s.party.InParty })
 }
 
-// partyGroupControl runs party-check's group-control flags (--promote, --promote-back, --loot, --mark) and returns
-// without leaving the group: a leave ends a two-member group, which is what these flags exist to avoid.
+// partyGroupControl runs party-check's group-control flags (--promote, --promote-back, --ready-check, --loot,
+// --mark) and returns without leaving the group: a leave ends a two-member group, which is what these flags exist to
+// avoid.
 func (s *session) partyGroupControl(ctx context.Context) error {
 	if !s.party.RosterValid {
 		return fmt.Errorf("world: party-check: no valid party roster (%s)", s.party.LastInvalid)
@@ -363,6 +364,24 @@ func (s *session) partyGroupControl(ctx context.Context) error {
 				return fmt.Errorf("world: party-check: %w", err)
 			}
 			s.opts.logf("party-check: the new leader promoted back")
+		}
+	}
+	if s.opts.PartyReadyCheck {
+		start, err := s.readyCheck(ctx)
+		if err != nil {
+			return fmt.Errorf("world: party-check: %w", err)
+		}
+		if s.opts.PartyReadyWait > 0 && start != nil {
+			// The core ends the check itself once every member has answered or its 35 s timer runs out, so a
+			// wait that runs out is reported and the run still ends normally. The wait follows the start this
+			// command confirmed: an earlier or a later check's finish never ends it.
+			if err := s.waitGroupConfirm(ctx, "ready check finish", s.opts.PartyReadyWait, func() bool {
+				return start.Complete
+			}); err != nil {
+				s.opts.logf("party-check: the ready check did not finish within %s: %v", s.opts.PartyReadyWait, err)
+			} else {
+				s.opts.logf("party-check: ready check finished")
+			}
 		}
 	}
 	if s.opts.PartyLoot != "" {

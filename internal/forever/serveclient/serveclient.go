@@ -1228,6 +1228,12 @@ func (c *Client) QuestShareDecline(ctx context.Context, questID int32) (QuestSha
 	return res, err
 }
 
+// ReadyCheck starts a ready check as the group leader (ready_check). The call answers once the core broadcast the
+// start; the members' answers and the finish are party rows in the session's event stream.
+func (c *Client) ReadyCheck(ctx context.Context) error {
+	return c.call(ctx, "ready_check", nil, nil, defaultTimeout)
+}
+
 // GM sends one raw gm line through the GM guard and returns the server's
 // visible answer.
 func (c *Client) GM(ctx context.Context, text string) (Command, error) {

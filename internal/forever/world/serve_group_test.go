@@ -490,7 +490,7 @@ func TestServeGroupMethodTable(t *testing.T) {
 		}
 		return false
 	}
-	for _, name := range []string{"promote", "assistant", "convert_raid", "raid_move", "loot_method", "mark", "marks", "disband"} {
+	for _, name := range []string{"promote", "assistant", "convert_raid", "raid_move", "ready_check", "loot_method", "mark", "marks", "disband"} {
 		if !has(ported, name) {
 			t.Fatalf("%q is not in the ported set", name)
 		}
@@ -506,6 +506,7 @@ func TestServeGroupMethodTable(t *testing.T) {
 	a := startServeDaemon(t, f, steps)
 	a.mustFail(t, "convert_raid", map[string]any{}, -32003, "not in a group")
 	a.mustFail(t, "raid_move", map[string]any{"name": "Bottwo", "subgroup": 1}, -32003, "not in a group")
+	a.mustFail(t, "ready_check", map[string]any{}, -32003, "not in a group")
 	a.stop(t)
 	f.wait(t)
 }

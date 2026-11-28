@@ -314,7 +314,7 @@ func printChatSummary(w io.Writer, report *world.Report) {
 }
 
 func foreverPartyCheckCmd(ctx context.Context, args []string, stdout, stderr io.Writer) int {
-	const usage = "usage: forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--invite NAME | --accept-from NAME | --decline-from NAME] [--uninvite NAME] [--promote NAME [--promote-back DURATION]] [--loot METHOD[:THRESHOLD]] [--mark ICON] [--wait-join DURATION] [--settle DURATION] [--capture-dir DIR]"
+	const usage = "usage: forever-agent forever party-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--invite NAME | --accept-from NAME | --decline-from NAME] [--uninvite NAME] [--promote NAME [--promote-back DURATION]] [--ready-check [--ready-wait DURATION]] [--loot METHOD[:THRESHOLD]] [--mark ICON] [--wait-join DURATION] [--settle DURATION] [--capture-dir DIR]"
 	fs := flag.NewFlagSet("forever party-check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	var common foreverCommon
@@ -327,6 +327,8 @@ func foreverPartyCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 	uninvite := fs.String("uninvite", "", "after the group has formed, uninvite this member (the leader only)")
 	promote := fs.String("promote", "", "promote this member to leader and wait for the roster that shows it (the leader only)")
 	promoteBack := fs.Duration("promote-back", 0, "with --promote: then wait up to this long for the new leader to promote this character back (an agent session on the other side)")
+	readyCheck := fs.Bool("ready-check", false, "start a ready check as the group leader and log every member's answer (the leader only)")
+	readyWait := fs.Duration("ready-wait", 40*time.Second, "with --ready-check: wait up to this long for the members' answers and the finish (the core ends the check at 35s; 0 returns after the start)")
 	loot := fs.String("loot", "", "set the loot method METHOD[:THRESHOLD] and read the roster back (free-for-all, round-robin, master-loot, group-loot, need-before-greed, personal-loot, or 0..5; threshold 2..6, default 2)")
 	mark := fs.String("mark", "", "set this raid target icon on the nearest attackable creature and read the icon list back (star circle diamond triangle moon square cross skull)")
 	waitJoin := fs.Duration("wait-join", 0, "with --invite: wait up to this long for the group to form (stats, party line, stay)")
@@ -362,6 +364,14 @@ func foreverPartyCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		fmt.Fprintln(stderr, "forever party-check: --promote-back needs --promote: it waits for the new leader to hand the lead back")
 		return exitUsage
 	}
+	if *readyWait < 0 || *readyWait > 2*time.Minute {
+		fmt.Fprintln(stderr, "forever party-check: --ready-wait is at most 2m")
+		return exitUsage
+	}
+	if *readyWait != 40*time.Second && !*readyCheck {
+		fmt.Fprintln(stderr, "forever party-check: --ready-wait needs --ready-check")
+		return exitUsage
+	}
 	if *loot != "" {
 		if _, _, err := world.ParseLootSpec(*loot); err != nil {
 			fmt.Fprintf(stderr, "forever party-check: --loot: %v\n", err)
@@ -394,6 +404,8 @@ func foreverPartyCheckCmd(ctx context.Context, args []string, stdout, stderr io.
 		PartyPromoteBack: *promoteBack,
 		PartyLoot:        *loot,
 		PartyMark:        *mark,
+		PartyReadyCheck:  *readyCheck,
+		PartyReadyWait:   *readyWait,
 		WaitJoin:         *waitJoin,
 		PartyStay:        *stay,
 		CaptureDir:       *captureDir,
@@ -430,6 +442,14 @@ func printPartySummary(w io.Writer, report *world.Report) {
 	fmt.Fprintln(w)
 	for _, m := range p.Marks {
 		fmt.Fprintf(w, "  mark %s on %s\n", m.Icon, safeName(m.Name))
+	}
+	if rc := p.ReadyCheck; rc != nil {
+		rcState := "running"
+		if rc.Complete {
+			rcState = "finished"
+		}
+		fmt.Fprintf(w, "party-check: ready check %s, %d answer(s), %d ready, %d not ready\n",
+			rcState, rc.Answers, rc.Ready, rc.NotReady)
 	}
 	for _, m := range p.Members {
 		sub := 0

@@ -141,6 +141,10 @@ type Options struct {
 	PartyPromoteBack time.Duration
 	PartyLoot        string
 	PartyMark        string
+	// #288: PartyReadyCheck starts a ready check as the group leader and PartyReadyWait then waits up to that long
+	// for the member answers and the finish (40 s covers the core's own 35 s check; 0 sends the start and returns).
+	PartyReadyCheck bool
+	PartyReadyWait  time.Duration
 	// MapCheck runs round A7's map check (forever map-check): settle, print the map, send one area trigger when
 	// AreaTrigger is set, then stay in the world and follow every map change the server makes.
 	MapCheck    bool

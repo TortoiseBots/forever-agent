@@ -115,16 +115,20 @@ const (
 	CMSGChatUnregisterAllAddonPrefixes uint32 = 0x2C0006
 	CMSGPartyInvite                    uint32 = 0x430030
 	CMSGPartyInviteResponse            uint32 = 0x430032
-	CMSGPartyUninvite                  uint32 = 0x430073
-	CMSGSetLootMethod                  uint32 = 0x430074
-	CMSGLeaveGroup                     uint32 = 0x430075
-	CMSGSetPartyLeader                 uint32 = 0x430076
-	CMSGChangeSubGroup                 uint32 = 0x430078
-	CMSGSwapSubGroups                  uint32 = 0x430079
-	CMSGConvertRaid                    uint32 = 0x43007A
-	CMSGSetAssistantLeader             uint32 = 0x43007B
-	CMSGUpdateRaidTarget               uint32 = 0x43007C
-	CMSGRequestPartyMemberStats        uint32 = 0x43007F
+	// #288: the group leader's ready-check start (Opcodes.h:343, PartyPackets.cpp:416-421). The core value is
+	// 0x43005E; the client wire number is the group arithmetic 0x44005E, because ClassicClientOpcodes.inc has no row
+	// for it.
+	CMSGDoReadyCheck            uint32 = 0x43005E
+	CMSGPartyUninvite           uint32 = 0x430073
+	CMSGSetLootMethod           uint32 = 0x430074
+	CMSGLeaveGroup              uint32 = 0x430075
+	CMSGSetPartyLeader          uint32 = 0x430076
+	CMSGChangeSubGroup          uint32 = 0x430078
+	CMSGSwapSubGroups           uint32 = 0x430079
+	CMSGConvertRaid             uint32 = 0x43007A
+	CMSGSetAssistantLeader      uint32 = 0x43007B
+	CMSGUpdateRaidTarget        uint32 = 0x43007C
+	CMSGRequestPartyMemberStats uint32 = 0x43007F
 	// The guild invite flow this client sends (Opcodes.h:40, 429, 439). The accept carries the invite's packed
 	// guild GUID (GuildPackets.cpp:159-162); the decline and the leave carry no body (GuildHandler.cpp:82, :125-129).
 	// #290 adds the invite itself: CMSG_GUILD_INVITE_BY_NAME (Opcodes.h:438; the client's own 0x440034,
@@ -576,6 +580,7 @@ var clientNames = map[uint32]string{
 	CMSGChatAddonMessageTargeted:       "CMSG_CHAT_ADDON_MESSAGE_TARGETED",
 	CMSGChatRegisterAddonPrefixes:      "CMSG_CHAT_REGISTER_ADDON_PREFIXES",
 	CMSGChatUnregisterAllAddonPrefixes: "CMSG_CHAT_UNREGISTER_ALL_ADDON_PREFIXES",
+	CMSGDoReadyCheck:                   "CMSG_DO_READY_CHECK",
 	CMSGPartyInvite:                    "CMSG_PARTY_INVITE",
 	CMSGPartyInviteResponse:            "CMSG_PARTY_INVITE_RESPONSE",
 	CMSGPartyUninvite:                  "CMSG_PARTY_UNINVITE",
