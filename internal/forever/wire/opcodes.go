@@ -127,9 +127,14 @@ const (
 	CMSGRequestPartyMemberStats        uint32 = 0x43007F
 	// The guild invite flow this client sends (Opcodes.h:40, 429, 439). The accept carries the invite's packed
 	// guild GUID (GuildPackets.cpp:159-162); the decline and the leave carry no body (GuildHandler.cpp:82, :125-129).
+	// #290 adds the invite itself: CMSG_GUILD_INVITE_BY_NAME (Opcodes.h:438; the client's own 0x440034,
+	// ClassicClientOpcodes.inc:526) and the charter offer CMSG_OFFER_PETITION (Opcodes.h:730; the client's own
+	// 0x3E028C, ClassicClientOpcodes.inc:272 and PetitionPackets.cpp:164-168).
 	CMSGGuildAcceptInvite      uint32 = 0x430029
 	CMSGGuildDeclineInvitation uint32 = 0x43002A
 	CMSGGuildLeave             uint32 = 0x2E0003
+	CMSGGuildInviteByName      uint32 = 0x430034
+	CMSGOfferPetition          uint32 = 0x3D0289
 
 	SMSGChat                       uint32 = 0x4A0001
 	SMSGChatPlayerAmbiguous        uint32 = 0x4A0004
@@ -163,6 +168,13 @@ const (
 	SMSGGuildInvite            uint32 = 0x510012
 	SMSGGuildEventPlayerJoined uint32 = 0x510032
 	SMSGGuildCommandResult     uint32 = 0x510002
+	// #290: the answers to a guild invite and a charter offer. The two invite packets are the client's own
+	// (Opcodes.h:1647-1648); this core declares them STATUS_UNHANDLED and has no writer, so a server that sends one
+	// still gets a row. SMSG_PETITION_SIGN_RESULTS (Opcodes.h:2089; PetitionPackets.cpp:128-137) is the core's
+	// answer to every signature, sent to the signer and the charter's owner.
+	SMSGGuildInviteDeclined uint32 = 0x510030
+	SMSGGuildInviteExpired  uint32 = 0x510031
+	SMSGPetitionSignResults uint32 = 0x4501F6
 
 	// Object and movement traffic of round 3 (Opcodes.h:1919-1998, 2185, 2174).
 	SMSGUpdateObject       uint32 = 0x5C0000
@@ -579,6 +591,8 @@ var clientNames = map[uint32]string{
 	CMSGGuildAcceptInvite:              "CMSG_ACCEPT_GUILD_INVITE",
 	CMSGGuildDeclineInvitation:         "CMSG_GUILD_DECLINE_INVITATION",
 	CMSGGuildLeave:                     "CMSG_GUILD_LEAVE",
+	CMSGGuildInviteByName:              "CMSG_GUILD_INVITE_BY_NAME",
+	CMSGOfferPetition:                  "CMSG_OFFER_PETITION",
 	CMSGSetSelection:                   "CMSG_SET_SELECTION",
 	CMSGTalkToGossip:                   "CMSG_TALK_TO_GOSSIP",
 	CMSGGossipSelectOption:             "CMSG_GOSSIP_SELECT_OPTION",

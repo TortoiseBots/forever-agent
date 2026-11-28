@@ -1,10 +1,10 @@
 ---
 type: Method Reference
 title: Groups, raids and guilds
-description: Invite and leave a group, read the party roster, lead a party (promote, loot method, marks, disband), convert it to a raid, handle guild invites, and check the group code live.
+description: Invite and leave a group, read the party roster, lead a party (promote, loot method, marks, disband), convert it to a raid, invite a character to a guild, offer a charter, handle guild invites, and check the group code live.
 tags: [player-actions, party, raid, guild, group-control]
 status: stable
-generated: { by: forever-agent docs, at: 2026-11-25T00:30:00Z }
+generated: { by: forever-agent docs, at: 2026-11-27T00:00:00Z }
 sources:
   - id: serve-session
     resource: internal/forever/world/serve_session.go
@@ -16,6 +16,10 @@ sources:
     resource: internal/forever/world/raidctl.go
   - id: guild-session
     resource: internal/forever/world/guild_session.go
+  - id: guild-offer
+    resource: internal/forever/world/guild_offer.go
+  - id: guild-packets
+    resource: internal/forever/guild/guild.go
   - id: party-check
     resource: cmd/forever-agent/forever_chat.go
 ---
@@ -107,10 +111,40 @@ than the one being moved.
 | `accept_guild_invite` | none | Accept the held guild invite and wait for the join. |
 | `decline_guild_invite` | none | Decline the held invite (nothing to wait for). |
 | `guild_leave` | none | Leave the guild and wait for the guild field to clear. |
+| `guild_invite` | `name` | Invite a character to this character's guild and wait for the command result. |
+| `offer_charter` | `guid` or `name`, `item` | Offer a guild charter to a player for signing. |
 
 An invite is held from the guild-invite message; the accept consumes it, so a second accept has nothing to take and
 a decline after an accept has nothing to decline. `guild_leave` on a character that is not in a guild is refused
 with `guild_leave: not in a guild`.
+
+## Invite a character and offer a charter
+
+`guild_invite` sends the client's guild invite (`CMSG_GUILD_INVITE_BY_NAME`, the core's `0x430034`, wire `0x440034`)
+as the playing character and answers the core's guild command result for `GUILD_COMMAND_INVITE_PLAYER` and that name:
+`ERR_GUILD_COMMAND_SUCCESS` (`0`) is the invite; another result is an error naming the number (`guild_invite: the
+server refused it: result 11 for command 1`). The character must be in a guild (`guild_invite: not in a guild`). The
+command result is also a `guild` `result` event.
+
+`offer_charter` sends `CMSG_OFFER_PETITION` (the core's `0x3D0289`, wire `0x3E028C`) with the charter item's packed
+GUID and the target player's packed GUID. `item` names a charter in the inventory; without it the call uses the only
+item of entry 5863 (the guild charter) and refuses zero or several. The target is a GUID or a name in view and must
+be a player who is not in a guild (`offer_charter: ... is not a player`, `... is already in a guild`). The core sends
+no success packet for an offer; the refusals it answers arrive as the same `guild` `result` event the guild window reads.
+
+The answers reach the event stream as `guild` rows:
+
+| `text` / `data.state` | Fields | Meaning |
+|---|---|---|
+| `joined` | `state` (`accepted`), `guild_name` | A member joined: the accepted invite. The row already existed for every join. |
+| `declined` | none | `SMSG_GUILD_INVITE_DECLINED`: a server that announces a declined invite. This core's guild handler clears the invite silently and never sends this packet. |
+| `expired` | none | `SMSG_GUILD_INVITE_EXPIRED`, likewise. |
+| `signed` | `item`, `error` (`0`) | `SMSG_PETITION_SIGN_RESULTS`: the named player signed the charter. |
+| `sign_refused` | `item`, `error` (nonzero) | The same packet with a PetitionSigns failure (`1` already signed, `2` already in a guild, ...). |
+
+The signature result goes to the signer and to the charter's owner, so the offering character sees `signed` with the
+signer in `source` and `source_guid`. Read the rows with the `events` method (`forever rpc DIR events '{"since": 0}'`),
+or the event stream on [Events and logs](../daemon/events-and-logs.md).
 
 # Check a party live: forever party-check
 

@@ -184,6 +184,7 @@ sent is in the model.
 | `gm_set_hp` | implemented |
 | `gossip_hello` | implemented |
 | `gossip_select` | implemented |
+| `guild_invite` | implemented |
 | `guild_leave` | implemented |
 | `inv` | implemented |
 | `inventory` | implemented |
@@ -218,6 +219,7 @@ sent is in the model.
 | `mark` | implemented |
 | `marks` | implemented |
 | `mount` | implemented |
+| `offer_charter` | implemented |
 | `open_object` | implemented |
 | `party` | implemented |
 | `path_to` | implemented |

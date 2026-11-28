@@ -124,7 +124,7 @@ Most live under `internal/forever/...`; `internal/foreverspells` is the one besi
 | `internal/forever/follow` | The small follow loop a session runs behind one other character. |
 | `internal/forever/fpreflight` | Checks a Forever run before it starts: serve slot, lease, plan and export, module, SOAP, bots. |
 | `internal/forever/gmwalk` | Records a GM character's walk as world data: roads, marked points, danger zones, no names. |
-| `internal/forever/guild` | Guild wire layer: invite, joined event, command result, accept, decline, leave. |
+| `internal/forever/guild` | Guild wire layer: invite, joined event, command result, sign result, invite by name, charter offer, accept, decline, leave. |
 | `internal/forever/items` | What the client knows of its own inventory, merged from the create block and later updates. |
 | `internal/forever/loot` | Loot and group roll wire layer, including the bit-packed loot item block. |
 | `internal/forever/mail` | Mail wire layer: list, read, take, delete, send, return, and their results. |

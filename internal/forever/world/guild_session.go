@@ -34,6 +34,8 @@ type guildState struct {
 	// lastResult is the last SMSG_GUILD_COMMAND_RESULT, which a hand's timeout names: a refused guild command is
 	// the answer the core gives instead of the state change.
 	lastResult *guild.CommandResult
+	// results counts the command results, so a hand waits only for the answer to its own packet.
+	results int
 	// accepted is the invite an accept confirmed: its guild name is what status.guild_name answers.
 	accepted *guild.Invite
 	// selfJoins counts the joined events for this character, so an accept confirms only a join that followed it.
@@ -84,7 +86,7 @@ func (s *session) handleGuild(p worldconn.Packet) error {
 		if err != nil {
 			return fmt.Errorf("world: SMSG_GUILD_EVENT_PLAYER_JOINED: %w", err)
 		}
-		data := map[string]any{}
+		data := map[string]any{"state": "accepted"}
 		if st.invite != nil {
 			data["guild_name"] = st.invite.GuildName
 		}
@@ -105,6 +107,7 @@ func (s *session) handleGuild(p worldconn.Packet) error {
 		if err != nil {
 			return fmt.Errorf("world: SMSG_GUILD_COMMAND_RESULT: %w", err)
 		}
+		st.results++
 		st.lastResult = &r
 		s.event(Event{
 			Kind:   events.KindGuild,
@@ -113,6 +116,38 @@ func (s *session) handleGuild(p worldconn.Packet) error {
 			Data:   map[string]any{"result": int(r.Result), "command": int(r.Command)},
 		})
 		s.opts.logf("guild: command %d for %s: result %d", r.Command, s.eventName(r.Name, wire.EmptyGUID), r.Result)
+	case wire.SMSGGuildInviteDeclined, wire.SMSGGuildInviteExpired:
+		// The answer to a guild invite this character sent. The core declares both opcodes STATUS_UNHANDLED and has
+		// no writer, so a live server sends neither; a server that does gets the row (the packet's fields are not
+		// modelled, so the row names no one).
+		state := "declined"
+		if p.Core == wire.SMSGGuildInviteExpired {
+			state = "expired"
+		}
+		s.eventGuildPacket(state, nil, wire.EmptyGUID, state)
+		s.opts.logf("guild: invite %s", state)
+	case wire.SMSGPetitionSignResults:
+		r, err := guild.ParsePetitionSignResults(p.Payload)
+		if err != nil {
+			return fmt.Errorf("world: SMSG_PETITION_SIGN_RESULTS: %w", err)
+		}
+		state := "signed"
+		if !r.Signed() {
+			state = "sign_refused"
+		}
+		who := s.eventName("", r.Player)
+		if who == "" {
+			who = guidKind(r.Player)
+		}
+		s.eventGuildPacket(state, map[string]any{
+			"item":  eventGUID(r.Item),
+			"error": int(r.Error),
+		}, r.Player, state)
+		if r.Signed() {
+			s.opts.logf("guild: %s signed the charter %s", who, r.Item)
+		} else {
+			s.opts.logf("guild: %s could not sign the charter %s: result %d", who, r.Item, r.Error)
+		}
 	}
 	return nil
 }

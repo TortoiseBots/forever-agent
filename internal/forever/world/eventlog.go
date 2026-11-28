@@ -350,6 +350,21 @@ func (s *session) eventPartyPacket(state string, data map[string]any, src wire.G
 	})
 }
 
+// eventGuildPacket appends one guild answer row: its state, the player it names and the packet's own fields.
+func (s *session) eventGuildPacket(state string, data map[string]any, src wire.GUID, text string) {
+	if data == nil {
+		data = map[string]any{}
+	}
+	data["state"] = state
+	s.event(Event{
+		Kind:       events.KindGuild,
+		Source:     s.eventName("", src),
+		SourceGUID: eventGUID(src),
+		Text:       text,
+		Data:       data,
+	})
+}
+
 // eventRaidMarkSingle appends one raid target update: the icon, the unit that now carries it and who set it. The
 // row kind is the shared events.KindRaidMark, so a reader that already reads the turtle-agent session's raid_mark
 // rows reads this log's too.

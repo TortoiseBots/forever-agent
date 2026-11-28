@@ -248,6 +248,14 @@ type serveNameParams struct {
 	Name string `json:"name"`
 }
 
+// serveOfferCharterParams is offer_charter's input: the target (a GUID, or a name in view) and the charter item (a
+// GUID in the inventory; omitted picks the only guild charter).
+type serveOfferCharterParams struct {
+	GUID GUID   `json:"guid,omitempty"`
+	Name string `json:"name,omitempty"`
+	Item GUID   `json:"item,omitempty"`
+}
+
 type serveCastParams struct {
 	SpellID   int32  `json:"spell_id"`
 	Target    GUID   `json:"target,omitempty"`
@@ -719,6 +727,14 @@ func registerServeMethods(srv *rpc.Server, st *serveState) {
 	}))
 	srv.Register("guild_leave", serveCallTyped(st, func(s *session, ctx context.Context, _ serveEmpty) (serveEmpty, error) {
 		return serveEmpty{}, s.serveGuildLeave(ctx)
+	}))
+	// The guild offers this character sends (#290): the invite waits for the core's command result, the charter
+	// offer returns after the packet and leaves the signature to the event stream.
+	srv.Register("guild_invite", serveCallTyped(st, func(s *session, ctx context.Context, p serveNameParams) (serveEmpty, error) {
+		return serveEmpty{}, s.guildInvite(ctx, p.Name)
+	}))
+	srv.Register("offer_charter", serveCallTyped(st, func(s *session, ctx context.Context, p serveOfferCharterParams) (serveEmpty, error) {
+		return serveEmpty{}, s.offerCharter(ctx, wire.GUID(p.GUID), p.Name, wire.GUID(p.Item))
 	}))
 	// Group control (#95 G2): each sends its packet and answers only once the readback confirms it.
 	srv.Register("promote", serveCallTyped(st, func(s *session, ctx context.Context, p serveNameParams) (serveEmpty, error) {

@@ -2412,7 +2412,8 @@ func (s *session) handle(ctx context.Context, ev event) error {
 		wire.SMSGSendRaidTargetUpdateSingle, wire.SMSGSendRaidTargetUpdateAll,
 		wire.SMSGReadyCheckStarted, wire.SMSGReadyCheckResponse, wire.SMSGReadyCheckCompleted:
 		return s.handleParty(p)
-	case wire.SMSGGuildInvite, wire.SMSGGuildEventPlayerJoined, wire.SMSGGuildCommandResult:
+	case wire.SMSGGuildInvite, wire.SMSGGuildEventPlayerJoined, wire.SMSGGuildCommandResult,
+		wire.SMSGGuildInviteDeclined, wire.SMSGGuildInviteExpired, wire.SMSGPetitionSignResults:
 		return s.handleGuild(p)
 	case wire.SMSGDeathReleaseLoc, wire.SMSGCorpseReclaimDelay, wire.SMSGPreRessurect,
 		wire.SMSGResurrectRequest, wire.SMSGSummonRequest, wire.SMSGCorpseLocation, wire.SMSGCorpseTransportQuery,
