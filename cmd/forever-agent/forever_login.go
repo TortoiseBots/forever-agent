@@ -33,6 +33,7 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		fmt.Fprintln(stderr, "       forever-agent forever fight-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--stay DURATION] [--entry N] [--fight-for DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever loot-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME [--entry N] [--roll need|greed|pass] [--take N] [--money=false] [--at x,y,z] [--at-range YARDS] [--range YARDS] [--stay DURATION] [--fight-for DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever object-use [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME --entry N [--range YARDS] [--stay DURATION]")
+		fmt.Fprintln(stderr, "       forever-agent forever quest-share [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --character NAME (--quest N | --accept | --decline) [--from NAME] [--wait DURATION] [--settle DURATION] [--stay DURATION]")
 		fmt.Fprintln(stderr, "       forever-agent forever death-check [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--death-wait DURATION] [--accept-resurrect [--accept-resurrect-from NAME] [--resurrect-wait DURATION]] [--spirit-healer] [--navmesh DIR [--parent MAP=PARENT[,..]]] [--capture-dir DIR]")
 		fmt.Fprintln(stderr, "       forever-agent forever act [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] [--world-checks-build-auth-key] --account EMAIL --character NAME [--stay DURATION] [--steps FILE | --step 'verb k=v'...]")
 		fmt.Fprintln(stderr, "       forever-agent forever char-create [--rest host:port] [--rpc host:port] [--ca FILE] [--server-name NAME] [--build N] [--allow-instance-redirect] --account EMAIL --name NAME [--surname S] --race R --class C [--sex S] (--choice OPTION:CHOICE ... | --no-appearance)")
@@ -84,6 +85,8 @@ func foreverCmd(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return foreverLootCheckCmd(ctx, args[1:], stdout, stderr)
 	case "object-use":
 		return foreverObjectUseCmd(ctx, args[1:], stdout, stderr)
+	case "quest-share":
+		return foreverQuestShareCmd(ctx, args[1:], stdout, stderr)
 	case "death-check":
 		return foreverDeathCheckCmd(ctx, args[1:], stdout, stderr)
 	case "act":

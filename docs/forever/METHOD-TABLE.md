@@ -232,6 +232,9 @@ sent is in the model.
 | `quest_log` | implemented |
 | `quest_query` | implemented |
 | `quest_reward` | implemented |
+| `quest_share` | implemented |
+| `quest_share_accept` | implemented |
+| `quest_share_decline` | implemented |
 | `raid_move` | implemented |
 | `reclaim_corpse` | implemented |
 | `release_spirit` | implemented |

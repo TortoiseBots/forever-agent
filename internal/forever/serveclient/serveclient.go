@@ -1166,6 +1166,68 @@ func (c *Client) RaidMove(ctx context.Context, p RaidMoveParams) error {
 	return c.call(ctx, "raid_move", p, nil, defaultTimeout)
 }
 
+// QuestPushMember is one per-member push result returned by quest_share.
+type QuestPushMember struct {
+	GUID   GUID   `json:"guid"`
+	Name   string `json:"name,omitempty"`
+	Result uint32 `json:"result"`
+	Reason string `json:"reason"`
+}
+
+// QuestShareResult is quest_share's answer.
+type QuestShareResult struct {
+	Since   uint64            `json:"since"`
+	QuestID int32             `json:"quest_id"`
+	OK      bool              `json:"ok"`
+	Results []QuestPushMember `json:"results"`
+	Event   *Event            `json:"event,omitempty"`
+}
+
+// QuestShareActionResult is quest_share_accept and quest_share_decline's answer.
+type QuestShareActionResult struct {
+	Since     uint64 `json:"since"`
+	OK        bool   `json:"ok"`
+	QuestID   int32  `json:"quest_id"`
+	Title     string `json:"title,omitempty"`
+	ShareKind string `json:"share_kind"`
+	From      string `json:"from,omitempty"`
+	FromGUID  GUID   `json:"from_guid,omitempty"`
+	Slot      *int   `json:"slot,omitempty"`
+	Event     *Event `json:"event,omitempty"`
+}
+
+// QuestShare shares a quest from the character's quest log with the party (quest_share).
+func (c *Client) QuestShare(ctx context.Context, questID int32, waitMS int) (QuestShareResult, error) {
+	var res QuestShareResult
+	params := struct {
+		QuestID int32 `json:"quest_id"`
+		WaitMS  int   `json:"wait_ms,omitempty"`
+	}{questID, waitMS}
+	err := c.call(ctx, "quest_share", params, &res, time.Duration(max(waitMS, 0))*time.Millisecond+defaultTimeout)
+	return res, err
+}
+
+// QuestShareAccept accepts a pending shared quest or confirm-accept popup (quest_share_accept).
+func (c *Client) QuestShareAccept(ctx context.Context, questID int32, waitMS int) (QuestShareActionResult, error) {
+	var res QuestShareActionResult
+	params := struct {
+		QuestID int32 `json:"quest_id,omitempty"`
+		WaitMS  int   `json:"wait_ms,omitempty"`
+	}{questID, waitMS}
+	err := c.call(ctx, "quest_share_accept", params, &res, time.Duration(max(waitMS, 0))*time.Millisecond+defaultTimeout)
+	return res, err
+}
+
+// QuestShareDecline declines a pending shared quest or dismisses a confirm-accept popup (quest_share_decline).
+func (c *Client) QuestShareDecline(ctx context.Context, questID int32) (QuestShareActionResult, error) {
+	var res QuestShareActionResult
+	params := struct {
+		QuestID int32 `json:"quest_id,omitempty"`
+	}{questID}
+	err := c.call(ctx, "quest_share_decline", params, &res, defaultTimeout)
+	return res, err
+}
+
 // GM sends one raw gm line through the GM guard and returns the server's
 // visible answer.
 func (c *Client) GM(ctx context.Context, text string) (Command, error) {
